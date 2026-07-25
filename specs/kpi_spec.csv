@@ -1,5 +1,5 @@
 group,name,actual,denominator,decimals,format
-FINANCIAL,Premium,PREMIUM,N,2,currency
+FINANCIAL,Premium,PREMIUM,N,0,currency
 FINANCIAL,Car value,CAR_VALUE,N,0,currency
 VEHICLE,Vehicle age,VEHICLE_AGE,N,1,number
 VEHICLE,Vehicle category,VEHICLE_CATEGORY,N,0,number

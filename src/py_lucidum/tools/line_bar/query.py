@@ -13,7 +13,9 @@ from py_lucidum.core import (
     denominator_exclusion_warnings,
     denominator_valid_condition,
     denominator_warnings,
+    has_denominator_column,
     normalise_denominator,
+    normalise_denominator_source,
     is_numeric_kind,
     json_number,
     parse_positive_float,
@@ -48,7 +50,30 @@ def overlarge_chart_message(max_groups: int) -> str:
     return f"More than {max_groups:,} x-axis groups; too many to plot. Use Table view to inspect all groups, or choose grouping, banding, or filtering."
 
 
+def request_with_single_grouping(request: dict[str, Any]) -> dict[str, Any]:
+    raw_groupings = request.get("groupings")
+    if not isinstance(raw_groupings, list) or len(raw_groupings) != 1:
+        return request
+    grouping = raw_groupings[0]
+    if not isinstance(grouping, dict):
+        return request
+    return {
+        **request,
+        "x": grouping.get("feature"),
+        "xSource": grouping.get("source"),
+        "bandWidth": grouping.get("bandWidth", 0),
+        "quantileMode": grouping.get("quantileMode", "off"),
+        "dateBucket": grouping.get("dateBucket", "none"),
+    }
+
+
 def chart(dataset: Dataset, request: dict[str, Any], feature_spec: Any | None = None) -> dict[str, Any]:
+    from .two_feature import chart as two_feature_chart
+    from .two_feature import has_two_groupings
+
+    if has_two_groupings(request):
+        return two_feature_chart(dataset, request)
+    request = request_with_single_grouping(request)
     with dataset.lock:
         result = build_grouped_result(dataset, request, feature_spec=feature_spec, include_partial_dependence=True)
         chart_result = fetch_chart_rows(dataset, result)
@@ -105,6 +130,7 @@ def chart(dataset: Dataset, request: dict[str, Any], feature_spec: Any | None = 
             **({"field_sources": result["field_sources"]} if result.get("field_sources") else {}),
             "denominator": {
                 "column": result["denominator"]["column"],
+                "source": result["denominator_source"],
                 "label": result["denominator"]["label"],
                 "bar_label": result["denominator"]["bar_label"],
                 "value": json_number(result["denominator_summary"].get("value")),
@@ -125,6 +151,12 @@ def chart(dataset: Dataset, request: dict[str, Any], feature_spec: Any | None = 
 
 
 def table(dataset: Dataset, request: dict[str, Any], feature_spec: Any | None = None) -> dict[str, Any]:
+    from .two_feature import has_two_groupings
+    from .two_feature import table as two_feature_table
+
+    if has_two_groupings(request):
+        return two_feature_table(dataset, request)
+    request = request_with_single_grouping(request)
     with dataset.lock:
         result = build_grouped_result(dataset, request, feature_spec=feature_spec, include_partial_dependence=False)
         page_size = normalise_positive_int(request.get("tablePageSize"), DEFAULT_TABLE_PAGE_SIZE)
@@ -162,6 +194,7 @@ def table(dataset: Dataset, request: dict[str, Any], feature_spec: Any | None = 
             **({"field_sources": result["field_sources"]} if result.get("field_sources") else {}),
             "denominator": {
                 "column": result["denominator"]["column"],
+                "source": result["denominator_source"],
                 "label": result["denominator"]["label"],
                 "bar_label": result["denominator"]["bar_label"],
                 "value": json_number(result["denominator_summary"].get("value")),
@@ -275,6 +308,11 @@ def build_grouped_result(
     filter_sql = dataset.normalise_filter_for_relation(request.get("filter"), relation)
     responses = normalise_responses(request.get("responses"), columns)
     denominator = normalise_denominator(request.get("denominator", request.get("weight")), columns)
+    denominator_source = normalise_denominator_source(
+        dataset,
+        request.get("denominatorSource"),
+        request.get("denominator", request.get("weight")),
+    )
     x_info = columns[x_col]
     date_bucket = normalise_date_bucket(request.get("dateBucket")) if x_info.kind in {"date", "datetime"} else "none"
     empty_periods = normalise_empty_periods(request.get("emptyPeriods"))
@@ -336,6 +374,7 @@ def build_grouped_result(
         "filter_sql": filter_sql,
         "responses": responses,
         "denominator": denominator,
+        "denominator_source": denominator_source,
         "denominator_summary": denominator_summary,
         "response_summaries": response_summaries,
         "grouped_sql": grouped_sql,
@@ -1404,6 +1443,9 @@ def chart_context(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
 def uses_field_sources(request: dict[str, Any]) -> bool:
     if str(request.get("xSource") or "").strip():
         return True
+    denominator_source = str(request.get("denominatorSource") or "").strip()
+    if denominator_source and denominator_source != "dataset":
+        return True
     raw_responses = request.get("responses")
     if not isinstance(raw_responses, list):
         return False
@@ -1414,7 +1456,7 @@ def mixed_chart_context(dataset: Dataset, request: dict[str, Any], source_id: st
     dataset_columns = dataset.column_map()
     columns = dict(dataset_columns)
     prediction_sources: dict[str, ModelPredictionSource] = {}
-    field_sources: dict[str, Any] = {"x": "dataset", "responses": []}
+    field_sources: dict[str, Any] = {"x": "dataset", "responses": [], "denominator": "dataset"}
     x_col = str(request.get("x") or "")
     x_source = field_source_id(dataset, request.get("xSource"), source_id)
     field_sources["x"] = x_source
@@ -1427,7 +1469,27 @@ def mixed_chart_context(dataset: Dataset, request: dict[str, Any], source_id: st
             response_source = field_source_id(dataset, item.get("source"), source_id)
             field_sources["responses"].append(response_source)
             add_field_column(dataset, columns, dataset_columns, prediction_sources, str(item.get("numerator") or ""), response_source)
-    relation = mixed_relation_sql(dataset, list(prediction_sources.values()))
+    raw_denominator = request.get("denominator", request.get("weight"))
+    denominator_source = normalise_denominator_source(
+        dataset,
+        request.get("denominatorSource"),
+        raw_denominator,
+    )
+    field_sources["denominator"] = denominator_source
+    if has_denominator_column(raw_denominator):
+        add_field_column(
+            dataset,
+            columns,
+            dataset_columns,
+            prediction_sources,
+            str(raw_denominator),
+            denominator_source,
+        )
+    relation = mixed_relation_sql(
+        dataset,
+        list(prediction_sources.values()),
+        preserve_dataset_rows=denominator_source != "dataset",
+    )
     return {
         "source_id": source_id,
         "relation": relation,
@@ -1489,11 +1551,20 @@ def add_field_column(
         columns[column_name] = dataset_columns[column_name]
 
 
-def mixed_relation_sql(dataset: Dataset, prediction_sources: list[ModelPredictionSource]) -> str:
+def mixed_relation_sql(
+    dataset: Dataset,
+    prediction_sources: list[ModelPredictionSource],
+    *,
+    preserve_dataset_rows: bool = False,
+) -> str:
     positional_sql = positional_mixed_relation_sql(dataset, prediction_sources)
     if positional_sql:
         return positional_sql
-    return keyed_mixed_relation_sql(dataset, prediction_sources)
+    return keyed_mixed_relation_sql(
+        dataset,
+        prediction_sources,
+        preserve_dataset_rows=preserve_dataset_rows,
+    )
 
 
 def positional_mixed_relation_sql(dataset: Dataset, prediction_sources: list[ModelPredictionSource]) -> str:
@@ -1511,7 +1582,10 @@ def positional_mixed_relation_sql(dataset: Dataset, prediction_sources: list[Mod
     if any(binding.base_where_sql != base_where_sql for binding in bindings):
         return ""
 
-    dataset_columns = [column.name for column in dataset.valid_schema_columns()]
+    prediction_columns = {source.column for source in prediction_sources}
+    dataset_columns = [
+        column.name for column in dataset.valid_schema_columns() if column.name not in prediction_columns
+    ]
     source_column_sql = ",\n    ".join(quote_ident(name) for name in dataset_columns)
     source_column_suffix = f",\n    {source_column_sql}" if source_column_sql else ""
     where_sql = f"\n  WHERE {base_where_sql}" if base_where_sql else ""
@@ -1536,14 +1610,22 @@ FROM (
 )"""
 
 
-def keyed_mixed_relation_sql(dataset: Dataset, prediction_sources: list[ModelPredictionSource]) -> str:
-    dataset_columns = [column.name for column in dataset.valid_schema_columns()]
+def keyed_mixed_relation_sql(
+    dataset: Dataset,
+    prediction_sources: list[ModelPredictionSource],
+    *,
+    preserve_dataset_rows: bool = False,
+) -> str:
+    prediction_columns = {source.column for source in prediction_sources}
+    dataset_columns = [
+        column.name for column in dataset.valid_schema_columns() if column.name not in prediction_columns
+    ]
     source_column_sql = ",\n    ".join(quote_ident(name) for name in dataset_columns)
     source_column_suffix = f",\n    {source_column_sql}" if source_column_sql else ""
     joins: list[str] = []
     selects = [f"base.{quote_ident(name)}" for name in dataset_columns]
     scope_sql = ""
-    if prediction_sources:
+    if prediction_sources and not preserve_dataset_rows:
         scope_parts = [
             f"SELECT __lucidum_row_id FROM {source.relation_sql}"
             for source in prediction_sources

@@ -13,7 +13,7 @@ from py_lucidum.core import Dataset, dataset_slug, dataset_workspace_metadata, i
 from py_lucidum.tools.line_bar.model_ratio import RATIO_COLUMN, RATIO_KIND
 
 
-FAVOURITES_VERSION = 1
+FAVOURITES_VERSION = 2
 FAVOURITES_FILENAME = "favourites.json"
 FAVOURITE_ID_RE = re.compile(r"[A-Za-z0-9_.-]+")
 FAVOURITE_SCOPES = {"metrics", "metrics_filter", "line_bar_view", "histogram_view", "map_view", "dataset_view"}
@@ -24,6 +24,7 @@ GLM_SOURCE_RE = re.compile(r"^glm:[A-Za-z0-9_.-]+:predictions$")
 GBM_SOURCE_RE = re.compile(r"^gbm:[A-Za-z0-9_.-]+:predictions$")
 RATIO_SOURCE_RE = re.compile(r"^model_ratio:gbm_to_glm_ratio:[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+$")
 EMPTY_PERIOD_VALUES = {"show", "skip"}
+HEATMAP_LABEL_VALUES = {"none", "actual", "weight", "both"}
 
 
 class LineBarFavouriteError(ValueError):
@@ -191,6 +192,7 @@ class LineBarFavouriteStore:
         saved_filters: list[dict[str, Any]] | None = None,
         kpis: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
+        view = normalise_favourite_view(view)
         errors: list[str] = []
         warnings: list[str] = []
         scope = favourite_scope(view, errors)
@@ -208,10 +210,42 @@ class LineBarFavouriteStore:
         self.validate_column(actual_source, actual.get("value"), errors, label="Actual", numeric=True)
         denominator = str(view.get("denominator") or "__none__").strip() or "__none__"
         if denominator != "__none__":
-            self.validate_column(source, denominator, errors, label="Weight", numeric=True)
+            denominator_source = self.validate_favourite_source(
+                view.get("denominatorSource") or "dataset",
+                denominator,
+                errors,
+                label="Weight source",
+            )
+            if denominator_source != "dataset" and denominator not in {"glm_prediction", "gbm_prediction"}:
+                errors.append("Favourite Weight source must use a primary GLM or GBM prediction.")
+            self.validate_column(denominator_source, denominator, errors, label="Weight", numeric=True)
         if scope == "line_bar_view":
-            x_source = self.validate_favourite_source(view.get("xSource") or source, view.get("x"), errors, label="x-axis source")
-            self.validate_column(x_source, view.get("x"), errors, label="x-axis feature")
+            groupings = view.get("groupings")
+            if not isinstance(groupings, list) or not 1 <= len(groupings) <= 2:
+                errors.append("Favourite must contain one or two grouping features.")
+                groupings = []
+            seen_groupings: set[tuple[str, str]] = set()
+            for index, grouping in enumerate(groupings, start=1):
+                if not isinstance(grouping, dict):
+                    errors.append(f"Favourite Feature {index} grouping is invalid.")
+                    continue
+                feature = grouping.get("feature")
+                feature_label = "x-axis feature" if index == 1 else f"Feature {index}"
+                source_label = "x-axis source" if index == 1 else f"Feature {index} source"
+                grouping_errors = errors if index == 1 else []
+                grouping_source = self.validate_favourite_source(
+                    grouping.get("source") or source,
+                    feature,
+                    grouping_errors,
+                    label=source_label,
+                )
+                self.validate_column(grouping_source, feature, grouping_errors, label=feature_label)
+                if index == 2 and grouping_errors:
+                    warnings.extend(f"Feature 2 will be ignored: {message}" for message in grouping_errors)
+                identity = (grouping_source, str(feature or "").strip())
+                if identity in seen_groupings:
+                    errors.append("Favourite uses the same grouping feature twice.")
+                seen_groupings.add(identity)
             expected = view.get("expectedSelections")
             if isinstance(expected, list):
                 for index, selection in enumerate(expected[:2], start=1):
@@ -390,6 +424,8 @@ def active_dataset(dataset_path: Path, dataset: Dataset | None) -> Dataset:
 def favourite_model_source_kind(raw_source: Any, column_name: Any) -> str:
     source = str(raw_source or "").strip()
     column = str(column_name or "").strip()
+    if source in {"", "dataset"}:
+        return ""
     if column == RATIO_COLUMN or RATIO_SOURCE_RE.fullmatch(source):
         return RATIO_KIND
     if column in GLM_PREDICTION_COLUMNS or GLM_SOURCE_RE.fullmatch(source):
@@ -407,10 +443,65 @@ def normalise_favourite_view(view: dict[str, Any]) -> dict[str, Any]:
     payload = json_safe(view)
     if not str(payload.get("scope") or "").strip():
         payload["scope"] = DEFAULT_FAVOURITE_SCOPE
+    payload["denominatorSource"] = str(payload.get("denominatorSource") or "dataset")
     if payload.get("scope") == "line_bar_view":
         mode = str(payload.get("emptyPeriods") or "show").strip().lower()
         payload["emptyPeriods"] = mode if mode in EMPTY_PERIOD_VALUES else "show"
+        legacy_tail_percent = payload.get("tailPercent")
+        legacy_tail_percent = str(
+            legacy_tail_percent
+            if legacy_tail_percent is not None and str(legacy_tail_percent).strip()
+            else "0"
+        )
+        groupings = payload.get("groupings")
+        if not isinstance(groupings, list) or not groupings:
+            payload["groupings"] = [
+                {
+                    "feature": str(payload.get("x") or ""),
+                    "source": str(payload.get("xSource") or payload.get("source") or "dataset"),
+                    "bandWidth": str(payload.get("bandWidth") or "0"),
+                    "quantileMode": "quantile" if payload.get("quantileMode") == "quantile" else "off",
+                    "dateBucket": str(payload.get("dateBucket") or "none"),
+                    "asFactor": False,
+                    "tailPercent": legacy_tail_percent,
+                }
+            ]
+        else:
+            payload["groupings"] = [
+                {
+                    "feature": str(item.get("feature") or ""),
+                    "source": str(item.get("source") or payload.get("source") or "dataset"),
+                    "bandWidth": str(item.get("bandWidth") or "0"),
+                    "quantileMode": "quantile" if item.get("quantileMode") == "quantile" else "off",
+                    "dateBucket": str(item.get("dateBucket") or "none"),
+                    "asFactor": normalise_boolean(item.get("asFactor")),
+                    "tailPercent": str(
+                        item.get("tailPercent")
+                        if item.get("tailPercent") is not None
+                        and str(item.get("tailPercent")).strip()
+                        else legacy_tail_percent
+                    ),
+                }
+                for item in groupings[:2]
+                if isinstance(item, dict)
+            ]
+        payload["tailPercent"] = (
+            str(payload["groupings"][0].get("tailPercent") or "0")
+            if payload["groupings"]
+            else legacy_tail_percent
+        )
+        payload["plotMetric"] = str(payload.get("plotMetric") or "resp0")
+        heatmap_labels = str(payload.get("heatmapLabels") or "none").strip().lower()
+        payload["heatmapLabels"] = heatmap_labels if heatmap_labels in HEATMAP_LABEL_VALUES else "none"
     return payload
+
+
+def normalise_boolean(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def favourite_scope(view: dict[str, Any], errors: list[str] | None = None) -> str:

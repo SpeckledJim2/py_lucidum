@@ -4441,6 +4441,1934 @@ class BrowserSmokeTests(unittest.TestCase):
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_line_bar_two_feature_grouping_controls_charts_table_and_favourite(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            data_path = root / "two_feature_line_bar.csv"
+            data_path.write_text(
+                "age,duration,segment,actual,expected_one,expected_two,weight\n"
+                "1,10,A,100,90,95,1\n"
+                "2,20,A,120,110,115,2\n"
+                "3,30,B,150,140,145,3\n"
+                "4,40,B,180,170,175,4\n"
+                "5,50,C,220,210,215,5\n"
+                "6,60,C,260,250,255,6\n",
+                encoding="utf-8",
+            )
+            kpis_path = root / "kpi_spec.csv"
+            kpis_path.write_text(
+                "group,name,actual,denominator,decimals,format\n"
+                "PRICING,Actual,actual,weight,2,currency\n",
+                encoding="utf-8",
+            )
+            favourites_path = root / "favourites.json"
+            base_url, server, thread = self.start_app(
+                data_path,
+                kpis_path=kpis_path,
+                use_kpis=True,
+                line_bar_favourites_path=favourites_path,
+                defaults={
+                    "x": "age",
+                    "actual": "actual",
+                    "expected": "expected_one",
+                    "expected2": "expected_two",
+                    "denominator": "weight",
+                },
+                tools=["line_bar"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1440, "height": 900})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.add_init_script(
+                        """
+                        window.__lucidumCopiedText = null;
+                        Object.defineProperty(navigator, "clipboard", {
+                          configurable: true,
+                          value: {
+                            writeText: async (text) => {
+                              window.__lucidumCopiedText = text;
+                            },
+                          },
+                        });
+                        """
+                    )
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    page.locator("#datasetMeta").get_by_text("two_feature_line_bar.csv").wait_for(timeout=10_000)
+                    page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                    row_selection_modifier = "Meta" if sys.platform == "darwin" else "Control"
+                    page.locator("#lineBarSideControlsToggleBtn").click()
+                    page.locator("#lineBarToolbarToggleBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#lineBarSideControlsToggleBtn")?.getAttribute("aria-expanded") === "true"
+                          && document.querySelector("#lineBarToolbarToggleBtn")?.getAttribute("aria-expanded") === "true"
+                        """,
+                        timeout=10_000,
+                    )
+
+                    self.assertEqual(page.locator("#featureList .line-bar-feature-marker").count(), 0)
+                    self.assertEqual(page.locator("#featureList .line-bar-feature-add-hint").count(), 0)
+                    self.assertTrue(page.locator("#lineBarSwapFeaturesBtn").is_hidden())
+                    page.locator(
+                        '#featureList .feature[data-value="segment"][data-source-id="dataset"]'
+                    ).click(modifiers=["Shift"])
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const active = [...document.querySelectorAll("#featureList .feature.active")]
+                            .map((button) => button.dataset.value);
+                          return active.join("|") === "segment"
+                            && document.querySelectorAll("#featureList .line-bar-feature-marker").length === 0
+                            && document.querySelector("#lineBarTwoFeatureControls")?.classList.contains("hidden");
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator(
+                        '#featureList .feature[data-value="age"][data-source-id="dataset"]'
+                    ).click()
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const active = [...document.querySelectorAll("#featureList .feature.active")]
+                            .map((button) => button.dataset.value);
+                          return active.join("|") === "age"
+                            && document.querySelectorAll("#featureList .line-bar-feature-marker").length === 0;
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator(
+                        '#featureList .feature[data-value="segment"][data-source-id="dataset"]'
+                    ).click(modifiers=[row_selection_modifier])
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const chart = echarts.getInstanceByDom(document.querySelector("#chart"));
+                          const types = (chart?.getOption()?.series || []).map((series) => series.type);
+                          return types.length > 0
+                            && types.filter((type) => type === "line").length === 3
+                            && types.filter((type) => type === "bar").length === 3
+                            && !document.querySelector("#lineBarTwoFeatureControls")?.classList.contains("hidden");
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    picker_state = page.evaluate(
+                        """
+                        () => ({
+                          age: document.querySelector('#featureList .feature[data-value="age"] .line-bar-feature-marker')?.dataset.label,
+                          segment: document.querySelector('#featureList .feature[data-value="segment"] .line-bar-feature-marker')?.dataset.label,
+                          disabled: [...document.querySelectorAll("#featureList .feature")]
+                            .filter((button) => !button.classList.contains("active") && button.disabled).length,
+                          plotLabels: [...document.querySelectorAll('#lineBarTwoFeatureControls [data-two-control="plotMetric"]')]
+                            .map((button) => button.textContent.trim()),
+                          tailValues: [0, 1].map((index) => document.querySelector(
+                            '#lineBarTwoFeatureControls [data-two-control="tailPercent"]'
+                            + `[data-feature-index="${index}"].active`
+                          )?.dataset.value),
+                          tailHeadings: [...document.querySelectorAll(
+                            "#lineBarTwoFeatureControls .two-feature-tail-control h3"
+                          )].map((heading) => heading.textContent.trim()),
+                          series: echarts.getInstanceByDom(document.querySelector("#chart"))
+                            ?.getOption()?.series?.map((item) => ({
+                              name: item.name,
+                              type: item.type,
+                              stack: item.stack,
+                              color: item.itemStyle?.color,
+                            })),
+                          legendLabels: echarts.getInstanceByDom(document.querySelector("#chart"))
+                            ?.getOption()?.legend?.[0]?.data?.map((item) => item.name || item),
+                          groupingSummaries: document.querySelectorAll(
+                            "#lineBarTwoFeatureControls .two-feature-grouping-summary"
+                          ).length,
+                          markerCentreDeltas: ["age", "segment"].map((value) => {
+                            const row = document.querySelector(`#featureList .feature[data-value="${value}"]`);
+                            const marker = row?.querySelector(".line-bar-feature-marker");
+                            const rowRect = row?.getBoundingClientRect();
+                            const markerRect = marker?.getBoundingClientRect();
+                            return rowRect && markerRect
+                              ? Math.abs(
+                                (rowRect.top + rowRect.height / 2)
+                                - (markerRect.top + markerRect.height / 2)
+                              )
+                              : null;
+                          }),
+                          swap: (() => {
+                            const button = document.querySelector("#lineBarSwapFeaturesBtn");
+                            const title = document.querySelector(".line-bar-feature-heading h2");
+                            const sort = document.querySelector('.segmented[data-control="featureSort"]');
+                            const header = button?.closest(".section-title-row");
+                            const buttonRect = button?.getBoundingClientRect();
+                            const titleRect = title?.getBoundingClientRect();
+                            const sortRect = sort?.getBoundingClientRect();
+                            const headerRect = header?.getBoundingClientRect();
+                            return {
+                              hidden: button?.hidden,
+                              ariaLabel: button?.getAttribute("aria-label"),
+                              title: button?.getAttribute("title"),
+                              iconCount: button?.querySelectorAll("svg").length,
+                              titleRight: titleRect?.right,
+                              buttonLeft: buttonRect?.left,
+                              buttonRight: buttonRect?.right,
+                              sortLeft: sortRect?.left,
+                              centreDelta: buttonRect && headerRect
+                                ? Math.abs(
+                                  (buttonRect.top + buttonRect.height / 2)
+                                  - (headerRect.top + headerRect.height / 2)
+                                )
+                                : null,
+                            };
+                          })(),
+                        })
+                        """
+                    )
+                    self.assertEqual(picker_state["age"], "Feature 1")
+                    self.assertEqual(picker_state["segment"], "Feature 2")
+                    self.assertEqual(picker_state["disabled"], 0)
+                    self.assertEqual(picker_state["plotLabels"], ["Actual", "expected_one", "expected_two"])
+                    self.assertEqual(picker_state["tailValues"], ["0", "0"])
+                    self.assertEqual(
+                        picker_state["tailHeadings"],
+                        ["Feature 1 tail grouping", "Feature 2 tail grouping"],
+                    )
+                    self.assertEqual(
+                        [(item["name"], item["type"]) for item in picker_state["series"]],
+                        [
+                            ("A", "line"),
+                            ("A", "bar"),
+                            ("B", "line"),
+                            ("B", "bar"),
+                            ("C", "line"),
+                            ("C", "bar"),
+                        ],
+                    )
+                    self.assertEqual(picker_state["legendLabels"], ["A", "B", "C"])
+                    for series_index in range(0, len(picker_state["series"]), 2):
+                        line = picker_state["series"][series_index]
+                        bar = picker_state["series"][series_index + 1]
+                        self.assertEqual(line["color"], bar["color"])
+                        self.assertEqual(bar["stack"], "two-feature-volume")
+                    self.assertEqual(picker_state["groupingSummaries"], 0)
+                    self.assertTrue(all(
+                        delta is not None and delta <= 1
+                        for delta in picker_state["markerCentreDeltas"]
+                    ))
+                    self.assertFalse(picker_state["swap"]["hidden"])
+                    self.assertEqual(picker_state["swap"]["ariaLabel"], "Swap Feature 1 and Feature 2")
+                    self.assertIsNone(picker_state["swap"]["title"])
+                    self.assertEqual(picker_state["swap"]["iconCount"], 1)
+                    self.assertLessEqual(picker_state["swap"]["titleRight"], picker_state["swap"]["buttonLeft"])
+                    self.assertLessEqual(picker_state["swap"]["buttonRight"], picker_state["swap"]["sortLeft"])
+                    self.assertLessEqual(picker_state["swap"]["centreDelta"], 1)
+
+                    page.wait_for_load_state("networkidle")
+                    page.evaluate("performance.clearResourceTimings()")
+                    page.locator(
+                        '#featureList .feature[data-value="duration"][data-source-id="dataset"]'
+                    ).click(modifiers=[row_selection_modifier])
+                    page.wait_for_timeout(150)
+                    modifier_third_feature_state = page.evaluate(
+                        """
+                        () => ({
+                          active: [...document.querySelectorAll("#featureList .feature.active")]
+                            .map((button) => button.dataset.value),
+                          markers: [...document.querySelectorAll("#featureList .line-bar-feature-marker")]
+                            .map((marker) => marker.dataset.label),
+                          disabled: [...document.querySelectorAll("#featureList .feature")]
+                            .filter((button) => button.disabled).length,
+                          chartRequests: performance.getEntriesByType("resource")
+                            .filter((entry) => new URL(entry.name).pathname === "/api/chart").length,
+                        })
+                        """
+                    )
+                    self.assertEqual(modifier_third_feature_state["active"], ["age", "segment"])
+                    self.assertEqual(
+                        modifier_third_feature_state["markers"],
+                        ["Feature 1", "Feature 2"],
+                    )
+                    self.assertEqual(modifier_third_feature_state["disabled"], 0)
+                    self.assertEqual(modifier_third_feature_state["chartRequests"], 0)
+
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator(
+                            '#featureList .feature[data-value="duration"][data-source-id="dataset"]'
+                        ).click()
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const active = [...document.querySelectorAll("#featureList .feature.active")]
+                            .map((button) => button.dataset.value);
+                          return active.join("|") === "duration"
+                            && document.querySelectorAll("#featureList .line-bar-feature-marker").length === 0
+                            && document.querySelector("#lineBarTwoFeatureControls")?.classList.contains("hidden")
+                            && document.querySelector("#lineBarSwapFeaturesBtn")?.hidden
+                            && [...document.querySelectorAll("#featureList .feature")]
+                              .every((button) => !button.disabled);
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator(
+                            '#featureList .feature[data-value="age"][data-source-id="dataset"]'
+                        ).click()
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator(
+                            '#featureList .feature[data-value="segment"][data-source-id="dataset"]'
+                        ).click(modifiers=[row_selection_modifier])
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const chart = echarts.getInstanceByDom(document.querySelector("#chart"));
+                          const types = (chart?.getOption()?.series || []).map((series) => series.type);
+                          return document.querySelector(
+                              '#featureList .feature[data-value="age"] .line-bar-feature-marker'
+                            )?.dataset.label === "Feature 1"
+                            && document.querySelector(
+                              '#featureList .feature[data-value="segment"] .line-bar-feature-marker'
+                            )?.dataset.label === "Feature 2"
+                            && types.filter((type) => type === "line").length === 3
+                            && types.filter((type) => type === "bar").length === 3;
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+
+                    page.wait_for_load_state("networkidle")
+                    page.evaluate("performance.clearResourceTimings()")
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator("#lineBarSwapFeaturesBtn").focus()
+                        page.keyboard.press("Enter")
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector('#featureList .feature[data-value="segment"] .line-bar-feature-marker')
+                            ?.dataset.label === "Feature 1"
+                          && document.querySelector('#featureList .feature[data-value="age"] .line-bar-feature-marker')
+                            ?.dataset.label === "Feature 2"
+                        """,
+                        timeout=10_000,
+                    )
+                    swap_chart_requests = page.evaluate(
+                        """
+                        () => performance.getEntriesByType("resource")
+                          .filter((entry) => new URL(entry.name).pathname === "/api/chart").length
+                        """
+                    )
+                    self.assertEqual(swap_chart_requests, 1)
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator("#lineBarSwapFeaturesBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector('#featureList .feature[data-value="age"] .line-bar-feature-marker')
+                            ?.dataset.label === "Feature 1"
+                          && document.querySelector('#featureList .feature[data-value="segment"] .line-bar-feature-marker')
+                            ?.dataset.label === "Feature 2"
+                        """,
+                        timeout=10_000,
+                    )
+
+                    page.locator(
+                        '#featureList .feature[data-value="segment"][data-source-id="dataset"]'
+                    ).click(modifiers=[row_selection_modifier])
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#lineBarTwoFeatureControls")?.classList.contains("hidden")
+                          && document.querySelectorAll("#featureList .line-bar-feature-marker").length === 0
+                          && document.querySelector('#featureList .feature[data-value="age"]')?.classList.contains("active")
+                        """,
+                        timeout=10_000,
+                    )
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                        timeout=10_000,
+                    ) as added_segment_response:
+                        page.locator(
+                            '#featureList .feature[data-value="segment"][data-source-id="dataset"]'
+                        ).click(modifiers=[row_selection_modifier])
+                    added_segment_response.value.finished()
+                    page.wait_for_timeout(100)
+                    page.wait_for_function(
+                        """
+                        () => !document.querySelector("#lineBarTwoFeatureControls")?.classList.contains("hidden")
+                          && document.querySelector('#featureList .feature[data-value="segment"] .line-bar-feature-marker')
+                            ?.dataset.label === "Feature 2"
+                        """,
+                        timeout=10_000,
+                    )
+
+                    page.evaluate("performance.clearResourceTimings()")
+                    page.locator('#lineBarTwoFeatureControls [data-two-control="plotMetric"][data-value="resp1"]').click()
+                    page.wait_for_timeout(250)
+                    cached_redraw = page.evaluate(
+                        """
+                        () => {
+                          const chart = echarts.getInstanceByDom(document.querySelector("#chart"));
+                          const option = chart?.getOption();
+                          const series = option?.series || [];
+                          return {
+                            requests: performance.getEntriesByType("resource")
+                              .filter((entry) => new URL(entry.name).pathname === "/api/chart").length,
+                            lineCount: series.filter((item) => item.type === "line").length,
+                            barCount: series.filter((item) => item.type === "bar").length,
+                            responseAxis: option?.yAxis?.[0]?.name,
+                          };
+                        }
+                        """
+                    )
+                    self.assertEqual(cached_redraw["requests"], 0)
+                    self.assertEqual(cached_redraw["lineCount"], 3)
+                    self.assertEqual(cached_redraw["barCount"], 3)
+                    self.assertEqual(cached_redraw["responseAxis"], "expected_one / weight")
+                    legend_selection = page.evaluate(
+                        """
+                        () => {
+                          const chart = echarts.getInstanceByDom(document.querySelector("#chart"));
+                          chart.dispatchAction({ type: "legendToggleSelect", name: "A" });
+                          return chart.getOption()?.legend?.[0]?.selected?.A;
+                        }
+                        """
+                    )
+                    self.assertFalse(legend_selection)
+                    page.evaluate(
+                        """
+                        () => echarts.getInstanceByDom(document.querySelector("#chart"))
+                          ?.dispatchAction({ type: "legendToggleSelect", name: "A" })
+                        """
+                    )
+
+                    self.assertEqual(
+                        page.locator('#lineBarTwoFeatureControls [data-two-control="heatmapLabels"]').count(),
+                        0,
+                    )
+                    page.locator('#lineBarTwoFeatureControls [data-two-action="as-factor"][data-feature-index="0"]').click()
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const series = echarts.getInstanceByDom(document.querySelector("#chart"))
+                            ?.getOption()?.series?.[0];
+                          return series?.type === "heatmap"
+                            && document.querySelectorAll(
+                              '#lineBarTwoFeatureControls [data-two-control="heatmapLabels"]'
+                            ).length === 4;
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    initial_heatmap_labels = page.evaluate(
+                        """
+                        () => ({
+                          active: document.querySelector(
+                            '#lineBarTwoFeatureControls [data-two-control="heatmapLabels"].active'
+                          )?.dataset.value,
+                          show: echarts.getInstanceByDom(document.querySelector("#chart"))
+                            ?.getOption()?.series?.[0]?.label?.show,
+                        })
+                        """
+                    )
+                    self.assertEqual(initial_heatmap_labels, {"active": "none", "show": False})
+                    page.wait_for_load_state("networkidle")
+                    page.evaluate("performance.clearResourceTimings()")
+                    page.locator(
+                        '#lineBarTwoFeatureControls [data-two-control="heatmapLabels"][data-value="actual"]'
+                    ).click()
+                    page.wait_for_function(
+                        """
+                        () => echarts.getInstanceByDom(document.querySelector("#chart"))
+                          ?.getOption()?.series?.[0]?.label?.show === true
+                        """,
+                        timeout=10_000,
+                    )
+
+                    def heatmap_label_state() -> dict[str, Any]:
+                        return page.evaluate(
+                            """
+                            () => {
+                              const series = echarts.getInstanceByDom(document.querySelector("#chart"))
+                                ?.getOption()?.series?.[0];
+                              const value = series?.data?.[0]?.value || series?.data?.[0];
+                              const richText = series?.label?.formatter?.({ value }) || "";
+                              const text = String(richText).split("\\n").map((line) => {
+                                const delimiter = line.indexOf("|");
+                                return delimiter < 0 ? line : line.slice(delimiter + 1, -1);
+                              }).join("\\n");
+                              return {
+                                text,
+                                richText,
+                                show: series?.label?.show,
+                                fontSize: series?.label?.fontSize,
+                                lineHeight: series?.label?.lineHeight,
+                                align: series?.label?.align,
+                                verticalAlign: series?.label?.verticalAlign,
+                                borderWidth: series?.label?.textBorderWidth,
+                                rich: series?.label?.rich,
+                              };
+                            }
+                            """
+                        )
+
+                    actual_labels = heatmap_label_state()
+                    self.assertRegex(actual_labels["text"], r"^£[\d,.]+\.\d{2}$")
+                    self.assertTrue(actual_labels["show"])
+                    self.assertEqual(actual_labels["fontSize"], 12)
+                    self.assertEqual(actual_labels["align"], "center")
+                    self.assertEqual(actual_labels["verticalAlign"], "middle")
+                    self.assertEqual(actual_labels["borderWidth"], 0)
+                    self.assertEqual(actual_labels["rich"]["heatmapWhitePrimary"]["color"], "#ffffff")
+                    self.assertEqual(actual_labels["rich"]["heatmapDarkPrimary"]["color"], "#0f172a")
+                    self.assertEqual(actual_labels["rich"]["heatmapWhitePrimary"]["fontWeight"], 600)
+                    self.assertEqual(actual_labels["rich"]["heatmapDarkSecondary"]["fontWeight"], 500)
+                    page.locator(
+                        '#lineBarTwoFeatureControls [data-two-control="heatmapLabels"][data-value="weight"]'
+                    ).click()
+                    weight_labels = heatmap_label_state()
+                    self.assertRegex(weight_labels["text"], r"^[\d,.]+$")
+                    page.locator(
+                        '#lineBarTwoFeatureControls [data-two-control="heatmapLabels"][data-value="both"]'
+                    ).click()
+                    both_labels = heatmap_label_state()
+                    both_label_rows = both_labels["text"].splitlines()
+                    self.assertEqual(len(both_label_rows), 2)
+                    self.assertRegex(both_label_rows[0], r"^£[\d,.]+\.\d{2}$")
+                    self.assertRegex(both_label_rows[1], r"^[\d,.]+$")
+                    cached_label_requests = page.evaluate(
+                        """
+                        () => performance.getEntriesByType("resource")
+                          .filter((entry) => new URL(entry.name).pathname === "/api/chart").length
+                        """
+                    )
+                    self.assertEqual(cached_label_requests, 0)
+
+                    page.set_viewport_size({"width": 900, "height": 420})
+                    page.wait_for_timeout(250)
+                    compact_labels = heatmap_label_state()
+                    self.assertTrue(
+                        not compact_labels["show"]
+                        or compact_labels["fontSize"] < both_labels["fontSize"]
+                    )
+                    page.set_viewport_size({"width": 1440, "height": 900})
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector(
+                          '#lineBarTwoFeatureControls [data-two-control="heatmapLabels"][data-value="both"].active'
+                        ) && echarts.getInstanceByDom(document.querySelector("#chart"))
+                          ?.getOption()?.series?.[0]?.label?.show === true
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator('#lineBarTwoFeatureControls [data-two-action="as-factor"][data-feature-index="0"]').click()
+                    page.locator('#featureList .feature[data-value="segment"][data-source-id="dataset"]').click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#lineBarTwoFeatureControls")?.classList.contains("hidden")
+                          && document.querySelector('#featureList .feature[data-value="segment"]')?.classList.contains("active")
+                          && document.querySelectorAll("#featureList .line-bar-feature-marker").length === 0
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator('#featureList .feature[data-value="age"][data-source-id="dataset"]').click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector('#featureList .feature[data-value="age"]')?.classList.contains("active")
+                          && !document.querySelector('#featureList .feature[data-value="segment"]')?.classList.contains("active")
+                        """,
+                        timeout=10_000,
+                    )
+
+                    page.locator(
+                        '#featureList .feature[data-value="duration"][data-source-id="dataset"]'
+                    ).click(modifiers=[row_selection_modifier])
+                    page.wait_for_function(
+                        """
+                        () => echarts.getInstanceByDom(document.querySelector("#chart"))
+                          ?.getOption()?.series?.[0]?.type === "surface"
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator('#lineBarTwoFeatureControls [data-two-control="bandWidth"][data-feature-index="1"][data-value="5"]').click()
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator(
+                            '#lineBarTwoFeatureControls [data-two-control="tailPercent"]'
+                            '[data-feature-index="1"][data-value="2"]'
+                        ).click()
+                    page.locator('#lineBarTwoFeatureControls [data-two-control="quantileMode"][data-feature-index="1"][data-value="quantile"]').click()
+                    page.wait_for_function(
+                        """
+                        () => echarts.getInstanceByDom(document.querySelector("#chart"))
+                          ?.getOption()?.series?.[0]?.type === "line"
+                          && !document.querySelector(
+                            '#lineBarTwoFeatureControls [data-two-control="tailPercent"][data-feature-index="1"]'
+                          )
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator('#lineBarTwoFeatureControls [data-two-control="quantileMode"][data-feature-index="1"][data-value="off"]').click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector(
+                            '#lineBarTwoFeatureControls [data-two-control="tailPercent"]'
+                            + '[data-feature-index="1"][data-value="2"]'
+                          )?.classList.contains("active")
+                        """,
+                        timeout=10_000,
+                    )
+                    page.wait_for_function(
+                        """
+                        () => echarts.getInstanceByDom(document.querySelector("#chart"))
+                          ?.getOption()?.series?.[0]?.type === "surface"
+                        """,
+                        timeout=10_000,
+                    )
+                    surface_bands_before_swap = page.evaluate(
+                        """
+                        () => [0, 1].map((index) => document.querySelector(
+                          `#lineBarTwoFeatureControls [data-two-control="bandWidth"]`
+                          + `[data-feature-index="${index}"].active`
+                        )?.dataset.value)
+                        """
+                    )
+                    surface_tails_before_swap = page.evaluate(
+                        """
+                        () => [0, 1].map((index) => document.querySelector(
+                          `#lineBarTwoFeatureControls [data-two-control="tailPercent"]`
+                          + `[data-feature-index="${index}"].active`
+                        )?.dataset.value)
+                        """
+                    )
+                    self.assertEqual(surface_tails_before_swap, ["0", "2"])
+                    surface_domains = page.evaluate(
+                        """
+                        () => {
+                          const option = echarts.getInstanceByDom(document.querySelector("#chart"))?.getOption();
+                          const points = option?.series?.[0]?.data || [];
+                          const xValues = points.map((point) => Number(point?.value?.[0] ?? point?.[0]));
+                          const yValues = points.map((point) => Number(point?.value?.[1] ?? point?.[1]));
+                          return {
+                            xAxis: [option?.xAxis3D?.[0]?.min, option?.xAxis3D?.[0]?.max],
+                            yAxis: [option?.yAxis3D?.[0]?.min, option?.yAxis3D?.[0]?.max],
+                            plottedX: [Math.min(...xValues), Math.max(...xValues)],
+                            plottedY: [Math.min(...yValues), Math.max(...yValues)],
+                          };
+                        }
+                        """
+                    )
+                    self.assertEqual(surface_domains["xAxis"], surface_domains["plottedX"])
+                    self.assertEqual(surface_domains["yAxis"], surface_domains["plottedY"])
+                    self.assertGreater(surface_domains["xAxis"][0], 0)
+                    self.assertGreater(surface_domains["yAxis"][0], 0)
+                    initial_surface_box = page.evaluate(
+                        """
+                        () => {
+                          const chart = echarts.getInstanceByDom(document.querySelector("#chart"));
+                          const grid = chart?.getOption()?.grid3D?.[0] || {};
+                          return {
+                            chartWidth: chart?.getWidth(),
+                            width: grid.boxWidth,
+                            depth: grid.boxDepth,
+                          };
+                        }
+                        """
+                    )
+                    page.wait_for_load_state("networkidle")
+                    page.evaluate("performance.clearResourceTimings()")
+                    page.set_viewport_size({"width": 1920, "height": 900})
+                    page.wait_for_function(
+                        """
+                        previous => {
+                          const chart = echarts.getInstanceByDom(document.querySelector("#chart"));
+                          return chart?.getWidth() > previous.chartWidth + 300;
+                        }
+                        """,
+                        arg=initial_surface_box,
+                        timeout=10_000,
+                    )
+                    page.wait_for_timeout(250)
+                    resized_surface_box = page.evaluate(
+                        """
+                        () => {
+                          const chart = echarts.getInstanceByDom(document.querySelector("#chart"));
+                          const grid = chart?.getOption()?.grid3D?.[0] || {};
+                          return {
+                            chartWidth: chart?.getWidth(),
+                            chartHeight: chart?.getHeight(),
+                            width: grid.boxWidth,
+                            depth: grid.boxDepth,
+                            chartRequests: performance.getEntriesByType("resource")
+                              .filter((entry) => new URL(entry.name).pathname === "/api/chart").length,
+                          };
+                        }
+                        """
+                    )
+                    self.assertGreater(
+                        resized_surface_box["width"],
+                        initial_surface_box["width"],
+                    )
+                    self.assertGreater(
+                        resized_surface_box["depth"],
+                        initial_surface_box["depth"],
+                    )
+                    self.assertEqual(resized_surface_box["chartRequests"], 0)
+                    page.set_viewport_size({"width": 1440, "height": 900})
+                    page.wait_for_function(
+                        """
+                        initial => {
+                          const grid = echarts.getInstanceByDom(document.querySelector("#chart"))
+                            ?.getOption()?.grid3D?.[0] || {};
+                          return grid.boxWidth === initial.width
+                            && grid.boxDepth === initial.depth;
+                        }
+                        """,
+                        arg=initial_surface_box,
+                        timeout=10_000,
+                    )
+                    self.assertNotEqual(
+                        surface_bands_before_swap[0],
+                        surface_bands_before_swap[1],
+                    )
+                    page.wait_for_load_state("networkidle")
+                    page.evaluate("performance.clearResourceTimings()")
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator("#lineBarSwapFeaturesBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const option = echarts.getInstanceByDom(document.querySelector("#chart"))?.getOption();
+                          return document.querySelector(
+                            '#featureList .feature[data-value="duration"] .line-bar-feature-marker'
+                          )?.dataset.label === "Feature 1"
+                            && document.querySelector(
+                              '#featureList .feature[data-value="age"] .line-bar-feature-marker'
+                            )?.dataset.label === "Feature 2"
+                            && option?.xAxis3D?.[0]?.name === "age"
+                            && option?.yAxis3D?.[0]?.name === "duration";
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    surface_swap_state = page.evaluate(
+                        """
+                        () => ({
+                          bands: [0, 1].map((index) => document.querySelector(
+                            `#lineBarTwoFeatureControls [data-two-control="bandWidth"]`
+                            + `[data-feature-index="${index}"].active`
+                          )?.dataset.value),
+                          tails: [0, 1].map((index) => document.querySelector(
+                            `#lineBarTwoFeatureControls [data-two-control="tailPercent"]`
+                            + `[data-feature-index="${index}"].active`
+                          )?.dataset.value),
+                          chartRequests: performance.getEntriesByType("resource")
+                            .filter((entry) => new URL(entry.name).pathname === "/api/chart").length,
+                        })
+                        """
+                    )
+                    self.assertEqual(
+                        surface_swap_state["bands"],
+                        list(reversed(surface_bands_before_swap)),
+                    )
+                    self.assertEqual(
+                        surface_swap_state["tails"],
+                        list(reversed(surface_tails_before_swap)),
+                    )
+                    self.assertEqual(surface_swap_state["chartRequests"], 1)
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator("#lineBarSwapFeaturesBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const option = echarts.getInstanceByDom(document.querySelector("#chart"))?.getOption();
+                          return document.querySelector(
+                            '#featureList .feature[data-value="age"] .line-bar-feature-marker'
+                          )?.dataset.label === "Feature 1"
+                            && document.querySelector(
+                              '#featureList .feature[data-value="duration"] .line-bar-feature-marker'
+                            )?.dataset.label === "Feature 2"
+                            && option?.xAxis3D?.[0]?.name === "duration"
+                            && option?.yAxis3D?.[0]?.name === "age";
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator(
+                        '#lineBarTwoFeatureControls [data-two-control="plotMetric"][data-value="volume"]'
+                    ).click()
+
+                    if page.locator("#favouritesCollapseBtn").get_attribute("aria-expanded") == "false":
+                        page.locator("#favouritesCollapseBtn").click()
+                    self.click_sidebar_favourite_action(page, "#sidebarFavouriteAddBtn")
+                    page.locator("#sidebarFavouriteNameInput").fill("Two feature view")
+                    page.locator('[data-favourite-action="save-add"]').click()
+                    page.locator(".saved-favourite-option", has_text="Two feature view").wait_for(timeout=10_000)
+                    saved_view = json.loads(favourites_path.read_text(encoding="utf-8"))["favourites"][0]["view"]
+                    self.assertEqual([grouping["feature"] for grouping in saved_view["groupings"]], ["age", "duration"])
+                    self.assertEqual(
+                        [grouping["tailPercent"] for grouping in saved_view["groupings"]],
+                        ["0", "2"],
+                    )
+                    self.assertEqual(saved_view["tailPercent"], "0")
+                    self.assertEqual(saved_view["plotMetric"], "volume")
+                    self.assertEqual(saved_view["heatmapLabels"], "both")
+
+                    page.locator(
+                        '#featureList .feature[data-value="age"][data-source-id="dataset"]'
+                    ).click(modifiers=[row_selection_modifier])
+                    page.wait_for_function(
+                        """
+                          () => document.querySelector("#lineBarTwoFeatureControls")?.classList.contains("hidden")
+                          && document.querySelector('#featureList .feature[data-value="duration"] .line-bar-feature-marker')
+                            === null
+                          && document.querySelector('#featureList .feature[data-value="duration"]')
+                            ?.classList.contains("active")
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator(".saved-favourite-option", has_text="Two feature view").click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector('#featureList .feature[data-value="age"] .line-bar-feature-marker')
+                            ?.dataset.label === "Feature 1"
+                          && document.querySelector('#featureList .feature[data-value="duration"] .line-bar-feature-marker')
+                            ?.dataset.label === "Feature 2"
+                          && document.querySelector('#lineBarTwoFeatureControls [data-two-control="plotMetric"][data-value="volume"]')
+                            ?.classList.contains("active")
+                          && document.querySelector(
+                            '#lineBarTwoFeatureControls [data-two-control="tailPercent"]'
+                            + '[data-feature-index="1"][data-value="2"]'
+                          )
+                            ?.classList.contains("active")
+                          && !document.querySelector("#lineBarSwapFeaturesBtn")?.hidden
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator('#lineBarTwoFeatureControls [data-two-action="as-factor"][data-feature-index="0"]').click()
+                    page.locator('#lineBarTwoFeatureControls [data-two-action="as-factor"][data-feature-index="1"]').click()
+                    page.wait_for_function(
+                        """
+                        () => echarts.getInstanceByDom(document.querySelector("#chart"))
+                          ?.getOption()?.series?.[0]?.type === "heatmap"
+                          && document.querySelector(
+                            '#lineBarTwoFeatureControls [data-two-control="heatmapLabels"][data-value="both"].active'
+                          )
+                        """,
+                        timeout=10_000,
+                    )
+
+                    page.locator("#tableTab").click()
+                    page.locator("#tableWrap:not(.hidden) #lineBarTableGrid").wait_for(timeout=10_000)
+                    page.wait_for_function(
+                        """
+                        () => [...document.querySelectorAll("#lineBarTableGrid .tabulator-col[tabulator-field] .tabulator-col-title")]
+                          .map((cell) => cell.textContent.trim()).join("|")
+                          === "age|duration|Row count|weight|actual|expected_one|expected_two"
+                        """,
+                        timeout=10_000,
+                    )
+                    page.wait_for_load_state("networkidle")
+                    page.evaluate("performance.clearResourceTimings()")
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/line-bar/table") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator("#lineBarSwapFeaturesBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => [...document.querySelectorAll("#lineBarTableGrid .tabulator-col[tabulator-field] .tabulator-col-title")]
+                          .map((cell) => cell.textContent.trim()).join("|")
+                          === "duration|age|Row count|weight|actual|expected_one|expected_two"
+                        """,
+                        timeout=10_000,
+                    )
+                    table_swap_requests = page.evaluate(
+                        """
+                        () => {
+                          const paths = performance.getEntriesByType("resource")
+                            .map((entry) => new URL(entry.name).pathname);
+                          return {
+                            chart: paths.filter((path) => path === "/api/chart").length,
+                            table: paths.filter((path) => path === "/api/line-bar/table").length,
+                          };
+                        }
+                        """
+                    )
+                    self.assertEqual(table_swap_requests, {"chart": 0, "table": 1})
+
+                    page.evaluate("performance.clearResourceTimings()")
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/line-bar/table") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator(
+                            '#lineBarTwoFeatureControls [data-two-control="tailPercent"]'
+                            '[data-feature-index="1"][data-value="5"]'
+                        ).click()
+                    table_tail_requests = page.evaluate(
+                        """
+                        () => {
+                          const paths = performance.getEntriesByType("resource")
+                            .map((entry) => new URL(entry.name).pathname);
+                          return {
+                            chart: paths.filter((path) => path === "/api/chart").length,
+                            table: paths.filter((path) => path === "/api/line-bar/table").length,
+                          };
+                        }
+                        """
+                    )
+                    self.assertEqual(table_tail_requests, {"chart": 0, "table": 1})
+
+                    page.evaluate("performance.clearResourceTimings()")
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator("#chartTab").click()
+                    page.wait_for_function(
+                        """
+                        () => echarts.getInstanceByDom(document.querySelector("#chart"))
+                          ?.getOption()?.series?.[0]?.type === "heatmap"
+                        """,
+                        timeout=10_000,
+                    )
+                    stale_chart_requests = page.evaluate(
+                        """
+                        () => performance.getEntriesByType("resource")
+                          .filter((entry) => new URL(entry.name).pathname === "/api/chart").length
+                        """
+                    )
+                    self.assertEqual(stale_chart_requests, 1)
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/line-bar/table") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator("#tableTab").click()
+                    page.wait_for_function(
+                        """
+                        () => [...document.querySelectorAll("#lineBarTableGrid .tabulator-col[tabulator-field] .tabulator-col-title")]
+                          .map((cell) => cell.textContent.trim()).join("|")
+                          === "duration|age|Row count|weight|actual|expected_one|expected_two"
+                        """,
+                        timeout=10_000,
+                    )
+                    page.evaluate("performance.clearResourceTimings()")
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/line-bar/table") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator("#lineBarSwapFeaturesBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => [...document.querySelectorAll("#lineBarTableGrid .tabulator-col[tabulator-field] .tabulator-col-title")]
+                          .map((cell) => cell.textContent.trim()).join("|")
+                          === "age|duration|Row count|weight|actual|expected_one|expected_two"
+                        """,
+                        timeout=10_000,
+                    )
+                    table_swap_back_requests = page.evaluate(
+                        """
+                        () => {
+                          const paths = performance.getEntriesByType("resource")
+                            .map((entry) => new URL(entry.name).pathname);
+                          return {
+                            chart: paths.filter((path) => path === "/api/chart").length,
+                            table: paths.filter((path) => path === "/api/line-bar/table").length,
+                          };
+                        }
+                        """
+                    )
+                    self.assertEqual(table_swap_back_requests, {"chart": 0, "table": 1})
+                    page.locator("#lineBarTableGrid").click(button="right")
+                    page.locator("#lineBarTableContextMenu:not([hidden])").get_by_text("Copy table to clipboard").click()
+                    page.wait_for_function(
+                        """() => window.__lucidumCopiedText?.startsWith("age,duration,Row count,weight,actual,expected_one,expected_two\\n")""",
+                        timeout=10_000,
+                    )
+                    page.locator("#lineBarTableSearch").fill("20")
+                    page.wait_for_function(
+                        """() => (document.querySelector("#lineBarGroupMeta")?.textContent || "").includes("of")""",
+                        timeout=10_000,
+                    )
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_line_bar_two_feature_date_switches_between_lines_and_heatmap(self) -> None:
+        data_path = Path(__file__).resolve().parents[1] / "datasets" / "motor_premiums.parquet"
+        base_url, server, thread = self.start_app(
+            data_path,
+            use_kpis=False,
+            defaults={
+                "x": "QUOTE_DATE",
+                "actual": "PREMIUM",
+                "denominator": "__none__",
+            },
+            tools=["line_bar"],
+        )
+        try:
+            assert sync_playwright is not None
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch()
+                page = browser.new_page(viewport={"width": 1440, "height": 900})
+                page_errors: list[str] = []
+                page.on("pageerror", lambda error: page_errors.append(str(error)))
+                page.goto(base_url, wait_until="domcontentloaded")
+                page.locator("#datasetMeta").get_by_text("motor_premiums.parquet").wait_for(timeout=10_000)
+                page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                page.locator("#lineBarSideControlsToggleBtn").click()
+                page.locator("#lineBarToolbarToggleBtn").click()
+                modifier = "Meta" if sys.platform == "darwin" else "Control"
+                page.locator(
+                    '#featureList .feature[data-value="SAMPLE"][data-source-id="dataset"]'
+                ).click(modifiers=[modifier])
+                page.wait_for_function(
+                    """
+                    () => {
+                      const option = echarts.getInstanceByDom(document.querySelector("#chart"))?.getOption();
+                      const types = (option?.series || []).map((series) => series.type);
+                      return option?.xAxis?.[0]?.name === "QUOTE_DATE"
+                        && types.filter((type) => type === "line").length === 3
+                        && types.filter((type) => type === "bar").length === 3;
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                default_state = page.evaluate(
+                    """
+                    () => {
+                      const option = echarts.getInstanceByDom(document.querySelector("#chart"))?.getOption();
+                      const values = (option?.xAxis?.[0]?.data || []).map((value) => String(value?.value ?? value));
+                      return {
+                        factorActive: document.querySelector(
+                          '#lineBarTwoFeatureControls [data-two-action="as-factor"][data-feature-index="0"]'
+                        )?.classList.contains("active"),
+                        factorPressed: document.querySelector(
+                          '#lineBarTwoFeatureControls [data-two-action="as-factor"][data-feature-index="0"]'
+                        )?.getAttribute("aria-pressed"),
+                        dateControlCount: document.querySelectorAll(
+                          '#lineBarTwoFeatureControls [data-two-control="dateBucket"][data-feature-index="0"]'
+                        ).length,
+                        dateTailCount: document.querySelectorAll(
+                          '#lineBarTwoFeatureControls [data-two-control="tailPercent"][data-feature-index="0"]'
+                        ).length,
+                        chronological: values.every((value, index) => (
+                          index === 0 || Date.parse(values[index - 1]) <= Date.parse(value)
+                        )),
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(
+                    default_state,
+                    {
+                        "factorActive": False,
+                        "factorPressed": "false",
+                        "dateControlCount": 6,
+                        "dateTailCount": 0,
+                        "chronological": True,
+                    },
+                )
+
+                page.wait_for_load_state("networkidle")
+                page.evaluate("performance.clearResourceTimings()")
+                with page.expect_response(
+                    lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                    timeout=10_000,
+                ):
+                    page.locator(
+                        '#lineBarTwoFeatureControls [data-two-action="as-factor"][data-feature-index="0"]'
+                    ).click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const option = echarts.getInstanceByDom(document.querySelector("#chart"))?.getOption();
+                      return option?.series?.[0]?.type === "heatmap"
+                        && document.querySelector(
+                          '#lineBarTwoFeatureControls [data-two-action="as-factor"][data-feature-index="0"]'
+                        )?.classList.contains("active");
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                factor_on_requests = page.evaluate(
+                    """
+                    () => performance.getEntriesByType("resource")
+                      .filter((entry) => new URL(entry.name).pathname === "/api/chart").length
+                    """
+                )
+                self.assertEqual(factor_on_requests, 1)
+
+                page.evaluate("performance.clearResourceTimings()")
+                with page.expect_response(
+                    lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                    timeout=10_000,
+                ):
+                    page.locator(
+                        '#lineBarTwoFeatureControls [data-two-action="as-factor"][data-feature-index="0"]'
+                    ).click()
+                page.wait_for_function(
+                    """
+                    () => echarts.getInstanceByDom(document.querySelector("#chart"))
+                      ?.getOption()?.series?.some((series) => series.type === "line")
+                    """,
+                    timeout=10_000,
+                )
+                factor_off_requests = page.evaluate(
+                    """
+                    () => performance.getEntriesByType("resource")
+                      .filter((entry) => new URL(entry.name).pathname === "/api/chart").length
+                    """
+                )
+                self.assertEqual(factor_off_requests, 1)
+
+                page.evaluate("performance.clearResourceTimings()")
+                with page.expect_response(
+                    lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                    timeout=10_000,
+                ):
+                    page.locator(
+                        '#lineBarTwoFeatureControls [data-two-control="dateBucket"]'
+                        '[data-feature-index="0"][data-value="month"]'
+                    ).click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const option = echarts.getInstanceByDom(document.querySelector("#chart"))?.getOption();
+                      return option?.xAxis?.[0]?.name === "QUOTE_DATE"
+                        && document.querySelector(
+                          '#lineBarTwoFeatureControls [data-two-control="dateBucket"]'
+                          + '[data-feature-index="0"][data-value="month"]'
+                        )?.classList.contains("active");
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                self.assertEqual(
+                    page.evaluate(
+                        """
+                        () => performance.getEntriesByType("resource")
+                          .filter((entry) => new URL(entry.name).pathname === "/api/chart").length
+                        """
+                    ),
+                    1,
+                )
+
+                with page.expect_response(
+                    lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                    timeout=10_000,
+                ):
+                    page.locator("#lineBarSwapFeaturesBtn").click()
+                page.wait_for_function(
+                    """
+                    () => {
+                      const option = echarts.getInstanceByDom(document.querySelector("#chart"))?.getOption();
+                      return option?.xAxis?.[0]?.name === "QUOTE_DATE"
+                        && document.querySelector(
+                          '#featureList .feature[data-value="QUOTE_DATE"] .line-bar-feature-marker'
+                        )?.dataset.label === "Feature 2"
+                        && document.querySelector(
+                          '#lineBarTwoFeatureControls [data-two-action="as-factor"][data-feature-index="1"]'
+                        );
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                page.locator(
+                    '#featureList .feature[data-value="SAMPLE"][data-source-id="dataset"]'
+                ).click(modifiers=[modifier])
+                page.wait_for_function(
+                    """
+                    () => document.querySelectorAll("#featureList .feature.active").length === 1
+                      && document.querySelector(
+                        '#featureList .feature[data-value="QUOTE_DATE"]'
+                      )?.classList.contains("active")
+                    """,
+                    timeout=10_000,
+                )
+                page.locator(
+                    '#featureList .feature[data-value="DRIVER_AGE"][data-source-id="dataset"]'
+                ).click(modifiers=[modifier])
+                page.wait_for_function(
+                    """
+                    () => {
+                      const option = echarts.getInstanceByDom(document.querySelector("#chart"))?.getOption();
+                      return option?.series?.[0]?.type === "surface"
+                        && option?.xAxis3D?.[0]?.name === "DRIVER_AGE"
+                        && option?.yAxis3D?.[0]?.name === "QUOTE_DATE"
+                        && option?.yAxis3D?.[0]?.type === "time";
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                date_surface = page.evaluate(
+                    """
+                    () => {
+                      const option = echarts.getInstanceByDom(document.querySelector("#chart"))?.getOption();
+                      const points = option?.series?.[0]?.data || [];
+                      const xValues = points.map((point) => Number(point?.value?.[0] ?? point?.[0]));
+                      const yValues = points.map((point) => Number(point?.value?.[1] ?? point?.[1]));
+                      return {
+                        xAxisType: option?.xAxis3D?.[0]?.type,
+                        yAxisType: option?.yAxis3D?.[0]?.type,
+                        xDomain: [option?.xAxis3D?.[0]?.min, option?.xAxis3D?.[0]?.max],
+                        yDomain: [option?.yAxis3D?.[0]?.min, option?.yAxis3D?.[0]?.max],
+                        plottedX: [Math.min(...xValues), Math.max(...xValues)],
+                        plottedY: [Math.min(...yValues), Math.max(...yValues)],
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(date_surface["xAxisType"], "value")
+                self.assertEqual(date_surface["yAxisType"], "time")
+                self.assertEqual(date_surface["xDomain"], date_surface["plottedX"])
+                self.assertEqual(date_surface["yDomain"], date_surface["plottedY"])
+                self.assertGreater(date_surface["yDomain"][0], 0)
+                self.assertEqual(page_errors, [])
+                browser.close()
+        finally:
+            server.should_exit = True
+            thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_line_bar_mixed_two_feature_hides_single_response_plot_control(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "mixed_line_bar.csv"
+            data_path.write_text(
+                "age,segment,actual\n"
+                + "".join(
+                    f"{age},{segment},{100 + age + segment_index}\n"
+                    for age in range(17, 97)
+                    for segment_index, segment in enumerate(("A", "B"))
+                ),
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                defaults={
+                    "x": "age",
+                    "actual": "actual",
+                    "denominator": "__none__",
+                },
+                tools=["line_bar"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                    page.wait_for_function(
+                        """() => (document.querySelector("#lineBarGroupMeta")?.textContent || "").includes("80 groups")""",
+                        timeout=10_000,
+                    )
+                    single_axis = page.evaluate(
+                        """
+                        () => {
+                          const option = echarts.getInstanceByDom(document.querySelector("#chart"))?.getOption();
+                          const axis = option?.xAxis?.[0] || {};
+                          return {
+                            data: axis.data,
+                            show: axis.axisLabel?.show,
+                            interval: axis.axisLabel?.interval,
+                            rotate: axis.axisLabel?.rotate,
+                            fontSize: axis.axisLabel?.fontSize,
+                            showMinLabel: axis.axisLabel?.showMinLabel,
+                            showMaxLabel: axis.axisLabel?.showMaxLabel,
+                            nameGap: axis.nameGap,
+                            gridBottom: option?.grid?.[0]?.bottom,
+                            dataZoomCount: option?.dataZoom?.length || 0,
+                          };
+                        }
+                        """
+                    )
+                    page.locator("#lineBarSideControlsToggleBtn").click()
+                    row_selection_modifier = "Meta" if sys.platform == "darwin" else "Control"
+                    page.locator(
+                        '#featureList .feature[data-value="segment"][data-source-id="dataset"]'
+                    ).click(modifiers=[row_selection_modifier])
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const series = echarts.getInstanceByDom(document.querySelector("#chart"))
+                            ?.getOption()?.series || [];
+                          return series.filter((item) => item.type === "line").length === 2
+                            && series.filter((item) => item.type === "bar").length === 2
+                            && !document.querySelector("#lineBarTwoFeatureControls")?.classList.contains("hidden");
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    presentation = page.evaluate(
+                        """
+                        () => {
+                          const chart = echarts.getInstanceByDom(document.querySelector("#chart"));
+                          const option = chart?.getOption();
+                          return {
+                            plotControls: document.querySelectorAll(
+                              "#lineBarTwoFeatureControls .two-feature-plot-control"
+                            ).length,
+                            axisNames: (option?.yAxis || []).map((axis) => axis.name),
+                            xAxis: {
+                              data: option?.xAxis?.[0]?.data,
+                              show: option?.xAxis?.[0]?.axisLabel?.show,
+                              interval: option?.xAxis?.[0]?.axisLabel?.interval,
+                              rotate: option?.xAxis?.[0]?.axisLabel?.rotate,
+                              fontSize: option?.xAxis?.[0]?.axisLabel?.fontSize,
+                              showMinLabel: option?.xAxis?.[0]?.axisLabel?.showMinLabel,
+                              showMaxLabel: option?.xAxis?.[0]?.axisLabel?.showMaxLabel,
+                              nameGap: option?.xAxis?.[0]?.nameGap,
+                              gridBottom: option?.grid?.[0]?.bottom,
+                              dataZoomCount: option?.dataZoom?.length || 0,
+                            },
+                            barValues: (option?.series || [])
+                              .filter((item) => item.type === "bar")
+                              .flatMap((item) => item.data),
+                          };
+                        }
+                        """
+                    )
+                    self.assertEqual(presentation["plotControls"], 0)
+                    self.assertEqual(presentation["axisNames"], ["actual", "Row count"])
+                    self.assertEqual(presentation["xAxis"], single_axis)
+                    self.assertEqual(presentation["xAxis"]["data"][0], "17")
+                    self.assertEqual(presentation["xAxis"]["data"][-1], "96")
+                    self.assertEqual(len(presentation["xAxis"]["data"]), 80)
+                    self.assertTrue(presentation["xAxis"]["show"])
+                    self.assertEqual(presentation["xAxis"]["interval"], 0)
+                    self.assertEqual(presentation["xAxis"]["rotate"], 65)
+                    self.assertEqual(presentation["barValues"], [1] * 160)
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_line_bar_factor_heatmap_shows_label_control_when_220_cells_fit(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "dense_factor_heatmap.csv"
+            data_path.write_text(
+                "x_factor,y_factor,actual\n"
+                + "".join(
+                    f"X{x_index:02d},Y{y_index:02d},{x_index + y_index + 1}\n"
+                    for y_index in range(22)
+                    for x_index in range(10)
+                ),
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                defaults={
+                    "x": "x_factor",
+                    "actual": "actual",
+                    "denominator": "__none__",
+                },
+                tools=["line_bar"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1920, "height": 1200})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                    page.locator("#lineBarSideControlsToggleBtn").click()
+                    row_selection_modifier = "Meta" if sys.platform == "darwin" else "Control"
+                    page.locator(
+                        '#featureList .feature[data-value="y_factor"][data-source-id="dataset"]'
+                    ).click(modifiers=[row_selection_modifier])
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const series = echarts.getInstanceByDom(document.querySelector("#chart"))
+                            ?.getOption()?.series?.[0];
+                          return series?.type === "heatmap"
+                            && (document.querySelector("#lineBarGroupMeta")?.textContent || "")
+                              .includes("220 groups");
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator("#lineBarToolbarToggleBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#lineBarToolbarToggleBtn")
+                          ?.getAttribute("aria-expanded") === "true"
+                        """,
+                        timeout=10_000,
+                    )
+                    dense_state = page.evaluate(
+                        """
+                        () => {
+                          const series = echarts.getInstanceByDom(document.querySelector("#chart"))
+                            ?.getOption()?.series?.[0];
+                          return {
+                            controls: document.querySelectorAll(
+                              '#lineBarTwoFeatureControls [data-two-control="heatmapLabels"]'
+                            ).length,
+                            controlValues: [...document.querySelectorAll(
+                              '#lineBarTwoFeatureControls [data-two-control="heatmapLabels"]'
+                            )].map((button) => button.dataset.value),
+                            labelsShown: series?.label?.show,
+                          };
+                        }
+                        """
+                    )
+                    self.assertEqual(
+                        dense_state,
+                        {
+                            "controls": 4,
+                            "controlValues": ["none", "actual", "weight", "both"],
+                            "labelsShown": False,
+                        },
+                    )
+                    page.locator(
+                        '#lineBarTwoFeatureControls [data-two-control="heatmapLabels"]'
+                        '[data-value="both"]'
+                    ).click()
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const label = echarts.getInstanceByDom(document.querySelector("#chart"))
+                            ?.getOption()?.series?.[0]?.label;
+                          return label?.show === true && label?.fontSize >= 7;
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_line_bar_demo_dual_quantile_heatmap_appears_within_two_seconds(self) -> None:
+        data_path = Path(__file__).resolve().parents[1] / "datasets" / "motor_premiums.parquet"
+        with TemporaryDirectory() as tmp_dir:
+            favourites_path = Path(tmp_dir) / "favourites.json"
+            base_url, server, thread = self.start_app(
+                data_path,
+                line_bar_favourites_path=favourites_path,
+                use_features=False,
+                defaults={
+                    "x": "DRIVER_AGE",
+                    "actual": "PREMIUM",
+                    "denominator": "__none__",
+                },
+                tools=["line_bar"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1920, "height": 1200})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                    page.wait_for_function(
+                        """() => (document.querySelector("#lineBarGroupMeta")?.textContent || "").includes("80 groups")""",
+                        timeout=10_000,
+                    )
+                    if page.locator("#lineBarSideControlsToggleBtn").get_attribute("aria-expanded") == "false":
+                        page.locator("#lineBarSideControlsToggleBtn").click()
+                    row_selection_modifier = "Meta" if sys.platform == "darwin" else "Control"
+                    page.locator(
+                        '#featureList .feature[data-value="NCD_YEARS"][data-source-id="dataset"]'
+                    ).click(modifiers=[row_selection_modifier])
+                    page.wait_for_function(
+                        """
+                        () => echarts.getInstanceByDom(document.querySelector("#chart"))
+                          ?.getOption()?.series?.[0]?.type === "surface"
+                        """,
+                        timeout=10_000,
+                    )
+                    if page.locator("#lineBarToolbarToggleBtn").get_attribute("aria-expanded") == "false":
+                        page.locator("#lineBarToolbarToggleBtn").click()
+                    page.locator("#lineBarTwoFeatureControls").wait_for(state="visible", timeout=10_000)
+
+                    started = time.perf_counter()
+                    page.locator(
+                        '#lineBarTwoFeatureControls [data-two-control="quantileMode"]'
+                        '[data-feature-index="0"][data-value="quantile"]'
+                    ).click()
+                    page.locator(
+                        '#lineBarTwoFeatureControls [data-two-control="quantileMode"]'
+                        '[data-feature-index="1"][data-value="quantile"]'
+                    ).click()
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const meta = document.querySelector("#lineBarGroupMeta")?.textContent || "";
+                          const option = echarts.getInstanceByDom(document.querySelector("#chart"))?.getOption();
+                          return meta.includes("95 groups")
+                            && option?.series?.[0]?.type === "heatmap"
+                            && option?.xAxis?.[0]?.data?.includes("Q10")
+                            && option?.yAxis?.[0]?.data?.includes("Q10");
+                        }
+                        """,
+                        timeout=2_000,
+                    )
+                    elapsed = time.perf_counter() - started
+                    print(f"dual-quantile demo heatmap appeared in {elapsed:.3f}s")
+                    self.assertLess(elapsed, 2)
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_line_bar_factor_heatmap_y_labels_do_not_overlap_axis_title(self) -> None:
+        data_path = Path(__file__).resolve().parents[1] / "datasets" / "motor_premiums.parquet"
+        with TemporaryDirectory() as tmp_dir:
+            favourites_path = Path(tmp_dir) / "favourites.json"
+            base_url, server, thread = self.start_app(
+                data_path,
+                line_bar_favourites_path=favourites_path,
+                use_features=False,
+                defaults={
+                    "x": "OVERNIGHT_LOCATION",
+                    "actual": "PREMIUM",
+                    "denominator": "__none__",
+                },
+                tools=["line_bar"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1920, "height": 1200})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                    page.wait_for_function(
+                        """() => (document.querySelector("#lineBarGroupMeta")?.textContent || "").includes("3 groups")""",
+                        timeout=10_000,
+                    )
+                    if page.locator("#lineBarSideControlsToggleBtn").get_attribute("aria-expanded") == "false":
+                        page.locator("#lineBarSideControlsToggleBtn").click()
+                    row_selection_modifier = "Meta" if sys.platform == "darwin" else "Control"
+                    page.locator(
+                        '#featureList .feature[data-value="DRIVER_AGE"][data-source-id="dataset"]'
+                    ).click(modifiers=[row_selection_modifier])
+                    page.wait_for_function(
+                        """() => document.querySelectorAll("#featureList .line-bar-feature-marker").length === 2""",
+                        timeout=10_000,
+                    )
+                    if page.locator("#lineBarToolbarToggleBtn").get_attribute("aria-expanded") == "false":
+                        page.locator("#lineBarToolbarToggleBtn").click()
+                    page.locator("#lineBarTwoFeatureControls").wait_for(state="visible", timeout=10_000)
+                    page.locator(
+                        '#lineBarTwoFeatureControls [data-two-control="quantileMode"]'
+                        '[data-feature-index="1"][data-value="quantile"]'
+                    ).click()
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const meta = document.querySelector("#lineBarGroupMeta")?.textContent || "";
+                          const option = echarts.getInstanceByDom(document.querySelector("#chart"))?.getOption();
+                          return meta.includes("30 groups") && option?.series?.[0]?.type === "heatmap";
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+
+                    geometry = page.evaluate(
+                        """
+                        () => {
+                          const chart = echarts.getInstanceByDom(document.querySelector("#chart"));
+                          const option = chart.getOption();
+                          const wanted = new Set(["OVERNIGHT_LOCATION", "Road", "Garage", "Driveway"]);
+                          const items = chart.getZr().storage.getDisplayList(true)
+                            .filter((element) => wanted.has(String(element.style?.text || "")))
+                            .map((element) => {
+                              const rect = element.getBoundingRect().clone();
+                              rect.applyTransform(element.getComputedTransform());
+                              return {
+                                text: String(element.style.text),
+                                left: rect.x,
+                                right: rect.x + rect.width,
+                              };
+                            });
+                          const title = items.find((item) => item.text === "OVERNIGHT_LOCATION");
+                          const labels = items.filter((item) => item.text !== "OVERNIGHT_LOCATION");
+                          return {
+                            gridLeft: option.grid[0].left,
+                            nameGap: option.yAxis[0].nameGap,
+                            labelWidth: option.yAxis[0].axisLabel.width,
+                            labelAlign: option.yAxis[0].axisLabel.align,
+                            labelRotate: option.yAxis[0].axisLabel.rotate,
+                            labelInterval: option.yAxis[0].axisLabel.interval,
+                            labelHideOverlap: option.yAxis[0].axisLabel.hideOverlap,
+                            labelFontSize: option.yAxis[0].axisLabel.fontSize,
+                            title,
+                            labels,
+                          };
+                        }
+                        """
+                    )
+                    self.assertEqual(
+                        {item["text"] for item in geometry["labels"]},
+                        {"Road", "Garage", "Driveway"},
+                    )
+                    self.assertGreaterEqual(geometry["gridLeft"], geometry["nameGap"] + 20)
+                    self.assertEqual(geometry["labelAlign"], "right")
+                    self.assertEqual(geometry["labelRotate"], 0)
+                    self.assertEqual(geometry["labelInterval"], 0)
+                    self.assertFalse(geometry["labelHideOverlap"])
+                    self.assertEqual(geometry["labelFontSize"], 12)
+                    self.assertIsNotNone(geometry["title"])
+                    self.assertGreaterEqual(
+                        min(item["left"] for item in geometry["labels"])
+                        - geometry["title"]["right"],
+                        8,
+                    )
+                    label_rights = [item["right"] for item in geometry["labels"]]
+                    self.assertLessEqual(max(label_rights) - min(label_rights), 1)
+                    self.assertLess(max(label_rights), geometry["gridLeft"])
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_line_bar_factor_heatmap_shows_all_dense_y_labels(self) -> None:
+        makes = [f"MAKE_{index:02d}" for index in range(1, 91)]
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            data_path = root / "dense_y_heatmap.csv"
+            data_path.write_text(
+                "Make,AgeBand,Actual\n"
+                + "".join(
+                    f"{make},{age_band},{make_index + age_index}\n"
+                    for make_index, make in enumerate(makes, start=1)
+                    for age_index, age_band in enumerate(["Young", "Old"], start=1)
+                ),
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                line_bar_favourites_path=root / "favourites.json",
+                use_features=False,
+                defaults={
+                    "x": "Make",
+                    "actual": "Actual",
+                    "denominator": "__none__",
+                },
+                tools=["line_bar"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1440, "height": 900})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                    if page.locator("#lineBarSideControlsToggleBtn").get_attribute("aria-expanded") == "false":
+                        page.locator("#lineBarSideControlsToggleBtn").click()
+                    row_selection_modifier = "Meta" if sys.platform == "darwin" else "Control"
+                    page.locator(
+                        '#featureList .feature[data-value="AgeBand"][data-source-id="dataset"]'
+                    ).click(modifiers=[row_selection_modifier])
+                    page.wait_for_function(
+                        """
+                        (labels) => {
+                          const chart = echarts.getInstanceByDom(document.querySelector("#chart"));
+                          const option = chart?.getOption();
+                          if (option?.series?.[0]?.type !== "heatmap"
+                              || option?.yAxis?.[0]?.data?.length !== labels.length) return false;
+                          const wanted = new Set(labels);
+                          const rendered = new Set(
+                            chart.getZr().storage.getDisplayList(true)
+                              .map((element) => String(element.style?.text || ""))
+                              .filter((text) => wanted.has(text))
+                          );
+                          return rendered.size === labels.length;
+                        }
+                        """,
+                        arg=makes,
+                        timeout=10_000,
+                    )
+
+                    dense_axis = page.evaluate(
+                        """
+                        (labels) => {
+                          const chart = echarts.getInstanceByDom(document.querySelector("#chart"));
+                          const option = chart.getOption();
+                          const wanted = new Set(labels);
+                          const rendered = chart.getZr().storage.getDisplayList(true)
+                            .filter((element) => wanted.has(String(element.style?.text || "")))
+                            .map((element) => {
+                              const rect = element.getBoundingRect().clone();
+                              rect.applyTransform(element.getComputedTransform());
+                              return {
+                                text: String(element.style.text),
+                                right: rect.x + rect.width,
+                              };
+                            });
+                          return {
+                            data: option.yAxis[0].data,
+                            align: option.yAxis[0].axisLabel.align,
+                            rotate: option.yAxis[0].axisLabel.rotate,
+                            interval: option.yAxis[0].axisLabel.interval,
+                            hideOverlap: option.yAxis[0].axisLabel.hideOverlap,
+                            fontSize: option.yAxis[0].axisLabel.fontSize,
+                            rendered,
+                          };
+                        }
+                        """,
+                        makes,
+                    )
+                    self.assertEqual(dense_axis["data"], makes)
+                    self.assertEqual(dense_axis["align"], "right")
+                    self.assertEqual(dense_axis["rotate"], 0)
+                    self.assertEqual(dense_axis["interval"], 0)
+                    self.assertFalse(dense_axis["hideOverlap"])
+                    self.assertGreaterEqual(dense_axis["fontSize"], 6)
+                    self.assertLess(dense_axis["fontSize"], 12)
+                    self.assertEqual(
+                        {item["text"] for item in dense_axis["rendered"]},
+                        set(makes),
+                    )
+                    label_rights = [item["right"] for item in dense_axis["rendered"]]
+                    self.assertLessEqual(max(label_rights) - min(label_rights), 1)
+
+                    page.wait_for_load_state("networkidle")
+                    page.evaluate("performance.clearResourceTimings()")
+                    page.set_viewport_size({"width": 1440, "height": 1200})
+                    page.wait_for_function(
+                        """
+                        previous => echarts.getInstanceByDom(document.querySelector("#chart"))
+                          ?.getOption()?.yAxis?.[0]?.axisLabel?.fontSize > previous
+                        """,
+                        arg=dense_axis["fontSize"],
+                        timeout=10_000,
+                    )
+                    resize_state = page.evaluate(
+                        """
+                        () => ({
+                          fontSize: echarts.getInstanceByDom(document.querySelector("#chart"))
+                            ?.getOption()?.yAxis?.[0]?.axisLabel?.fontSize,
+                          chartRequests: performance.getEntriesByType("resource")
+                            .filter((entry) => new URL(entry.name).pathname === "/api/chart").length,
+                        })
+                        """
+                    )
+                    self.assertGreater(resize_state["fontSize"], dense_axis["fontSize"])
+                    self.assertEqual(resize_state["chartRequests"], 0)
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_line_bar_factor_heatmap_shows_all_moderate_count_x_labels(self) -> None:
+        regions = [
+            "(missing)",
+            "(pseudo) Wales",
+            "East of England",
+            "London",
+            "North East",
+            "North West",
+            "Northern Ireland",
+            "Scotland",
+            "South East",
+            "South West",
+            "West Midlands",
+            "Yorkshire",
+        ]
+        quarters = [
+            f"{year} Q{quarter}"
+            for year in range(2021, 2025)
+            for quarter in range(1, 5)
+        ]
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            data_path = root / "factor_heatmap.csv"
+            data_path.write_text(
+                "AccidentQuarter,Region,Actual\n"
+                + "".join(
+                    f"{quarter},{region},{10 + quarter_index + region_index}\n"
+                    for quarter_index, quarter in enumerate(quarters)
+                    for region_index, region in enumerate(regions)
+                ),
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                line_bar_favourites_path=root / "favourites.json",
+                use_features=False,
+                defaults={
+                    "x": "AccidentQuarter",
+                    "actual": "Actual",
+                    "denominator": "__none__",
+                },
+                tools=["line_bar"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1920, "height": 1200})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                    page.wait_for_function(
+                        """() => (document.querySelector("#lineBarGroupMeta")?.textContent || "").includes("16 groups")""",
+                        timeout=10_000,
+                    )
+                    if page.locator("#lineBarSideControlsToggleBtn").get_attribute("aria-expanded") == "false":
+                        page.locator("#lineBarSideControlsToggleBtn").click()
+                    row_selection_modifier = "Meta" if sys.platform == "darwin" else "Control"
+                    page.locator(
+                        '#featureList .feature[data-value="Region"][data-source-id="dataset"]'
+                    ).click(modifiers=[row_selection_modifier])
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const meta = document.querySelector("#lineBarGroupMeta")?.textContent || "";
+                          const option = echarts.getInstanceByDom(document.querySelector("#chart"))?.getOption();
+                          return meta.includes("192 groups") && option?.series?.[0]?.type === "heatmap";
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+
+                    presentation = page.evaluate(
+                        """
+                        (regions) => {
+                          const chart = echarts.getInstanceByDom(document.querySelector("#chart"));
+                          const option = chart.getOption();
+                          const wanted = new Set(regions);
+                          const rendered = chart.getZr().storage.getDisplayList(true)
+                            .map((element) => String(element.style?.text || ""))
+                            .filter((text) => wanted.has(text));
+                          return {
+                            data: option.xAxis[0].data,
+                            show: option.xAxis[0].axisLabel.show,
+                            interval: option.xAxis[0].axisLabel.interval,
+                            rotate: option.xAxis[0].axisLabel.rotate,
+                            fontSize: option.xAxis[0].axisLabel.fontSize,
+                            rendered,
+                          };
+                        }
+                        """,
+                        regions,
+                    )
+                    self.assertEqual(presentation["data"], regions)
+                    self.assertTrue(presentation["show"])
+                    self.assertEqual(presentation["interval"], 0)
+                    self.assertEqual(presentation["rotate"], 65)
+                    self.assertEqual(set(presentation["rendered"]), set(regions))
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_line_bar_surface_initialises_after_lazy_gl_load_in_webkit(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "webkit_surface.csv"
+            rows = ["FeatureOne,FeatureTwo,Actual"]
+            rows.extend(
+                f"{feature_one},{feature_two},{feature_one + feature_two + 1}"
+                for feature_one in range(0, 100, 10)
+                for feature_two in range(0, 100, 10)
+            )
+            data_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+            base_url, server, thread = self.start_app(
+                data_path,
+                defaults={
+                    "x": "FeatureOne",
+                    "actual": "Actual",
+                    "denominator": "__none__",
+                },
+                tools=["line_bar"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    try:
+                        browser = playwright.webkit.launch()
+                    except Exception as exc:
+                        self.skipTest(f"Playwright WebKit is unavailable: {exc}")
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                    page.locator("#lineBarSideControlsToggleBtn").click()
+                    row_selection_modifier = "Meta" if sys.platform == "darwin" else "Control"
+                    page.locator(
+                        '#featureList .feature[data-value="FeatureTwo"]'
+                    ).click(modifiers=[row_selection_modifier])
+                    page.wait_for_function(
+                        """
+                        () => echarts.getInstanceByDom(document.querySelector("#chart"))
+                          ?.getOption()?.series?.[0]?.type === "surface"
+                          && (document.querySelector("#lineBarGroupMeta")?.textContent || "").includes("groups")
+                        """,
+                        timeout=10_000,
+                    )
+                    self.assertEqual(page.locator("#status").text_content(), "")
+                    self.assertGreater(page.locator("#chart canvas").count(), 0)
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_line_bar_collapsed_side_controls_stay_inside_viewport_with_long_header(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / (
@@ -9311,7 +11239,7 @@ COPY (
                             """
                         )
                         self.assertEqual(pending["actual"], "price")
-                        self.assertEqual(pending["title"], "Actual")
+                        self.assertEqual(pending["title"], "Numerator")
                         self.assertFalse(pending["hasValue"])
 
                     page.goto(base_url, wait_until="domcontentloaded")
@@ -10160,7 +12088,8 @@ COPY (
                                     "featureSort": "alpha",
                                     "expectedSort": "alpha",
                                     "actual": {"value": "actualNumerator", "sourceId": "dataset", "metricKind": "dataset"},
-                                    "denominator": "__none__",
+                                    "denominator": "gbm_prediction",
+                                    "denominatorSource": saved_gbm_source,
                                     "expectedSelections": [
                                         {"value": "glm_prediction", "sourceId": saved_glm_source, "metricKind": "prediction"},
                                         {"value": "gbm_prediction", "sourceId": saved_gbm_source, "metricKind": "prediction"},
@@ -10223,6 +12152,29 @@ COPY (
                             timeout=10_000,
                         )
                         request_body = json.loads(chart_request_info.value.post_data or "{}")
+                        page.wait_for_function(
+                            """
+                            () => {
+                              const option = echarts.getInstanceByDom(document.querySelector("#chart"))?.getOption?.();
+                              return option?.yAxis?.[0]?.name === "actualNumerator / gbm_prediction"
+                                && option?.yAxis?.[1]?.name === "gbm_prediction";
+                            }
+                            """,
+                            timeout=10_000,
+                        )
+                        axis_presentation = page.evaluate(
+                            """
+                            () => {
+                              const option = echarts.getInstanceByDom(document.querySelector("#chart"))?.getOption?.();
+                              return {
+                                responseName: option?.yAxis?.[0]?.name || "",
+                                denominatorName: option?.yAxis?.[1]?.name || "",
+                                denominatorNameGap: Number(option?.yAxis?.[1]?.nameGap || 0),
+                                gridRight: Number(option?.grid?.[0]?.right || 0),
+                              };
+                            }
+                            """
+                        )
                         expected_state = page.evaluate(
                             """
                             () => [...document.querySelectorAll("#expectedList .feature.active")]
@@ -10236,17 +12188,62 @@ COPY (
 
                         self.assertEqual(request_body["x"], "gbm_to_glm_ratio")
                         self.assertEqual(request_body["xSource"], active_ratio_source)
+                        self.assertEqual(request_body["denominator"], "gbm_prediction")
+                        self.assertEqual(request_body["denominatorSource"], active_gbm_source)
                         self.assertEqual(request_body["responses"][1]["source"], active_glm_source)
                         self.assertEqual(request_body["responses"][2]["source"], active_gbm_source)
+                        self.assertEqual(axis_presentation["responseName"], "actualNumerator / gbm_prediction")
+                        self.assertEqual(axis_presentation["denominatorName"], "gbm_prediction")
+                        self.assertGreater(
+                            axis_presentation["gridRight"],
+                            axis_presentation["denominatorNameGap"],
+                        )
                         self.assertIn({"value": "glm_prediction", "source": active_glm_source}, expected_state)
                         self.assertIn({"value": "gbm_prediction", "source": active_gbm_source}, expected_state)
+                        self.assertEqual(page.locator("#actualMetricTitle").text_content().split()[0], "Numerator")
+                        self.assertEqual(page.locator("#weightMetricTitle").text_content().split()[0], "Denominator")
+                        selected_denominator = page.locator("#denominator").evaluate(
+                            """
+                            (select) => ({
+                              value: select.value,
+                              source: select.selectedOptions[0]?.dataset.sourceId || "",
+                              kind: select.selectedOptions[0]?.dataset.metricKind || "",
+                            })
+                            """
+                        )
+                        self.assertEqual(
+                            selected_denominator,
+                            {"value": "gbm_prediction", "source": active_gbm_source, "kind": "prediction"},
+                        )
                         self.assertNotIn("missing x-axis source", status_text)
                         self.assertNotIn("cannot be used", status_text)
 
+                        page.locator("#glmTool").click()
+                        page.locator("#glmBuildBtn").wait_for(timeout=10_000)
+                        self.assertTrue(page.locator("#glmBuildBtn").is_disabled())
+                        self.assertTrue(page.locator("#glmModelDenominatorBuildNotice").is_visible())
+                        page.locator("#denominator").select_option("__none__")
+                        self.assertFalse(page.locator("#glmBuildBtn").is_disabled())
+                        self.assertFalse(page.locator("#glmModelDenominatorBuildNotice").is_visible())
+                        page.locator("#denominator").select_option("gbm_prediction")
+                        self.assertTrue(page.locator("#glmBuildBtn").is_disabled())
+
                         page.locator("#gbmTool").click()
+                        page.locator("#gbmTrainBtn").wait_for(timeout=10_000)
+                        self.assertTrue(page.locator("#gbmTrainBtn").is_disabled())
+                        self.assertTrue(page.locator("#gbmModelDenominatorBuildNotice").is_visible())
                         page.locator('[data-gbm-tab="models"]').click(timeout=10_000)
                         page.locator("#gbmModelGrid .tabulator-row").filter(has_text="Saved GBM").click(timeout=10_000)
+                        chart_count_before_activation = len(chart_requests)
                         page.locator("#gbmActivateModelBtn").click(timeout=10_000)
+                        page.wait_for_function(
+                            """
+                            ([sourceId]) => document.querySelector("#denominator")?.selectedOptions[0]?.dataset.sourceId === sourceId
+                            """,
+                            arg=[saved_gbm_source],
+                            timeout=10_000,
+                        )
+                        self.assertEqual(len(chart_requests), chart_count_before_activation)
                         with page.expect_response(
                             lambda response: (
                                 response.url.endswith("/api/banding/suggestion")
@@ -10279,11 +12276,18 @@ COPY (
                         self.assertNotEqual(banding_payload["band_suggestion"], 1)
                         self.assertEqual(activated_chart_request["x"], "gbm_to_glm_ratio")
                         self.assertEqual(activated_chart_request["xSource"], activated_saved_ratio_source)
+                        self.assertEqual(activated_chart_request["denominator"], "gbm_prediction")
+                        self.assertEqual(activated_chart_request["denominatorSource"], saved_gbm_source)
                         self.assertEqual(activated_chart_request["filter"], "Segment = 'B'")
                         self.assertGreater(activated_chart_request["bandWidth"], 0)
                         self.assertNotEqual(activated_chart_request["bandWidth"], 1)
                         self.assertEqual(activated_chart_request["responses"][1]["source"], active_glm_source)
                         self.assertEqual(activated_chart_request["responses"][2]["source"], saved_gbm_source)
+                        self.assertEqual(
+                            len(chart_requests),
+                            chart_count_before_activation + 1,
+                            "reopening Line/Bar after a GBM activation should issue one deferred chart request",
+                        )
                         self.assertNotIn("Banding estimate failed", status_text)
                         self.assertEqual(page_errors, [])
                     finally:
@@ -14981,13 +16985,39 @@ COPY (
                 for group in actual_state["groups"]:
                     option_texts = [option["text"] for option in group["options"] if not option["disabled"]]
                     self.assertEqual(option_texts, sorted(option_texts, key=str.casefold))
-                weight_options = page.evaluate(
+                denominator_state = page.evaluate(
                     """
-                    () => [...document.querySelectorAll("#denominator option")].map((option) => option.textContent || "")
+                    () => {
+                      const select = document.querySelector("#denominator");
+                      return {
+                        first: select.options[0]?.textContent || "",
+                        groups: [...select.querySelectorAll("optgroup")].map((group) => ({
+                          label: group.label,
+                          options: [...group.querySelectorAll("option")].map((option) => ({
+                            text: option.textContent || "",
+                            value: option.value,
+                            source: option.dataset.sourceId || "",
+                            kind: option.dataset.metricKind || "",
+                            disabled: option.disabled,
+                          })),
+                        })),
+                      };
+                    }
                     """
                 )
-                self.assertEqual(weight_options[0], "Average row value")
-                self.assertEqual(weight_options[1:], sorted(weight_options[1:], key=str.casefold))
+                self.assertEqual(denominator_state["first"], "Average row value")
+                self.assertEqual(
+                    [group["label"] for group in denominator_state["groups"]],
+                    ["Dataset features", "Model predictions"],
+                )
+                for group in denominator_state["groups"]:
+                    option_texts = [option["text"] for option in group["options"] if not option["disabled"]]
+                    self.assertEqual(option_texts, sorted(option_texts, key=str.casefold))
+                prediction_denominators = denominator_state["groups"][1]["options"]
+                self.assertTrue(any(option["value"] == "gbm_prediction" for option in prediction_denominators))
+                self.assertFalse(any(option["value"].endswith("_prediction_rate") for option in prediction_denominators))
+                self.assertFalse(any("tabulated" in option["value"] for option in prediction_denominators))
+                self.assertTrue(all(option["kind"] == "prediction" for option in prediction_denominators if not option["disabled"]))
                 self.assertEqual(actual_state["value"], "SHAP__Age")
                 self.assertEqual(actual_state["selectedSource"], "gbm:browser-smoke-model-2:shap_long")
                 shap_options = next(group for group in actual_state["groups"] if group["label"] == "SHAP values")["options"]

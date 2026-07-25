@@ -208,12 +208,18 @@ export function createUkMapTool({
     if (!state.schema) return null;
     const numerator = el("actualNumerator").value;
     if (!numerator) return null;
+    const denominatorOption = el("denominator")?.selectedOptions?.[0] || null;
+    if (denominatorOption?.dataset.unavailable === "true") {
+      setStatus("The selected model prediction Denominator is unavailable because there is no active model.", true);
+      return null;
+    }
     if (state.mapLevel === "unit" && !mapLevelSelectable("unit")) return null;
     return {
       level: state.mapLevel,
       source: state.source || "dataset",
       numerator,
-      denominator: el("denominator").value,
+      denominator: denominatorOption?.value || "__none__",
+      denominatorSource: denominatorOption?.dataset.sourceId || "dataset",
       filter: state.activeFilter,
       areaColumn: postcodeColumn("area"),
       sectorColumn: postcodeColumn("sector"),

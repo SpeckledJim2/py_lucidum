@@ -801,14 +801,25 @@ def validate_request(dataset: Dataset, payload: dict[str, Any], generated_sample
         columns = dataset.column_map()
         response_col = ""
         offset_col: str | None = None
+        offset_source = str(
+            payload.get("offset_source")
+            or payload.get("denominator_source")
+            or "dataset"
+        ).strip() or "dataset"
         try:
             response_col = selected_response_column(payload, columns)
         except ValueError as exc:
             errors.append(str(exc))
-        try:
-            offset_col = selected_offset_column(payload, columns)
-        except ValueError as exc:
-            errors.append(str(exc))
+        if offset_source != "dataset":
+            errors.append(
+                "GBM training is unavailable while Denominator is a model prediction; "
+                "use init_score for prediction chaining"
+            )
+        else:
+            try:
+                offset_col = selected_offset_column(payload, columns)
+            except ValueError as exc:
+                errors.append(str(exc))
 
         params = normalise_parameters(payload.get("parameters"))
         selected_objective = objective(params)

@@ -14,25 +14,10 @@ const SURFACE_AXIS_LABEL_FONT_SIZE = 10;
 const SURFACE_AXIS_NAME_FONT_SIZE = 11;
 const SURFACE_BOX_WIDTH = 100;
 const SURFACE_BOX_DEPTH = 74;
-let echartsGlPromise = null;
 
 export async function ensureShapChartLibraries(plotType) {
-  if (plotType !== "surface") return false;
-  if (window.__lucidumEchartsGlLoaded) return false;
-  if (!echartsGlPromise) {
-    echartsGlPromise = new Promise((resolve, reject) => {
-      const script = document.createElement("script");
-      script.src = "/static/vendor/echarts-gl/echarts-gl.min.js";
-      script.onload = () => {
-        window.__lucidumEchartsGlLoaded = true;
-        resolve();
-      };
-      script.onerror = () => reject(new Error("ECharts GL did not load"));
-      document.head.append(script);
-    });
-  }
-  await echartsGlPromise;
-  return true;
+  const { ensureEchartsGl } = await import("./shared/echarts-gl.js");
+  return ensureEchartsGl(plotType);
 }
 
 export function shapChartOption(payload, theme = {}) {

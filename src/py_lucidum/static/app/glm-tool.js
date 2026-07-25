@@ -129,6 +129,7 @@ export function createGlmTool({
   updateAxisControls,
   refreshActiveTool,
   reloadSchema,
+  getDenominatorSelection = () => ({ value: "__none__", sourceId: "dataset", metricKind: "dataset" }),
 }) {
   const tool = "glm";
   let activeTab = "builder";
@@ -310,6 +311,7 @@ export function createGlmTool({
 
   function shellHtml(data = {}) {
     const trainingDisabled = formulaBuilder.ensureTrainingScope(data);
+    const predictionDenominator = getDenominatorSelection().metricKind === "prediction";
     const activeModel = modelForActiveModel(data.active_model_id);
     const diagnostics = activeModel?.diagnostics || activeModel?.metrics || {};
     const splitStyle = formulaBuilder.savedSplitWidthStyle();
@@ -348,9 +350,10 @@ export function createGlmTool({
                     <button type="button" data-glm-scope="all" data-stable-label="All" class="app-control-button glm-builder-option-button ${formulaBuilder.selectedTrainingScope === "all" ? "active" : ""}" aria-pressed="${formulaBuilder.selectedTrainingScope === "all" ? "true" : "false"}">All</button>
                     <button type="button" data-glm-scope="training" data-stable-label="Training" class="app-control-button glm-builder-option-button ${formulaBuilder.selectedTrainingScope === "training" ? "active" : ""}" aria-pressed="${formulaBuilder.selectedTrainingScope === "training" ? "true" : "false"}" ${trainingDisabled ? "disabled" : ""}>Training</button>
                   </div>
-                  <button id="glmBuildBtn" class="tab app-control-button model-busy-button glm-build-button ${isBuilding ? "building" : ""}" type="button" ${isBuilding ? "disabled aria-busy=\"true\"" : ""}>${isBuilding ? "Building..." : "Build GLM"}</button>
+                  <button id="glmBuildBtn" class="tab app-control-button model-busy-button glm-build-button ${isBuilding ? "building" : ""}" type="button" ${isBuilding || predictionDenominator ? "disabled" : ""} ${isBuilding ? "aria-busy=\"true\"" : ""}>${isBuilding ? "Building..." : "Build GLM"}</button>
                 </div>
               </div>
+              <div id="glmModelDenominatorBuildNotice" class="glm-model-denominator-build-notice ${predictionDenominator ? "" : "hidden"}">Building is unavailable while Denominator is a model prediction. Use GBM init_score for prediction chaining.</div>
               ${formulaBuilder.formulaAssistDrawerHtml()}
               <div id="glmBuilderParametersPanel" class="glm-builder-control-row glm-builder-control-stack ${formulaBuilder.parametersOpen ? "" : "hidden"}">
                 <div class="glm-control-line">
@@ -2125,12 +2128,15 @@ export function createGlmTool({
 
   function buildPayload() {
     const actual = el("actualNumerator")?.value || "";
-    const denominator = el("denominator")?.value || "__none__";
-    return formulaBuilder.buildPayload({
+    const denominatorSelection = getDenominatorSelection();
+    return {
+      ...formulaBuilder.buildPayload({
       actual,
-      denominator,
+      denominator: denominatorSelection.value,
       label: `GLM ${glmAutoModelTimeLabel()}`,
-    });
+      }),
+      denominator_source: denominatorSelection.sourceId || "dataset",
+    };
   }
 
   function buildRegularizationPayload() {
@@ -2139,6 +2145,10 @@ export function createGlmTool({
 
   async function buildModel() {
     if (isBuilding) return;
+    if (getDenominatorSelection().metricKind === "prediction") {
+      setBuildFailure("Building is unavailable while Denominator is a model prediction. Use GBM init_score for prediction chaining.");
+      return;
+    }
     buildElapsedStartedAt = performance.now();
     const payload = buildPayload();
     const familyError = validateFamilyParameter(payload.family, payload.family_parameter);
@@ -2274,7 +2284,7 @@ export function createGlmTool({
     status.classList.toggle("hidden", !progress);
     const button = el("glmBuildBtn");
     if (button) {
-      button.disabled = isBuilding;
+      button.disabled = isBuilding || getDenominatorSelection().metricKind === "prediction";
       button.classList.toggle("building", isBuilding);
       button.textContent = isBuilding ? "Building..." : "Build GLM";
       syncButtonBusyState(button, isBuilding);
@@ -2288,6 +2298,13 @@ export function createGlmTool({
     }
     const exportButton = el("glmExportTabulationsBtn");
     if (exportButton) syncTabulationExportButton(exportButton);
+  }
+
+  function syncDenominatorBuildState() {
+    const blocked = getDenominatorSelection().metricKind === "prediction";
+    const button = el("glmBuildBtn");
+    if (button) button.disabled = isBuilding || blocked;
+    el("glmModelDenominatorBuildNotice")?.classList.toggle("hidden", !blocked);
   }
 
   function diagnosticsForActiveModel(activeModelId) {
@@ -3124,6 +3141,7 @@ export function createGlmTool({
     render,
     refreshTheme,
     resize,
+    syncDenominatorBuildState,
     syncSidebarFromSchema,
     useCached,
   };

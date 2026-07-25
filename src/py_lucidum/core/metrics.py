@@ -68,9 +68,25 @@ def response_summary(
     filter_sql: str = "",
     source_id: Any = None,
 ) -> list[dict[str, Any]]:
+    return response_summary_for_relation(
+        dataset,
+        dataset.relation_sql_for_source(source_id),
+        responses,
+        denominator,
+        filter_sql,
+    )
+
+
+def response_summary_for_relation(
+    dataset: Dataset,
+    relation: str,
+    responses: list[dict[str, str]],
+    denominator: dict[str, str | None],
+    filter_sql: str = "",
+) -> list[dict[str, Any]]:
     if not responses:
         return []
-    sql = build_response_summary_sql(dataset.relation_sql_for_source(source_id), responses, denominator, filter_sql)
+    sql = build_response_summary_sql(relation, responses, denominator, filter_sql)
     cursor = dataset.con.execute(sql)
     fetched = cursor.fetchone()
     row = dict(zip([d[0] for d in cursor.description], fetched or []))
@@ -132,7 +148,23 @@ def summarize_denominator(
     filter_sql: str = "",
     source_id: Any = None,
 ) -> dict[str, Any]:
-    sql = build_denominator_summary_sql(dataset.relation_sql_for_source(source_id), responses, denominator, filter_sql)
+    return summarize_denominator_for_relation(
+        dataset,
+        dataset.relation_sql_for_source(source_id),
+        responses,
+        denominator,
+        filter_sql,
+    )
+
+
+def summarize_denominator_for_relation(
+    dataset: Dataset,
+    relation: str,
+    responses: list[dict[str, str]],
+    denominator: dict[str, str | None],
+    filter_sql: str = "",
+) -> dict[str, Any]:
+    sql = build_denominator_summary_sql(relation, responses, denominator, filter_sql)
     cursor = dataset.con.execute(sql)
     fetched = cursor.fetchone()
     return dict(zip([d[0] for d in cursor.description], fetched or []))

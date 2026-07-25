@@ -25,6 +25,7 @@ from py_lucidum.tools.gbm.store import GbmModelStore
 from py_lucidum.tools.glm.store import GlmModelStore, GlmSourceProvider
 from py_lucidum.tools.glm.training import MissingGlmDependency, glm_dependencies, train_model
 from py_lucidum.tools.line_bar import query as line_bar_query
+from py_lucidum.tools.line_bar import two_feature as two_feature_query
 from py_lucidum.tools.line_bar.favourites import LineBarFavouriteStore
 from py_lucidum.tools.line_bar.model_ratio import RATIO_COLUMN, RATIO_KIND
 from py_lucidum.tools.line_bar.query import apply_transform, chart, mixed_relation_sql, normalise_quantile_count, table
@@ -212,6 +213,32 @@ class LineBarToolTests(unittest.TestCase):
                 {"label": "Expected", "numerator": "Expected"},
             ],
         }
+
+    def two_feature_request(self, **overrides: Any) -> dict[str, Any]:
+        request = {
+            **self.request(),
+            "groupings": [
+                {
+                    "feature": "YoungestDriverAge",
+                    "source": "dataset",
+                    "bandWidth": 10,
+                    "quantileMode": "off",
+                    "dateBucket": "none",
+                    "asFactor": False,
+                },
+                {
+                    "feature": "UseofVan",
+                    "source": "dataset",
+                    "bandWidth": 0,
+                    "quantileMode": "off",
+                    "dateBucket": "none",
+                    "asFactor": False,
+                },
+            ],
+            "tailPercent": 1,
+        }
+        request.update(overrides)
+        return request
 
     def favourite_view(self, **overrides: Any) -> dict[str, Any]:
         view: dict[str, Any] = {
@@ -676,6 +703,133 @@ COPY (
             store.create_favourite("Broken", self.favourite_view(x="MissingColumn"))
 
         self.assertIn("missing x-axis feature column", str(context.exception))
+
+    def test_line_bar_favourites_normalise_legacy_and_restore_two_feature_settings(self) -> None:
+        store = LineBarFavouriteStore(self.data_path, Dataset(self.data_path))
+
+        legacy = store.create_favourite("Legacy grouping", self.favourite_view())
+        self.assertEqual(
+            legacy["view"]["groupings"],
+            [
+                {
+                    "feature": "UseofVan",
+                    "source": "dataset",
+                    "bandWidth": "0",
+                    "quantileMode": "off",
+                    "dateBucket": "none",
+                    "asFactor": False,
+                    "tailPercent": "0",
+                }
+            ],
+        )
+        self.assertEqual(legacy["view"]["tailPercent"], "0")
+        self.assertEqual(legacy["view"]["plotMetric"], "resp0")
+        self.assertEqual(legacy["view"]["heatmapLabels"], "none")
+
+        two_feature = store.create_favourite(
+            "Two feature grouping",
+            self.favourite_view(
+                version=2,
+                groupings=[
+                    {
+                        "feature": "YoungestDriverAge",
+                        "source": "dataset",
+                        "bandWidth": "10",
+                        "quantileMode": "off",
+                        "dateBucket": "none",
+                        "asFactor": True,
+                        "tailPercent": "1",
+                    },
+                    {
+                        "feature": "QuoteDate",
+                        "source": "dataset",
+                        "bandWidth": "0",
+                        "quantileMode": "off",
+                        "dateBucket": "month",
+                        "asFactor": False,
+                    },
+                ],
+                tailPercent="2",
+                plotMetric="volume",
+                heatmapLabels="both",
+            ),
+        )
+        self.assertTrue(two_feature["validation"]["valid"])
+        self.assertEqual(
+            [grouping["feature"] for grouping in two_feature["view"]["groupings"]],
+            ["YoungestDriverAge", "QuoteDate"],
+        )
+        self.assertTrue(two_feature["view"]["groupings"][0]["asFactor"])
+        self.assertEqual(two_feature["view"]["groupings"][1]["dateBucket"], "month")
+        self.assertFalse(two_feature["view"]["groupings"][1]["asFactor"])
+        self.assertEqual(two_feature["view"]["groupings"][0]["tailPercent"], "1")
+        self.assertEqual(two_feature["view"]["groupings"][1]["tailPercent"], "2")
+        self.assertEqual(two_feature["view"]["tailPercent"], "1")
+        self.assertEqual(two_feature["view"]["plotMetric"], "volume")
+        self.assertEqual(two_feature["view"]["heatmapLabels"], "both")
+
+        treated_date = store.create_favourite(
+            "Treated date grouping",
+            self.favourite_view(
+                version=2,
+                groupings=[
+                    {
+                        "feature": "QuoteDate",
+                        "source": "dataset",
+                        "bandWidth": "0",
+                        "quantileMode": "off",
+                        "dateBucket": "week",
+                        "asFactor": True,
+                    },
+                    {
+                        "feature": "UseofVan",
+                        "source": "dataset",
+                        "bandWidth": "0",
+                        "quantileMode": "off",
+                        "dateBucket": "none",
+                        "asFactor": False,
+                    },
+                ],
+            ),
+        )
+        self.assertTrue(treated_date["view"]["groupings"][0]["asFactor"])
+
+        invalid_labels = store.create_favourite(
+            "Invalid heatmap labels",
+            self.favourite_view(heatmapLabels="everything"),
+        )
+        self.assertEqual(invalid_labels["view"]["heatmapLabels"], "none")
+
+    def test_line_bar_favourite_validation_warns_and_ignores_a_stale_second_feature(self) -> None:
+        store = LineBarFavouriteStore(self.data_path, Dataset(self.data_path))
+        view = self.favourite_view(
+            version=2,
+            groupings=[
+                {
+                    "feature": "UseofVan",
+                    "source": "dataset",
+                    "bandWidth": "0",
+                    "quantileMode": "off",
+                    "dateBucket": "none",
+                    "asFactor": False,
+                },
+                {
+                    "feature": "RemovedFeature",
+                    "source": "dataset",
+                    "bandWidth": "1",
+                    "quantileMode": "off",
+                    "dateBucket": "none",
+                    "asFactor": False,
+                },
+            ],
+        )
+
+        validation = store.validate_view(view)
+
+        self.assertTrue(validation["valid"])
+        self.assertEqual(validation["errors"], [])
+        self.assertIn("Feature 2 will be ignored", " ".join(validation["warnings"]))
+        self.assertIn("RemovedFeature", " ".join(validation["warnings"]))
 
     def test_line_bar_favourite_scope_defaults_and_metric_only_validation(self) -> None:
         store = LineBarFavouriteStore(self.data_path, Dataset(self.data_path))
@@ -1564,7 +1718,8 @@ COPY (
             source="dataset",
             x=RATIO_COLUMN,
             xSource=saved_ratio_source_id,
-            denominator="__none__",
+            denominator="gbm_prediction",
+            denominatorSource=saved_gbm_source_id,
             expectedSelections=[
                 {"value": "glm_prediction", "sourceId": saved_glm_source_id, "metricKind": "prediction"},
                 {"value": "gbm_prediction", "sourceId": saved_gbm_source_id, "metricKind": "prediction"},
@@ -3015,6 +3170,757 @@ COPY (
         self.assertEqual(result["denominator"]["label"], "Average row value")
         self.assertEqual(result["denominator"]["bar_label"], "Row count")
         self.assertEqual(result["denominator"]["value"], 3)
+
+    def test_two_feature_chart_uses_shap_style_plot_types_and_all_response_values(self) -> None:
+        dataset = Dataset(self.data_path)
+        lines = chart(dataset, self.two_feature_request())
+        self.assertEqual(lines["plot_type"], "lines")
+        self.assertEqual(
+            [grouping["feature"] for grouping in lines["groupings"]],
+            ["YoungestDriverAge", "UseofVan"],
+        )
+        self.assertEqual(lines["tail_percent"], 1)
+        self.assertEqual(
+            [grouping["tail_percent"] for grouping in lines["groupings"]],
+            [1, 1],
+        )
+        self.assertEqual(lines["group_count"], 3)
+        self.assertEqual(len(lines["responses"]), 2)
+        self.assertEqual({row["group1"] for row in lines["rows"]}, {"Business", "Social"})
+        self.assertTrue(
+            all("resp0" in row and "resp1" in row and "volume" in row for row in lines["rows"])
+        )
+
+        surface_request = self.two_feature_request()
+        surface_request["groupings"][1] = {
+            "feature": "Gross.Weight",
+            "source": "dataset",
+            "bandWidth": 1000,
+            "quantileMode": "off",
+            "dateBucket": "none",
+            "asFactor": False,
+        }
+        surface = chart(dataset, surface_request)
+        self.assertEqual(surface["plot_type"], "surface")
+
+        heatmap_request = self.two_feature_request()
+        heatmap_request["groupings"][0]["asFactor"] = True
+        heatmap = chart(dataset, heatmap_request)
+        self.assertEqual(heatmap["plot_type"], "heatmap")
+
+    def test_single_grouping_request_uses_the_unchanged_one_feature_pipeline(self) -> None:
+        dataset = Dataset(self.data_path)
+        legacy_request = self.request()
+        grouping_request = {
+            **legacy_request,
+            "x": "MissingColumn",
+            "groupings": [
+                {
+                    "feature": "UseofVan",
+                    "source": "dataset",
+                    "bandWidth": 0,
+                    "quantileMode": "off",
+                    "dateBucket": "none",
+                    "asFactor": True,
+                }
+            ],
+        }
+
+        legacy = chart(dataset, legacy_request)
+        grouped = chart(dataset, grouping_request)
+
+        self.assertEqual(grouped["x"], "UseofVan")
+        self.assertEqual(grouped["rows"], legacy["rows"])
+        self.assertNotIn("groupings", grouped)
+
+    def test_two_feature_grouping_supports_independent_quantiles_dates_and_tail_rules(self) -> None:
+        dataset = Dataset(self.data_path)
+        request = self.two_feature_request()
+        request["tailPercent"] = 25
+        request["groupings"][0]["quantileMode"] = "quantile"
+        request["groupings"][0]["bandWidth"] = 2
+        request["groupings"][1] = {
+            "feature": "QuoteDate",
+            "source": "dataset",
+            "bandWidth": 0,
+            "quantileMode": "off",
+            "dateBucket": "month",
+            "asFactor": False,
+        }
+        payload = chart(dataset, request)
+        self.assertEqual(payload["plot_type"], "lines")
+        self.assertEqual(payload["groupings"][0]["group_kind"], "quantile")
+        self.assertFalse(payload["groupings"][0]["continuous"])
+        self.assertTrue(payload["groupings"][1]["continuous"])
+        self.assertEqual(payload["groupings"][1]["date_bucket"], "month")
+        self.assertEqual({row["group0"] for row in payload["rows"]}, {"Q1", "Q2"})
+        self.assertEqual(
+            {row["group1"] for row in payload["rows"]},
+            {"2024-01-01", "2024-02-01"},
+        )
+        self.assertEqual(
+            sorted((row["group0_start"], row["group0_end"]) for row in payload["rows"]),
+            [(30, 45), (50, 60)],
+        )
+        self.assertEqual(sum(row["row_count"] for row in payload["rows"]), 4)
+        self.assertEqual(sum(row["volume"] for row in payload["rows"]), 4)
+        quantile_date_sql = two_feature_query.build_result(dataset, request)["grouped_sql"]
+        self.assertNotIn("bounds AS (", quantile_date_sql)
+        self.assertNotIn("CROSS JOIN bounds", quantile_date_sql)
+
+        fixed_tail_request = self.two_feature_request()
+        fixed_tail_request["tailPercent"] = 25
+        fixed_tail_request["groupings"][0]["bandWidth"] = 10
+        fixed_tail = chart(dataset, fixed_tail_request)
+        self.assertEqual(
+            {row["group0_sort"] for row in fixed_tail["rows"]},
+            {40, 50},
+        )
+        fixed_tail_result = two_feature_query.build_result(dataset, fixed_tail_request)
+        self.assertIn("CROSS JOIN bounds", fixed_tail_result["grouped_sql"])
+        bounds_count = dataset.con.execute(
+            f"{fixed_tail_result['grouped_sql']}\nSELECT COUNT(*) FROM bounds"
+        ).fetchone()
+        self.assertEqual(bounds_count, (1,))
+
+        unbanded_request = self.two_feature_request()
+        unbanded_request.pop("tailPercent")
+        unbanded_request["groupings"][0]["bandWidth"] = 0
+        unbanded = chart(dataset, unbanded_request)
+        self.assertEqual(unbanded["tail_percent"], 0)
+        self.assertEqual(
+            {row["group0_sort"] for row in unbanded["rows"]},
+            {30, 45, 50, 60},
+        )
+
+    def test_two_feature_date_factor_override_selects_lines_heatmap_and_surface(self) -> None:
+        dataset = Dataset(self.data_path)
+        request = self.two_feature_request()
+        request["groupings"] = [
+            {
+                "feature": "QuoteDate",
+                "source": "dataset",
+                "bandWidth": 0,
+                "quantileMode": "off",
+                "dateBucket": "day",
+                "asFactor": False,
+            },
+            {
+                "feature": "UseofVan",
+                "source": "dataset",
+                "bandWidth": 0,
+                "quantileMode": "off",
+                "dateBucket": "none",
+                "asFactor": False,
+            },
+        ]
+
+        lines = chart(dataset, request)
+
+        self.assertEqual(lines["plot_type"], "lines")
+        self.assertTrue(lines["groupings"][0]["continuous"])
+        self.assertFalse(lines["groupings"][0]["as_factor"])
+        self.assertEqual(
+            [row["group0"] for row in lines["rows"]],
+            ["2024-01-01", "2024-01-02", "2024-02-01", "2024-02-20"],
+        )
+
+        request["groupings"][0]["asFactor"] = True
+        heatmap = chart(dataset, request)
+        self.assertEqual(heatmap["plot_type"], "heatmap")
+        self.assertFalse(heatmap["groupings"][0]["continuous"])
+        self.assertTrue(heatmap["groupings"][0]["as_factor"])
+
+        request["groupings"][0]["asFactor"] = False
+        request["groupings"][1] = {
+            "feature": "Gross.Weight",
+            "source": "dataset",
+            "bandWidth": 1000,
+            "quantileMode": "off",
+            "dateBucket": "none",
+            "asFactor": False,
+        }
+        surface = chart(dataset, request)
+        self.assertEqual(surface["plot_type"], "surface")
+        self.assertEqual(
+            [grouping["continuous"] for grouping in surface["groupings"]],
+            [True, True],
+        )
+
+        request["groupings"][1]["asFactor"] = True
+        numeric_factor_lines = chart(dataset, request)
+        self.assertEqual(numeric_factor_lines["plot_type"], "lines")
+        request["groupings"][0]["asFactor"] = True
+        both_factors = chart(dataset, request)
+        self.assertEqual(both_factors["plot_type"], "heatmap")
+
+    def test_two_feature_date_pairs_support_buckets_datetimes_and_missing_values(self) -> None:
+        date_path = self.root / "date_pairs.parquet"
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"""
+COPY (
+  SELECT *
+  FROM (VALUES
+    (DATE '2024-01-01', DATE '2025-01-01', TIMESTAMP '2024-01-01 08:30:00', 'A', 10.0),
+    (DATE '2024-01-08', DATE '2025-02-01', TIMESTAMP '2024-01-08 09:30:00', 'A', 20.0),
+    (DATE '2024-02-01', DATE '2025-03-01', TIMESTAMP '2024-02-01 10:30:00', 'B', 30.0),
+    (NULL, DATE '2025-04-01', NULL, 'B', 40.0)
+  ) AS rows(EventDate, RenewalDate, EventTime, Segment, Actual)
+) TO '{date_path.as_posix()}' (FORMAT PARQUET)
+"""
+            )
+        finally:
+            con.close()
+        dataset = Dataset(date_path)
+        request = {
+            "source": "dataset",
+            "groupings": [
+                {
+                    "feature": "EventDate",
+                    "source": "dataset",
+                    "bandWidth": 0,
+                    "quantileMode": "off",
+                    "dateBucket": "day",
+                    "asFactor": False,
+                },
+                {
+                    "feature": "RenewalDate",
+                    "source": "dataset",
+                    "bandWidth": 0,
+                    "quantileMode": "off",
+                    "dateBucket": "month",
+                    "asFactor": False,
+                },
+            ],
+            "responses": [{"label": "Actual", "numerator": "Actual"}],
+            "denominator": "__none__",
+            "filter": "",
+            "maxGroups": 10000,
+        }
+
+        date_surface = chart(dataset, request)
+
+        self.assertEqual(date_surface["plot_type"], "surface")
+        self.assertTrue(all(grouping["continuous"] for grouping in date_surface["groupings"]))
+        self.assertEqual(sum(row["row_count"] for row in date_surface["rows"]), 4)
+        self.assertIn("omitted 1 rows", " ".join(date_surface["warnings"]))
+
+        date_table = table(dataset, {**request, "tablePage": 1, "tablePageSize": 10})
+        self.assertEqual(sum(row["row_count"] for row in date_table["rows"]), 4)
+        self.assertTrue(any(row["group0_missing"] for row in date_table["rows"]))
+
+        request["groupings"][1] = {
+            "feature": "Segment",
+            "source": "dataset",
+            "bandWidth": 0,
+            "quantileMode": "off",
+            "dateBucket": "none",
+            "asFactor": False,
+        }
+        for bucket in ("none", "hour", "day", "week", "month", "year"):
+            request["groupings"][0] = {
+                "feature": "EventTime",
+                "source": "dataset",
+                "bandWidth": 0,
+                "quantileMode": "off",
+                "dateBucket": bucket,
+                "asFactor": False,
+            }
+            datetime_lines = chart(dataset, request)
+            self.assertEqual(datetime_lines["plot_type"], "lines", bucket)
+            self.assertTrue(datetime_lines["groupings"][0]["continuous"], bucket)
+            non_missing = [
+                str(row["group0_sort"])
+                for row in datetime_lines["rows"]
+                if not row["group0_missing"]
+            ]
+            self.assertEqual(non_missing, sorted(non_missing), bucket)
+
+    def test_two_feature_dual_quantiles_do_not_cross_join_source_cardinality(self) -> None:
+        dataset = Dataset(self.data_path)
+        request = self.two_feature_request()
+        request["tailPercent"] = 0
+        request["groupings"] = [
+            {
+                "feature": "YoungestDriverAge",
+                "source": "dataset",
+                "bandWidth": 2,
+                "quantileMode": "quantile",
+                "dateBucket": "none",
+                "asFactor": False,
+            },
+            {
+                "feature": "Gross.Weight",
+                "source": "dataset",
+                "bandWidth": 2,
+                "quantileMode": "quantile",
+                "dateBucket": "none",
+                "asFactor": False,
+            },
+        ]
+
+        result = two_feature_query.build_result(dataset, request)
+        payload = chart(dataset, request)
+
+        self.assertNotIn("bounds AS (", result["grouped_sql"])
+        self.assertNotIn("CROSS JOIN bounds", result["grouped_sql"])
+        self.assertEqual(payload["plot_type"], "heatmap")
+        self.assertEqual(payload["group_count"], 2)
+        self.assertEqual(sum(row["row_count"] for row in payload["rows"]), 4)
+        self.assertEqual(sum(row["volume"] for row in payload["rows"]), 4)
+
+    def test_two_feature_categorical_groups_do_not_multiply_counts_or_weight(self) -> None:
+        data_path = self.root / "two_feature_categories.csv"
+        data_path.write_text(
+            "FactorOne,FactorTwo,Actual,Weight\n"
+            "A,X,10,1\n"
+            "A,Y,20,2\n"
+            "B,X,30,3\n"
+            "B,Y,40,4\n",
+            encoding="utf-8",
+        )
+        dataset = Dataset(data_path)
+        request = {
+            **self.two_feature_request(),
+            "tailPercent": 0,
+            "denominator": "Weight",
+            "responses": [{"label": "Actual", "numerator": "Actual"}],
+            "groupings": [
+                {
+                    "feature": "FactorOne",
+                    "source": "dataset",
+                    "bandWidth": 0,
+                    "quantileMode": "off",
+                    "dateBucket": "none",
+                    "asFactor": False,
+                },
+                {
+                    "feature": "FactorTwo",
+                    "source": "dataset",
+                    "bandWidth": 0,
+                    "quantileMode": "off",
+                    "dateBucket": "none",
+                    "asFactor": False,
+                },
+            ],
+        }
+
+        result = two_feature_query.build_result(dataset, request)
+        payload = chart(dataset, request)
+
+        self.assertNotIn("bounds AS (", result["grouped_sql"])
+        self.assertNotIn("CROSS JOIN bounds", result["grouped_sql"])
+        self.assertEqual(payload["plot_type"], "heatmap")
+        self.assertEqual(payload["group_count"], 4)
+        self.assertEqual(sum(row["row_count"] for row in payload["rows"]), 4)
+        self.assertEqual(sum(row["volume"] for row in payload["rows"]), 10)
+
+    def test_two_feature_categorical_tails_use_independent_filtered_marginals(self) -> None:
+        data_path = self.root / "two_feature_categorical_tails.csv"
+        data_path.write_text(
+            "FactorOne,FactorTwo,Actual,Weight,Keep\n"
+            "A,X,1,94,1\n"
+            "B,X,2,3,1\n"
+            "C,Y,3,2,1\n"
+            ",Z,4,1,1\n"
+            "Excluded,W,99,1000,0\n",
+            encoding="utf-8",
+        )
+        dataset = Dataset(data_path)
+        request = {
+            **self.two_feature_request(),
+            "filter": "Keep = 1",
+            "denominator": "Weight",
+            "responses": [{"label": "Actual", "numerator": "Actual"}],
+            "groupings": [
+                {
+                    "feature": "FactorOne",
+                    "source": "dataset",
+                    "bandWidth": 0,
+                    "quantileMode": "off",
+                    "dateBucket": "none",
+                    "asFactor": False,
+                    "tailPercent": 5,
+                },
+                {
+                    "feature": "FactorTwo",
+                    "source": "dataset",
+                    "bandWidth": 0,
+                    "quantileMode": "off",
+                    "dateBucket": "none",
+                    "asFactor": False,
+                    "tailPercent": 2,
+                },
+            ],
+            "tailPercent": 25,
+        }
+
+        result = two_feature_query.build_result(dataset, request)
+        payload = chart(dataset, request)
+        table_payload = table(dataset, {**request, "tableSearch": "Other"})
+
+        self.assertNotIn("bounds AS (", result["grouped_sql"])
+        self.assertNotIn("CROSS JOIN bounds", result["grouped_sql"])
+        self.assertIn("group0_marginal AS (", result["grouped_sql"])
+        self.assertIn("group1_marginal AS (", result["grouped_sql"])
+        self.assertEqual(payload["tail_percent"], 5)
+        self.assertEqual(
+            [grouping["tail_percent"] for grouping in payload["groupings"]],
+            [5, 2],
+        )
+        self.assertEqual(payload["filtered_row_count"], 4)
+        self.assertEqual(payload["group_count"], 3)
+        self.assertEqual(
+            {(row["group0"], row["group1"], row["volume"]) for row in payload["rows"]},
+            {("A", "X", 94), ("Other", "X", 3), ("Other", "Other", 3)},
+        )
+        self.assertEqual(sum(row["row_count"] for row in payload["rows"]), 4)
+        self.assertEqual(sum(row["volume"] for row in payload["rows"]), 100)
+        self.assertEqual(sum(row["resp0_num"] for row in payload["rows"]), 10)
+        self.assertEqual(table_payload["table"]["match_count"], 2)
+        self.assertEqual(table_payload["summary"]["row_count"], 3)
+        self.assertEqual(table_payload["summary"]["volume"], 6)
+
+    def test_two_feature_categorical_tail_requires_two_rare_levels(self) -> None:
+        data_path = self.root / "two_feature_categorical_tail_safeguard.csv"
+        data_path.write_text(
+            "FactorOne,FactorTwo,Actual,Weight\n"
+            "A,X,1,90\n"
+            "B,X,2,6\n"
+            "C,Y,3,4\n",
+            encoding="utf-8",
+        )
+        dataset = Dataset(data_path)
+        request = {
+            **self.two_feature_request(),
+            "denominator": "Weight",
+            "responses": [{"label": "Actual", "numerator": "Actual"}],
+            "groupings": [
+                {
+                    "feature": "FactorOne",
+                    "source": "dataset",
+                    "bandWidth": 0,
+                    "quantileMode": "off",
+                    "dateBucket": "none",
+                    "asFactor": False,
+                    "tailPercent": 5,
+                },
+                {
+                    "feature": "FactorTwo",
+                    "source": "dataset",
+                    "bandWidth": 0,
+                    "quantileMode": "off",
+                    "dateBucket": "none",
+                    "asFactor": False,
+                    "tailPercent": 0,
+                },
+            ],
+        }
+
+        payload = chart(dataset, request)
+
+        self.assertEqual({row["group0"] for row in payload["rows"]}, {"A", "B", "C"})
+        self.assertNotIn("Other", {row["group0"] for row in payload["rows"]})
+
+    def test_two_feature_categorical_tail_uses_row_count_without_weight(self) -> None:
+        data_path = self.root / "two_feature_categorical_row_count_tails.csv"
+        rows = ["FactorOne,FactorTwo,Actual"]
+        rows.extend(f"A,X,1" for _ in range(90))
+        rows.extend(f"B,Y,1" for _ in range(5))
+        rows.extend(f"C,Y,1" for _ in range(5))
+        data_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+        dataset = Dataset(data_path)
+        request = {
+            **self.two_feature_request(),
+            "denominator": "__none__",
+            "responses": [{"label": "Actual", "numerator": "Actual"}],
+            "groupings": [
+                {
+                    "feature": "FactorOne",
+                    "source": "dataset",
+                    "bandWidth": 0,
+                    "quantileMode": "off",
+                    "dateBucket": "none",
+                    "asFactor": False,
+                    "tailPercent": 5,
+                },
+                {
+                    "feature": "FactorTwo",
+                    "source": "dataset",
+                    "bandWidth": 0,
+                    "quantileMode": "off",
+                    "dateBucket": "none",
+                    "asFactor": False,
+                    "tailPercent": 0,
+                },
+            ],
+        }
+
+        payload = chart(dataset, request)
+
+        marginal_volumes: dict[str, float] = {}
+        for row in payload["rows"]:
+            marginal_volumes[row["group0"]] = (
+                marginal_volumes.get(row["group0"], 0) + row["volume"]
+            )
+        self.assertEqual(marginal_volumes, {"A": 90, "Other": 10})
+        self.assertEqual(sum(row["row_count"] for row in payload["rows"]), 100)
+        self.assertEqual(sum(row["volume"] for row in payload["rows"]), 100)
+
+    def test_two_feature_high_cardinality_factor_tail_leaves_other_axis_unchanged(self) -> None:
+        data_path = self.root / "two_feature_high_cardinality_factor_tails.csv"
+        rows = ["Make,Region,Actual"]
+        rows.extend(
+            f"Make {index:03d},Region {index % 10},1"
+            for index in range(100)
+        )
+        data_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+        dataset = Dataset(data_path)
+        request = {
+            **self.two_feature_request(),
+            "denominator": "__none__",
+            "responses": [{"label": "Actual", "numerator": "Actual"}],
+            "groupings": [
+                {
+                    "feature": "Make",
+                    "source": "dataset",
+                    "bandWidth": 0,
+                    "quantileMode": "off",
+                    "dateBucket": "none",
+                    "asFactor": False,
+                    "tailPercent": 5,
+                },
+                {
+                    "feature": "Region",
+                    "source": "dataset",
+                    "bandWidth": 0,
+                    "quantileMode": "off",
+                    "dateBucket": "none",
+                    "asFactor": False,
+                    "tailPercent": 0,
+                },
+            ],
+        }
+
+        payload = chart(dataset, request)
+
+        self.assertEqual({row["group0"] for row in payload["rows"]}, {"Other"})
+        self.assertEqual(
+            {row["group1"] for row in payload["rows"]},
+            {f"Region {index}" for index in range(10)},
+        )
+        self.assertEqual(payload["group_count"], 10)
+        self.assertEqual(sum(row["row_count"] for row in payload["rows"]), 100)
+        self.assertEqual(sum(row["volume"] for row in payload["rows"]), 100)
+
+    def test_two_feature_quantile_and_fixed_numeric_use_bounds_only_with_tails(self) -> None:
+        dataset = Dataset(self.data_path)
+        request = self.two_feature_request()
+        request["groupings"] = [
+            {
+                "feature": "YoungestDriverAge",
+                "source": "dataset",
+                "bandWidth": 2,
+                "quantileMode": "quantile",
+                "dateBucket": "none",
+                "asFactor": False,
+            },
+            {
+                "feature": "Gross.Weight",
+                "source": "dataset",
+                "bandWidth": 1000,
+                "quantileMode": "off",
+                "dateBucket": "none",
+                "asFactor": False,
+            },
+        ]
+
+        without_tails = {**request, "tailPercent": 0}
+        without_tails_result = two_feature_query.build_result(dataset, without_tails)
+        without_tails_payload = chart(dataset, without_tails)
+        self.assertNotIn("bounds AS (", without_tails_result["grouped_sql"])
+        self.assertNotIn("CROSS JOIN bounds", without_tails_result["grouped_sql"])
+        self.assertEqual(sum(row["row_count"] for row in without_tails_payload["rows"]), 4)
+        self.assertEqual(sum(row["volume"] for row in without_tails_payload["rows"]), 4)
+
+        with_tails = {**request, "tailPercent": 25}
+        with_tails_result = two_feature_query.build_result(dataset, with_tails)
+        with_tails_payload = chart(dataset, with_tails)
+        self.assertIn("CROSS JOIN bounds", with_tails_result["grouped_sql"])
+        bounds_count = dataset.con.execute(
+            f"{with_tails_result['grouped_sql']}\nSELECT COUNT(*) FROM bounds"
+        ).fetchone()
+        self.assertEqual(bounds_count, (1,))
+        self.assertEqual(sum(row["row_count"] for row in with_tails_payload["rows"]), 4)
+        self.assertEqual(sum(row["volume"] for row in with_tails_payload["rows"]), 4)
+
+    def test_two_feature_table_searches_both_grouping_columns_and_keeps_all_metrics(self) -> None:
+        dataset = Dataset(self.data_path)
+        payload = table(
+            dataset,
+            {
+                **self.two_feature_request(),
+                "tailPercent": 0,
+                "tableSearch": "Business",
+                "tablePage": 1,
+                "tablePageSize": 1,
+            },
+        )
+        self.assertEqual(payload["table"]["match_count"], 2)
+        self.assertEqual(payload["table"]["page_count"], 2)
+        self.assertEqual(len(payload["rows"]), 1)
+        self.assertEqual(payload["rows"][0]["group1"], "Business")
+        self.assertEqual(len(payload["summary"]["responses"]), 2)
+        self.assertEqual(payload["summary"]["volume"], 2)
+
+        numeric_search = table(
+            dataset,
+            {
+                **self.two_feature_request(),
+                "tailPercent": 0,
+                "tableSearch": "30",
+                "tablePage": 1,
+                "tablePageSize": 10,
+            },
+        )
+        self.assertGreaterEqual(numeric_search["table"]["match_count"], 1)
+
+    def test_two_feature_chart_keeps_missing_factor_groups_and_warns_for_missing_continuous_values(self) -> None:
+        data_path = self.root / "two_feature_missing.csv"
+        data_path.write_text(
+            "Numeric,Factor,Actual\n"
+            "1,A,10\n"
+            ",A,20\n"
+            "2,,30\n",
+            encoding="utf-8",
+        )
+        dataset = Dataset(data_path)
+        request = {
+            **self.two_feature_request(),
+            "responses": [{"label": "Actual", "numerator": "Actual"}],
+            "groupings": [
+                {
+                    "feature": "Numeric",
+                    "source": "dataset",
+                    "bandWidth": 1,
+                    "quantileMode": "off",
+                    "dateBucket": "none",
+                    "asFactor": False,
+                },
+                {
+                    "feature": "Factor",
+                    "source": "dataset",
+                    "bandWidth": 0,
+                    "quantileMode": "off",
+                    "dateBucket": "none",
+                    "asFactor": False,
+                },
+            ],
+        }
+
+        chart_payload = chart(dataset, request)
+        table_payload = table(dataset, {**request, "tablePage": 1, "tablePageSize": 100})
+
+        self.assertEqual(chart_payload["plot_type"], "lines")
+        self.assertIn("(missing)", {row["group1"] for row in chart_payload["rows"]})
+        self.assertTrue(any(row["group0_missing"] for row in chart_payload["rows"]))
+        self.assertIn("omitted 1 rows with missing values", " ".join(chart_payload["warnings"]))
+        self.assertEqual(table_payload["table"]["group_count"], 3)
+        self.assertTrue(any(row["group0_missing"] for row in table_payload["rows"]))
+
+    def test_two_feature_chart_enforces_group_series_and_dense_grid_limits(self) -> None:
+        dataset = Dataset(self.data_path)
+        group_limited = chart(dataset, {**self.two_feature_request(), "maxGroups": 2})
+        self.assertTrue(group_limited["groups_truncated"])
+        self.assertEqual(group_limited["rows"], [])
+        self.assertIn("Table view", " ".join(group_limited["warnings"]))
+
+        series_path = self.root / "two_feature_series.csv"
+        series_path.write_text(
+            "Numeric,Factor,Actual\n"
+            + "".join(f"{index},S{index:02d},{index + 1}\n" for index in range(81)),
+            encoding="utf-8",
+        )
+        series_dataset = Dataset(series_path)
+        series_request = {
+            **self.two_feature_request(),
+            "responses": [{"label": "Actual", "numerator": "Actual"}],
+            "groupings": [
+                {
+                    "feature": "Numeric",
+                    "source": "dataset",
+                    "bandWidth": 1,
+                    "quantileMode": "off",
+                    "dateBucket": "none",
+                    "asFactor": False,
+                },
+                {
+                    "feature": "Factor",
+                    "source": "dataset",
+                    "bandWidth": 0,
+                    "quantileMode": "off",
+                    "dateBucket": "none",
+                    "asFactor": False,
+                },
+            ],
+        }
+        series_payload = chart(series_dataset, series_request)
+        self.assertTrue(series_payload["series_truncated"])
+        self.assertEqual(len({row["group1"] for row in series_payload["rows"]}), 80)
+
+        surface_request = self.two_feature_request()
+        surface_request["groupings"][1] = {
+            "feature": "Gross.Weight",
+            "source": "dataset",
+            "bandWidth": 1000,
+            "quantileMode": "off",
+            "dateBucket": "none",
+            "asFactor": False,
+        }
+        with patch("py_lucidum.tools.line_bar.two_feature.MAX_DENSE_GRID_CELLS", 2):
+            dense_payload = chart(dataset, surface_request)
+        self.assertTrue(dense_payload["dense_grid_too_large"])
+        self.assertEqual(dense_payload["rows"], [])
+        self.assertIn("Use Table view", " ".join(dense_payload["warnings"]))
+
+    def test_two_feature_chart_supports_mixed_dataset_and_prediction_grouping_sources(self) -> None:
+        self.write_simple_gbm_prediction_model([20.0, 30.0, 40.0, 400.0])
+        app = create_app(
+            self.data_path,
+            token="",
+            tools=["line_bar", "gbm"],
+            use_saved_filters=False,
+            use_kpis=False,
+        )
+        request = self.two_feature_request(filter="UseofVan = 'Business'")
+        request["tailPercent"] = 0
+        request["groupings"][1] = {
+            "feature": "gbm_prediction",
+            "source": "gbm:ratio-gbm:predictions",
+            "bandWidth": 10,
+            "quantileMode": "off",
+            "dateBucket": "none",
+            "asFactor": True,
+        }
+
+        status, _, body = asgi_post_json(app, "/api/line-bar/chart", request)
+        payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["filtered_row_count"], 2)
+        self.assertEqual(payload["field_sources"]["groupings"], ["dataset", "gbm:ratio-gbm:predictions"])
+        self.assertEqual(payload["plot_type"], "lines")
+        self.assertEqual({row["group1"] for row in payload["rows"]}, {"40", "400"})
+
+        table_status, _, table_body = asgi_post_json(
+            app,
+            "/api/line-bar/table",
+            {**request, "tablePage": 1, "tablePageSize": 10},
+        )
+        self.assertEqual(table_status, 200)
+        self.assertEqual(json.loads(table_body)["table"]["group_count"], 2)
 
     def test_chart_accepts_two_expected_lines_and_truncates_extra_responses(self) -> None:
         self.data_path.write_text(

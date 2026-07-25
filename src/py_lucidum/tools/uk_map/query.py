@@ -9,13 +9,17 @@ from py_lucidum.core import (
     Dataset,
     denominator_warnings,
     denominator_valid_condition,
+    has_denominator_column,
     is_numeric_kind,
     json_number,
+    metric_relation_context,
     normalise_denominator,
+    normalise_denominator_source,
     quote_ident,
+    relation_row_count,
     response_parts,
-    response_summary,
-    summarize_denominator,
+    response_summary_for_relation,
+    summarize_denominator_for_relation,
     weighted_value_sql,
 )
 from py_lucidum.tools.uk_map.smoothing import (
@@ -83,7 +87,19 @@ UNIT_POINT_FIELDS = (
 def summary(dataset: Dataset, request: dict[str, Any], defaults: dict[str, str] | None = None) -> dict[str, Any]:
     with dataset.lock:
         source_id = dataset.normalise_source(request.get("source"))
-        columns = dataset.column_map_for_source(source_id)
+        raw_response = str(request.get("numerator") or request.get("actual") or "").strip()
+        raw_denominator = request.get("denominator", request.get("weight"))
+        denominator_source = normalise_denominator_source(
+            dataset,
+            request.get("denominatorSource"),
+            raw_denominator,
+        )
+        fields = [(raw_response, source_id)]
+        if has_denominator_column(raw_denominator):
+            fields.append((str(raw_denominator), denominator_source))
+        context = metric_relation_context(dataset, source_id=source_id, fields=fields)
+        relation = context["relation"]
+        columns = context["columns"]
         level = normalise_level(request.get("level"))
         smoothing_level = normalise_smoothing_level(request.get("smoothingLevel"))
         compact_unit_points = level == "unit" and bool(request.get("compactUnitPoints"))
@@ -91,16 +107,16 @@ def summary(dataset: Dataset, request: dict[str, Any], defaults: dict[str, str] 
         denominator = normalise_denominator(request.get("denominator", request.get("weight")), columns)
         app_defaults = defaults or {}
         join_column = normalise_join_column(level, request, app_defaults, columns)
-        filter_sql = dataset.normalise_filter(request.get("filter"), source_id=source_id)
+        filter_sql = dataset.normalise_filter_for_relation(request.get("filter"), relation)
 
         point_summary: dict[str, Any] | None = None
         if level == "unit":
             latitude_column = normalise_coordinate_column("latitude", request, app_defaults, columns)
             longitude_column = normalise_coordinate_column("longitude", request, app_defaults, columns)
-            row_count = dataset.row_count_for_source(source_id)
-            filtered_row_count = dataset.filtered_row_count(filter_sql, source_id=source_id)
-            denominator_summary = summarize_denominator(dataset, [response], denominator, filter_sql, source_id=source_id)
-            response_summaries = response_summary(dataset, [response], denominator, filter_sql, source_id=source_id)
+            row_count = context["row_count"]
+            filtered_row_count = relation_row_count(dataset, relation, filter_sql)
+            denominator_summary = summarize_denominator_for_relation(dataset, relation, [response], denominator, filter_sql)
+            response_summaries = response_summary_for_relation(dataset, relation, [response], denominator, filter_sql)
             rows_or_points, point_summary = unit_rows(
                 dataset,
                 join_column,
@@ -110,16 +126,17 @@ def summary(dataset: Dataset, request: dict[str, Any], defaults: dict[str, str] 
                 denominator,
                 filter_sql,
                 source_id=source_id,
+                relation=relation,
                 compact=compact_unit_points,
             )
             smoothing = smoothing_metadata(0, smoothing_level, point_summary["plotted_count"])
             smoothing_warning = None
             rows = [] if compact_unit_points else rows_or_points
         else:
-            row_count = dataset.row_count_for_source(source_id)
-            filtered_row_count = dataset.filtered_row_count(filter_sql, source_id=source_id)
-            denominator_summary = summarize_denominator(dataset, [response], denominator, filter_sql, source_id=source_id)
-            response_summaries = response_summary(dataset, [response], denominator, filter_sql, source_id=source_id)
+            row_count = context["row_count"]
+            filtered_row_count = relation_row_count(dataset, relation, filter_sql)
+            denominator_summary = summarize_denominator_for_relation(dataset, relation, [response], denominator, filter_sql)
+            response_summaries = response_summary_for_relation(dataset, relation, [response], denominator, filter_sql)
             if level == "sector":
                 rows, smoothing, smoothing_warning = sector_rows(
                     dataset,
@@ -128,11 +145,20 @@ def summary(dataset: Dataset, request: dict[str, Any], defaults: dict[str, str] 
                     denominator,
                     filter_sql,
                     source_id=source_id,
+                    relation=relation,
                     smoothing_level=smoothing_level,
                 )
                 smoothing["requested_level"] = smoothing_level
             else:
-                rows = map_rows(dataset, join_column, response, denominator, filter_sql, source_id=source_id)
+                rows = map_rows(
+                    dataset,
+                    join_column,
+                    response,
+                    denominator,
+                    filter_sql,
+                    source_id=source_id,
+                    relation=relation,
+                )
                 smoothing = smoothing_metadata(0, smoothing_level, len(rows))
                 smoothing_warning = None
         warnings = denominator_warnings(denominator, denominator_summary, [response])
@@ -157,6 +183,7 @@ def summary(dataset: Dataset, request: dict[str, Any], defaults: dict[str, str] 
             "filter": filter_sql,
             "denominator": {
                 "column": denominator["column"],
+                "source": denominator_source,
                 "label": denominator["label"],
                 "bar_label": denominator["bar_label"],
                 "value": json_number(denominator_summary.get("value")),
@@ -286,8 +313,15 @@ def map_rows(
     denominator: dict[str, str | None],
     filter_sql: str = "",
     source_id: Any = None,
+    relation: str | None = None,
 ) -> list[dict[str, Any]]:
-    sql = build_summary_sql(dataset.relation_sql_for_source(source_id), join_column, response, denominator, filter_sql)
+    sql = build_summary_sql(
+        relation or dataset.relation_sql_for_source(source_id),
+        join_column,
+        response,
+        denominator,
+        filter_sql,
+    )
     cursor = dataset.con.execute(sql)
     column_names = [d[0] for d in cursor.description]
     rows = [dict(zip(column_names, row)) for row in cursor.fetchall()]
@@ -311,15 +345,24 @@ def sector_rows(
     denominator: dict[str, str | None],
     filter_sql: str = "",
     source_id: Any = None,
+    relation: str | None = None,
     *,
     smoothing_level: int = 0,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], str | None]:
     if smoothing_level <= 0:
-        rows = map_rows(dataset, join_column, response, denominator, filter_sql, source_id=source_id)
+        rows = map_rows(
+            dataset,
+            join_column,
+            response,
+            denominator,
+            filter_sql,
+            source_id=source_id,
+            relation=relation,
+        )
         return rows, sector_smoothing_metadata(0, len(rows)), None
 
     raw_sql = build_summary_sql(
-        dataset.relation_sql_for_source(source_id),
+        relation or dataset.relation_sql_for_source(source_id),
         join_column,
         response,
         denominator,
@@ -329,7 +372,15 @@ def sector_rows(
     try:
         cursor = dataset.con.execute(build_smoothed_sector_sql(raw_sql, smoothing_level))
     except (duckdb.Error, OSError, ValueError) as exc:
-        rows = map_rows(dataset, join_column, response, denominator, filter_sql, source_id=source_id)
+        rows = map_rows(
+            dataset,
+            join_column,
+            response,
+            denominator,
+            filter_sql,
+            source_id=source_id,
+            relation=relation,
+        )
         metadata = sector_smoothing_metadata(smoothing_level, len(rows))
         metadata["method"] = "shared_edge_weighted_numerator"
         metadata["warning"] = SECTOR_SMOOTHING_LOAD_WARNING
@@ -449,11 +500,12 @@ def unit_rows(
     denominator: dict[str, str | None],
     filter_sql: str = "",
     source_id: Any = None,
+    relation: str | None = None,
     *,
     compact: bool = False,
 ) -> tuple[list[dict[str, Any]] | dict[str, list[Any]], dict[str, int]]:
     sql = build_unit_summary_sql(
-        dataset.relation_sql_for_source(source_id),
+        relation or dataset.relation_sql_for_source(source_id),
         join_column,
         latitude_column,
         longitude_column,

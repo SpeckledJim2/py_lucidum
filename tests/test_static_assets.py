@@ -146,6 +146,420 @@ if (formatters.formatLineValue(-0.125) !== "-12.5%") throw new Error("KPI percen
 """
         self.run_node_script(script)
 
+    def test_two_feature_line_bar_chart_options_follow_feature_axis_ordering(self) -> None:
+        module = Path("src/py_lucidum/static/app/line-bar-two-feature-chart.js").resolve().as_uri()
+        script = f"""
+import {{ twoFeatureChartOption }} from "{module}";
+const metric = {{ key: "resp0", label: "Actual", format: (value) => String(value) }};
+const rows = [
+  {{ group0: "1", group0_sort: 1, group0_missing: false, group1: "A", group1_sort: "A", group1_missing: false, resp0: 10, volume: 1 }},
+  {{ group0: "2", group0_sort: 2, group0_missing: false, group1: "A", group1_sort: "A", group1_missing: false, resp0: 20, volume: 2 }},
+  {{ group0: "1", group0_sort: 1, group0_missing: false, group1: "B", group1_sort: "B", group1_missing: false, resp0: 30, volume: 3 }},
+  {{ group0: "2", group0_sort: 2, group0_missing: false, group1: "B", group1_sort: "B", group1_missing: false, resp0: 40, volume: 4 }},
+];
+const factorGrouping = {{ feature: "Feature 2", kind: "categorical", continuous: false }};
+const continuousGrouping = {{ feature: "Feature 1", kind: "numeric", continuous: true }};
+const lines = twoFeatureChartOption({{
+  plot_type: "lines",
+  groupings: [continuousGrouping, factorGrouping],
+  denominator: {{ bar_label: "Weight" }},
+  rows,
+}}, metric, {{
+  xAxisLabels: ["1", "2"],
+  xAxisLabelPolicy: {{
+    show: true,
+    interval: 0,
+    showMinLabel: true,
+    showMaxLabel: true,
+    rotate: 65,
+    fontSize: 8,
+    nameGap: 58,
+    bottom: 74,
+    dataZoomEnabled: false,
+    hideOverlap: false,
+  }},
+}});
+if (lines.xAxis.name !== "Feature 1") throw new Error("continuous feature is not horizontal");
+if (lines.xAxis.type !== "category" || lines.xAxis.data.join("|") !== "1|2") {{
+  throw new Error("mixed chart must use the shared category labels");
+}}
+if (lines.xAxis.axisLabel.interval !== 0 || lines.xAxis.axisLabel.rotate !== 65
+    || lines.xAxis.axisLabel.fontSize !== 8 || lines.grid.bottom !== 74) {{
+  throw new Error("mixed chart did not apply the single-feature label policy");
+}}
+if (lines.series.map((series) => `${{series.name}}:${{series.type}}`).join("|") !== "A:line|A:bar|B:line|B:bar") {{
+  throw new Error("paired factor series are incorrect");
+}}
+if (lines.series.filter((series) => series.type === "bar").some((series) => series.stack !== "two-feature-volume")) {{
+  throw new Error("factor volume bars are not stacked");
+}}
+if (lines.series[0].data.join("|") !== "10|20" || lines.series[1].data.join("|") !== "1|2") {{
+  throw new Error("mixed line/bar data are not aligned to the shared categories");
+}}
+if (lines.series[0].itemStyle.color !== lines.series[1].itemStyle.color
+    || lines.series[2].itemStyle.color !== lines.series[3].itemStyle.color) {{
+  throw new Error("line and bar colours do not match");
+}}
+if (lines.yAxis.length !== 2 || lines.yAxis[0].name !== "Actual" || lines.yAxis[1].name !== "Weight") {{
+  throw new Error("mixed chart axes are incorrect");
+}}
+const modelDenominatorLines = twoFeatureChartOption({{
+  plot_type: "lines",
+  groupings: [continuousGrouping, factorGrouping],
+  denominator: {{ bar_label: "glm_prediction" }},
+  rows: rows.map((row, index) => ({{
+    ...row,
+    volume: [2545000, 896460, 1108800, 124128][index],
+  }})),
+}}, {{
+  ...metric,
+  axisLabel: "PREMIUM / glm_prediction",
+}}, {{
+  measureText: (value, fontSize = 12) => String(value).length * fontSize * 0.56,
+}});
+if (modelDenominatorLines.yAxis[0].name !== "PREMIUM / glm_prediction"
+    || modelDenominatorLines.yAxis[1].name !== "glm_prediction") {{
+  throw new Error("mixed chart did not use the numerator / denominator axis title");
+}}
+if (modelDenominatorLines.yAxis[1].nameGap <= 52
+    || modelDenominatorLines.grid.right <= modelDenominatorLines.yAxis[1].nameGap) {{
+  throw new Error("mixed chart did not reserve space between right-axis labels and title");
+}}
+if (lines.legend.data.map((item) => item.name).join("|") !== "A|B") {{
+  throw new Error("mixed chart legend must contain one entry per factor group");
+}}
+const reversedRows = rows.map((row) => ({{
+  ...row,
+  group0: row.group1,
+  group0_sort: row.group1_sort,
+  group1: row.group0,
+  group1_sort: row.group0_sort,
+}}));
+const reversedLines = twoFeatureChartOption({{
+  plot_type: "lines",
+  groupings: [factorGrouping, continuousGrouping],
+  denominator: {{ bar_label: "N" }},
+  rows: reversedRows,
+}}, metric);
+if (reversedLines.xAxis.name !== "Feature 1" || reversedLines.yAxis[1].name !== "N") {{
+  throw new Error("reversed mixed chart ordering or row-count label is incorrect");
+}}
+const dateGrouping = {{
+  feature: "QUOTE_DATE",
+  kind: "date",
+  date_bucket: "day",
+  continuous: true,
+}};
+const dateRows = [
+  {{ group0: "2024-01-08", group0_sort: "2024-01-08", group0_missing: false, group1: "A", group1_sort: "A", group1_missing: false, resp0: 20, volume: 2 }},
+  {{ group0: "2024-01-01", group0_sort: "2024-01-01", group0_missing: false, group1: "A", group1_sort: "A", group1_missing: false, resp0: 10, volume: 1 }},
+];
+const dateLines = twoFeatureChartOption({{
+  plot_type: "lines",
+  groupings: [dateGrouping, factorGrouping],
+  denominator: {{ bar_label: "N" }},
+  rows: dateRows,
+}}, metric, {{
+  xAxisLabels: ["1 Jan 2024", "8 Jan 2024"],
+}});
+if (dateLines.xAxis.name !== "QUOTE_DATE"
+    || dateLines.xAxis.data.join("|") !== "1 Jan 2024|8 Jan 2024"
+    || dateLines.series[0].data.join("|") !== "10|20"
+    || dateLines.series[1].data.join("|") !== "1|2") {{
+  throw new Error("date mixed chart is not ordered chronologically");
+}}
+const heatmap = twoFeatureChartOption({{
+  plot_type: "heatmap",
+  groupings: [{{ ...continuousGrouping, continuous: false }}, factorGrouping],
+  rows,
+}}, metric);
+if (heatmap.xAxis.name !== "Feature 2" || heatmap.yAxis.name !== "Feature 1") {{
+  throw new Error("heatmap feature ordering is incorrect");
+}}
+const labelledHeatmap = twoFeatureChartOption({{
+  plot_type: "heatmap",
+  groupings: [
+    {{ feature: "OVERNIGHT_LOCATION", kind: "categorical", continuous: false }},
+    {{ feature: "DRIVER_AGE", kind: "quantile", continuous: false }},
+  ],
+  rows: [
+    {{ group0: "Road", group0_sort: "Road", group1: "Q1", group1_sort: 1, resp0: 10, volume: 1 }},
+    {{ group0: "Garage", group0_sort: "Garage", group1: "Q1", group1_sort: 1, resp0: 20, volume: 2 }},
+    {{ group0: "Driveway", group0_sort: "Driveway", group1: "Q1", group1_sort: 1, resp0: 30, volume: 3 }},
+  ],
+}}, metric, {{
+  chartWidth: 1200,
+  chartHeight: 800,
+  measureText: (value, fontSize = 12) => String(value).length * fontSize * (10 / 12),
+  xAxisLabels: ["Q1"],
+  heatmapLabelMode: "both",
+  formatActual: (value) => `£${{Number(value).toFixed(2)}}`,
+  formatWeight: (value) => `W${{value}}`,
+  xAxisLabelPolicy: {{
+    show: true,
+    interval: 0,
+    showMinLabel: true,
+    showMaxLabel: true,
+    rotate: 65,
+    fontSize: 8,
+    nameGap: 58,
+    bottom: 74,
+    dataZoomEnabled: false,
+    hideOverlap: false,
+  }},
+}});
+if (labelledHeatmap.yAxis.nameGap !== 108
+    || labelledHeatmap.grid.left !== 128) {{
+  throw new Error("heatmap y-axis spacing does not reserve the measured label width");
+}}
+if (labelledHeatmap.yAxis.axisLabel.rotate !== 0
+    || labelledHeatmap.yAxis.axisLabel.align !== "right"
+    || labelledHeatmap.yAxis.axisLabel.interval !== 0
+    || labelledHeatmap.yAxis.axisLabel.hideOverlap !== false
+    || labelledHeatmap.yAxis.axisLabel.fontSize !== 12
+    || labelledHeatmap.yAxis.axisLabel.formatter("Driveway") !== "Driveway") {{
+  throw new Error("heatmap y-axis labels must remain horizontal and right-aligned");
+}}
+if (labelledHeatmap.xAxis.axisLabel.interval !== 0
+    || labelledHeatmap.xAxis.axisLabel.rotate !== 65
+    || labelledHeatmap.grid.bottom !== 74) {{
+  throw new Error("heatmap x-axis did not apply the shared label policy");
+}}
+if (!labelledHeatmap.series[0].label.show
+    || labelledHeatmap.series[0].label.position !== "inside"
+    || labelledHeatmap.series[0].label.align !== "center"
+    || labelledHeatmap.series[0].label.verticalAlign !== "middle"
+    || labelledHeatmap.series[0].label.fontSize !== 12
+    || labelledHeatmap.series[0].label.textBorderWidth !== 0) {{
+  throw new Error("heatmap labels are not centred, legible, and fit to the cells");
+}}
+const firstHeatmapValue = labelledHeatmap.series[0].data[0];
+if (labelledHeatmap.series[0].label.formatter({{ value: firstHeatmapValue }})
+    !== "{{heatmapWhitePrimary|£10.00}}\\n{{heatmapWhiteSecondary|W1}}") {{
+  throw new Error("heatmap Both labels do not show Actual then Weight");
+}}
+const middleHeatmapValue = labelledHeatmap.series[0].data[1];
+if (labelledHeatmap.series[0].label.formatter({{ value: middleHeatmapValue }})
+    !== "{{heatmapDarkPrimary|£20.00}}\\n{{heatmapDarkSecondary|W2}}") {{
+  throw new Error("heatmap labels do not adapt to the rendered cell contrast");
+}}
+const heatmapRich = labelledHeatmap.series[0].label.rich;
+if (heatmapRich.heatmapWhitePrimary.color !== "#ffffff"
+    || heatmapRich.heatmapWhitePrimary.fontWeight !== 600
+    || heatmapRich.heatmapWhitePrimary.textShadowBlur !== 2
+    || heatmapRich.heatmapWhiteSecondary.fontWeight !== 500
+    || heatmapRich.heatmapDarkPrimary.color !== "#0f172a"
+    || heatmapRich.heatmapDarkPrimary.fontWeight !== 600
+    || heatmapRich.heatmapDarkPrimary.textShadowBlur !== 0
+    || heatmapRich.heatmapDarkSecondary.fontWeight !== 500) {{
+  throw new Error("heatmap adaptive label styles are incorrect");
+}}
+const labelData = {{
+  plot_type: "heatmap",
+  groupings: [
+    {{ feature: "Y", kind: "categorical", continuous: false }},
+    {{ feature: "X", kind: "categorical", continuous: false }},
+  ],
+  rows: [
+    {{ group0: "A", group0_sort: "A", group1: "B", group1_sort: "B", resp0: 12.5, volume: 7 }},
+  ],
+}};
+const labelOption = (mode, rows = labelData.rows, dimensions = {{}}) => twoFeatureChartOption(
+  {{ ...labelData, rows }},
+  metric,
+  {{
+    chartWidth: dimensions.width || 800,
+    chartHeight: dimensions.height || 600,
+    heatmapLabelMode: mode,
+    formatActual: (value) => `A${{value}}`,
+    formatWeight: (value) => `W${{value}}`,
+  }},
+);
+const plainLabelText = (value) => String(value).split("\\n").map((line) => {{
+  const delimiter = line.indexOf("|");
+  return delimiter < 0 ? line : line.slice(delimiter + 1, -1);
+}}).join("\\n");
+const labelText = (option) => plainLabelText(
+  option.series[0].label.formatter({{ value: option.series[0].data[0] }}),
+);
+const noCellLabels = labelOption("none");
+const actualCellLabels = labelOption("actual");
+const weightCellLabels = labelOption("weight");
+const bothCellLabels = labelOption("both");
+if (noCellLabels.series[0].label.show) throw new Error("heatmap labels should default off");
+if (!actualCellLabels.series[0].label.show || labelText(actualCellLabels) !== "A12.5") {{
+  throw new Error("heatmap Actual labels are incorrect");
+}}
+if (!weightCellLabels.series[0].label.show || labelText(weightCellLabels) !== "W7") {{
+  throw new Error("heatmap Weight labels are incorrect");
+}}
+if (!bothCellLabels.series[0].label.show || labelText(bothCellLabels) !== "A12.5\\nW7") {{
+  throw new Error("heatmap Both labels are incorrect");
+}}
+const missingActual = labelOption("both", [
+  {{ group0: "A", group0_sort: "A", group1: "B", group1_sort: "B", resp0: null, volume: 7 }},
+]);
+if (labelText(missingActual) !== "\\nW7") throw new Error("missing Actual must render as a blank label row");
+const fittedRows = Array.from({{ length: 100 }}, (_, index) => ({{
+  group0: `Y${{Math.floor(index / 10)}}`,
+  group0_sort: Math.floor(index / 10),
+  group1: `X${{index % 10}}`,
+  group1_sort: index % 10,
+  resp0: 1234.56,
+  volume: 9876,
+}}));
+const fittedLabels = labelOption("both", fittedRows, {{ width: 800, height: 400 }});
+if (!fittedLabels.series[0].label.show
+    || fittedLabels.series[0].label.fontSize < 7
+    || fittedLabels.series[0].label.fontSize >= 12) {{
+  throw new Error("heatmap label font size did not scale to the cell dimensions");
+}}
+const tooSmallLabels = labelOption("both", fittedRows, {{ width: 300, height: 200 }});
+if (tooSmallLabels.series[0].label.show) throw new Error("unreadably small heatmap labels must be suppressed");
+const denseRows = Array.from({{ length: 200 }}, (_, index) => ({{
+  group0: `Y${{Math.floor(index / 20)}}`,
+  group0_sort: Math.floor(index / 20),
+  group1: `X${{index % 20}}`,
+  group1_sort: index % 20,
+  resp0: 1,
+  volume: 1,
+}}));
+const denseLabels = labelOption("both", denseRows, {{ width: 2400, height: 1400 }});
+if (!denseLabels.series[0].label.show) {{
+  throw new Error("heatmap labels should remain available above 200 cells when they fit");
+}}
+const narrowHeatmap = twoFeatureChartOption({{
+  plot_type: "heatmap",
+  groupings: [
+    {{ feature: "OVERNIGHT_LOCATION", kind: "categorical", continuous: false }},
+    {{ feature: "DRIVER_AGE", kind: "quantile", continuous: false }},
+  ],
+  rows: [{{
+    group0: "A very long factor label",
+    group0_sort: "A very long factor label",
+    group1: "Q1",
+    group1_sort: 1,
+    resp0: 10,
+  }}],
+}}, metric, {{
+  chartWidth: 300,
+  measureText: (value) => String(value).length * 10,
+}});
+if (narrowHeatmap.grid.left !== 120
+    || !narrowHeatmap.yAxis.axisLabel.formatter("A very long factor label").endsWith("…")) {{
+  throw new Error("heatmap y-axis spacing is not capped responsively");
+}}
+const manyYRows = Array.from({{ length: 60 }}, (_, index) => ({{
+  group0: `Factor ${{index + 1}}`,
+  group0_sort: index,
+  group1: "X",
+  group1_sort: "X",
+  resp0: index,
+}}));
+const manyYHeatmap = twoFeatureChartOption({{
+  plot_type: "heatmap",
+  groupings: [
+    {{ feature: "Y", kind: "categorical", continuous: false }},
+    {{ feature: "X", kind: "categorical", continuous: false }},
+  ],
+  rows: manyYRows,
+}}, metric, {{ chartHeight: 600 }});
+if (manyYHeatmap.yAxis.axisLabel.rotate !== 0
+    || manyYHeatmap.yAxis.axisLabel.align !== "right"
+    || manyYHeatmap.yAxis.axisLabel.interval !== 0
+    || manyYHeatmap.yAxis.axisLabel.hideOverlap !== false
+    || manyYHeatmap.yAxis.axisLabel.fontSize !== 6) {{
+  throw new Error("dense heatmap y-axis labels must shrink and remain fully enabled");
+}}
+const surfaceRows = rows.map((row) => ({{
+  ...row,
+  group1: String(row.group1 === "A" ? 10 : 20),
+  group1_sort: row.group1 === "A" ? 10 : 20,
+}}));
+const surface = twoFeatureChartOption({{
+  plot_type: "surface",
+  groupings: [continuousGrouping, {{ feature: "Feature 2", kind: "numeric", continuous: true }}],
+  rows: surfaceRows,
+}}, metric);
+if (surface.xAxis3D.name !== "Feature 2" || surface.yAxis3D.name !== "Feature 1") {{
+  throw new Error("surface feature ordering is incorrect");
+}}
+if (surface.xAxis3D.min !== 10 || surface.xAxis3D.max !== 20
+    || surface.yAxis3D.min !== 1 || surface.yAxis3D.max !== 2) {{
+  throw new Error("surface axes do not use the exact plotted domains");
+}}
+if (surface.grid3D.boxWidth !== 100 || surface.grid3D.boxDepth !== 74) {{
+  throw new Error("default surface footprint changed unexpectedly");
+}}
+const dateSurfaceRows = [
+  {{ group0: "1", group0_sort: 1, group0_missing: false, group1: "2024-01-01", group1_sort: "2024-01-01", group1_missing: false, resp0: 10 }},
+  {{ group0: "2", group0_sort: 2, group0_missing: false, group1: "2024-01-01", group1_sort: "2024-01-01", group1_missing: false, resp0: 20 }},
+  {{ group0: "1", group0_sort: 1, group0_missing: false, group1: "2024-01-08", group1_sort: "2024-01-08", group1_missing: false, resp0: 30 }},
+  {{ group0: "2", group0_sort: 2, group0_missing: false, group1: "2024-01-08", group1_sort: "2024-01-08", group1_missing: false, resp0: 40 }},
+];
+const dateSurface = twoFeatureChartOption({{
+  plot_type: "surface",
+  groupings: [continuousGrouping, dateGrouping],
+  rows: dateSurfaceRows,
+}}, metric, {{
+  formatDateGroupValue: (value) => `D:${{new Date(value).toISOString().slice(0, 10)}}`,
+}});
+if (dateSurface.xAxis3D.type !== "time"
+    || dateSurface.yAxis3D.type !== "value"
+    || dateSurface.xAxis3D.min !== Date.UTC(2024, 0, 1)
+    || dateSurface.xAxis3D.max !== Date.UTC(2024, 0, 8)
+    || dateSurface.xAxis3D.axisLabel.formatter(Date.UTC(2024, 0, 1)) !== "D:2024-01-01") {{
+  throw new Error("date surface axis type, bounds, or formatting is incorrect");
+}}
+const dateSurfaceTooltip = dateSurface.tooltip.formatter({{
+  value: dateSurface.series[0].data[0],
+}});
+if (!dateSurfaceTooltip.includes("QUOTE_DATE: D:2024-01-01")) {{
+  throw new Error("date surface tooltip is not date-aware");
+}}
+const dualDateSurface = twoFeatureChartOption({{
+  plot_type: "surface",
+  groupings: [{{ ...dateGrouping, feature: "START_DATE" }}, dateGrouping],
+  rows: [
+    {{ group0_sort: "2023-01-01", group0_missing: false, group1_sort: "2024-01-01", group1_missing: false, resp0: 1 }},
+    {{ group0_sort: "2023-01-08", group0_missing: false, group1_sort: "2024-01-01", group1_missing: false, resp0: 2 }},
+    {{ group0_sort: "2023-01-01", group0_missing: false, group1_sort: "2024-01-08", group1_missing: false, resp0: 3 }},
+    {{ group0_sort: "2023-01-08", group0_missing: false, group1_sort: "2024-01-08", group1_missing: false, resp0: 4 }},
+  ],
+}}, metric, {{
+  formatDateGroupValue: (value) => new Date(value).toISOString().slice(0, 10),
+}});
+if (dualDateSurface.xAxis3D.type !== "time" || dualDateSurface.yAxis3D.type !== "time") {{
+  throw new Error("date-by-date surface must use two time axes");
+}}
+const wideSurface = twoFeatureChartOption({{
+  plot_type: "surface",
+  groupings: [continuousGrouping, {{ feature: "Feature 2", kind: "numeric", continuous: true }}],
+  rows: surfaceRows,
+}}, metric, {{ chartWidth: 1920, chartHeight: 1000 }});
+if (wideSurface.grid3D.boxWidth !== 140 || wideSurface.grid3D.boxDepth !== 92) {{
+  throw new Error("surface footprint did not expand for a wide chart");
+}}
+const shortSurface = twoFeatureChartOption({{
+  plot_type: "surface",
+  groupings: [continuousGrouping, {{ feature: "Feature 2", kind: "numeric", continuous: true }}],
+  rows: surfaceRows,
+}}, metric, {{ chartWidth: 1920, chartHeight: 500 }});
+if (shortSurface.grid3D.boxWidth !== 100 || shortSurface.grid3D.boxDepth !== 74) {{
+  throw new Error("surface footprint must remain contained in a short chart");
+}}
+if (surface.series[0].dataShape.join("|") !== "2|2") throw new Error("surface grid is not dense");
+const sparseSurface = twoFeatureChartOption({{
+  plot_type: "surface",
+  groupings: [continuousGrouping, {{ feature: "Feature 2", kind: "numeric", continuous: true }}],
+  rows: surfaceRows.slice(0, 3),
+}}, metric);
+if (!sparseSurface.series[0].data.some((point) => Number.isNaN(point[2]))) {{
+  throw new Error("missing surface cells must use NaN");
+}}
+"""
+        self.run_node_script(script)
+
     def test_saved_filter_expression_helpers_preserve_boolean_precedence(self) -> None:
         module = Path("src/py_lucidum/static/app/shared/filter-expression.js").resolve().as_uri()
         script = f"""
@@ -1014,6 +1428,27 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
                 self.assertLess(html.index('data-sidebar-section="gbm"'), html.index('data-sidebar-section="glm"'))
                 self.assertLess(html.index('data-sidebar-section="glm"'), html.index('data-sidebar-section="filter"'))
 
+    def test_sidebar_renames_metrics_and_model_denominator_contract_is_source_aware(self) -> None:
+        html = self.root_html_for_tools(["line-bar", "histogram", "uk-map", "glm", "gbm"])
+        main_source = Path("src/py_lucidum/static/app/main.js").read_text(encoding="utf-8")
+        line_bar_source = Path("src/py_lucidum/static/app/line-bar-tool.js").read_text(encoding="utf-8")
+        histogram_source = Path("src/py_lucidum/static/app/histogram-tool.js").read_text(encoding="utf-8")
+        map_source = Path("src/py_lucidum/static/app/uk-map-tool.js").read_text(encoding="utf-8")
+        glm_source = Path("src/py_lucidum/static/app/glm-tool.js").read_text(encoding="utf-8")
+        gbm_source = Path("src/py_lucidum/static/app/gbm-tool.js").read_text(encoding="utf-8")
+
+        self.assertIn('<div id="actualMetricTitle" class="metric-title">Numerator</div>', html)
+        self.assertIn('<div id="weightMetricTitle" class="metric-title">Denominator</div>', html)
+        self.assertIn('predictionGroup.label = "Model predictions"', main_source)
+        self.assertIn('column.name === primaryName', main_source)
+        self.assertIn("denominatorSource: selectedDenominator.sourceId", main_source)
+        for source in (line_bar_source, histogram_source, map_source):
+            self.assertIn("denominatorSource:", source)
+        self.assertIn("getDenominatorSelection().metricKind === \"prediction\"", glm_source)
+        self.assertIn("getDenominatorSelection().metricKind === \"prediction\"", gbm_source)
+        self.assertIn("denominator_source:", glm_source)
+        self.assertIn("offset_source:", gbm_source)
+
     def test_index_references_only_local_no_store_assets(self) -> None:
         _, body = self.assert_no_store("/")
         html = body.decode("utf-8")
@@ -1175,6 +1610,35 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
             "Require none of the selected filters to match",
         ):
             self.assertIn(f'title="{tooltip}"', index)
+
+    def test_line_bar_two_feature_swap_command_contract(self) -> None:
+        static_root = Path(__file__).resolve().parents[1] / "src/py_lucidum/static"
+        index = (static_root / "index.html").read_text(encoding="utf-8")
+        line_bar = (static_root / "app/line-bar-tool.js").read_text(encoding="utf-8")
+        styles = (static_root / "styles/line-bar.css").read_text(encoding="utf-8")
+
+        swap_tag = re.search(r'<button\b[^>]*\bid="lineBarSwapFeaturesBtn"[^>]*>', index)
+        self.assertIsNotNone(swap_tag)
+        self.assertIn('aria-label="Swap Feature 1 and Feature 2"', swap_tag.group(0))
+        self.assertIn(" hidden", swap_tag.group(0))
+        self.assertNotRegex(swap_tag.group(0), r"\btitle=")
+        self.assertLess(index.index("<h2>x-axis features</h2>"), index.index('id="lineBarSwapFeaturesBtn"'))
+        self.assertLess(index.index('id="lineBarSwapFeaturesBtn"'), index.index('data-control="featureSort"'))
+        self.assertIn("function swapLineBarGroupingFeatures()", line_bar)
+        self.assertIn('["bandWidth", "bandWidth2"]', line_bar)
+        self.assertIn('["quantileMode", "quantileMode2"]', line_bar)
+        self.assertIn('["dateBucketManualKey", "dateBucketManualKey2"]', line_bar)
+        self.assertIn("state.bandSuggestionRequestSeq2 = (state.bandSuggestionRequestSeq2 || 0) + 1;", line_bar)
+        self.assertIn("state.dateBucketSuggestionRequestSeq2 = (state.dateBucketSuggestionRequestSeq2 || 0) + 1;", line_bar)
+        swap_start = line_bar.index("function swapLineBarGroupingFeatures()")
+        self.assertLess(
+            line_bar.index("invalidateGroupingSuggestions();", swap_start),
+            line_bar.index('["x", "x2"]', swap_start),
+        )
+        self.assertIn('el("lineBarSwapFeaturesBtn")?.addEventListener("click", swapLineBarGroupingFeatures);', line_bar)
+        self.assertIn(".line-bar-feature-heading {", styles)
+        self.assertIn(".line-bar-feature-swap {", styles)
+        self.assertIn("stroke-width: 1;", styles)
 
     def test_gbm_parameter_json_is_lightgbm_compatible(self) -> None:
         module = Path("src/py_lucidum/static/app/gbm-feature-parameter-controls.js").resolve().as_uri()

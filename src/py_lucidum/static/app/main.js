@@ -107,6 +107,8 @@
         schema: null,
         x: null,
         xSource: "",
+        x2: null,
+        x2Source: "",
         sort: "alpha",
         lowGroup: "0",
         labels: "none",
@@ -116,8 +118,17 @@
         histogramToolbarCollapsed: true,
         bandWidth: "0",
         quantileMode: "off",
+        bandWidth2: "0",
+        quantileMode2: "off",
+        xAsFactor: false,
+        x2AsFactor: false,
+        tailPercent: "0",
+        tailPercent2: "0",
+        twoFeaturePlotMetric: "resp0",
+        heatmapLabels: "none",
         previousBandWidthsByFeature: {},
         dateBucket: "none",
+        dateBucket2: "none",
         emptyPeriods: "show",
         dateBucketFeature: null,
         dateBucketManualKey: null,
@@ -210,8 +221,15 @@
         bandFeature: null,
         bandSuggestionPendingKey: null,
         bandSuggestionRequestSeq: 0,
+        bandFeature2: null,
+        bandSuggestionPendingKey2: null,
+        bandSuggestionRequestSeq2: 0,
         dateBucketSuggestionPendingKey: null,
         dateBucketSuggestionRequestSeq: 0,
+        dateBucketFeature2: null,
+        dateBucketManualKey2: null,
+        dateBucketSuggestionPendingKey2: null,
+        dateBucketSuggestionRequestSeq2: 0,
         profileRequestSeq: 0,
         profileDetailRequestSeq: 0,
         chartRequestSeq: 0,
@@ -360,6 +378,7 @@
         formatLineLabel,
         formatLineValue,
         formatLineValueForFormat,
+        formatWeightValue,
         formatXLabel,
         formatRowMeta,
         measureToolRender,
@@ -473,6 +492,7 @@
         updateAxisControls: () => lineBarTool.updateAxisControls(),
         refreshActiveTool,
         reloadSchema: reloadSchemaAfterModelMutation,
+        getDenominatorSelection: denominatorSelection,
       });
       const gbmTool = createGbmTool({
         api,
@@ -504,6 +524,7 @@
         refreshActiveTool,
         setGbmModelCount,
         reloadSchema: reloadSchemaAfterModelMutation,
+        getDenominatorSelection: denominatorSelection,
         onExternalModelActivation: (modelKind) => glmTool.handleExternalModelActivation(modelKind),
       });
       const specificationsTool = createSpecificationsTool({
@@ -1061,23 +1082,36 @@
       }
 
       function syncLineBarXFallback() {
-        if (lineBarColumnExists(state.x, state.xSource)) return;
-        const currentFeature = String(state.x || "");
-        if (currentFeature) {
-          const currentSource = state.source || "dataset";
-          const preservedSource = lineBarFeatureSourceForName(currentFeature, currentSource)
-            || lineBarFeatureSourceForName(currentFeature);
+        const previousFirstGrouping = `${state.xSource || ""}\u0000${state.x || ""}`;
+        if (!lineBarColumnExists(state.x, state.xSource)) {
+          const currentFeature = String(state.x || "");
+          let preservedSource = "";
+          if (currentFeature) {
+            const currentSource = state.source || "dataset";
+            preservedSource = lineBarFeatureSourceForName(currentFeature, currentSource)
+              || lineBarFeatureSourceForName(currentFeature);
+          }
           if (preservedSource) {
             if (preservedSource === "dataset") state.source = "dataset";
             state.x = currentFeature;
             state.xSource = preservedSource;
-            return;
+          } else {
+            const first = lineBarFeatureColumns()[0] || null;
+            if (first && lineBarColumnSourceId(first) === "dataset") state.source = "dataset";
+            state.x = first?.name || null;
+            state.xSource = first ? lineBarColumnSourceId(first) : "";
           }
         }
-        const first = lineBarFeatureColumns()[0] || null;
-        if (first && lineBarColumnSourceId(first) === "dataset") state.source = "dataset";
-        state.x = first?.name || null;
-        state.xSource = first ? lineBarColumnSourceId(first) : "";
+        const currentFirstGrouping = `${state.xSource || ""}\u0000${state.x || ""}`;
+        if (currentFirstGrouping !== previousFirstGrouping) state.tailPercent = "0";
+        const secondValid = lineBarColumnExists(state.x2, state.x2Source);
+        const duplicate = String(state.x2 || "") === String(state.x || "")
+          && String(state.x2Source || "") === String(state.xSource || "");
+        if (!secondValid || duplicate) {
+          state.x2 = null;
+          state.x2Source = "";
+          state.tailPercent2 = "0";
+        }
       }
 
       function currentDataSource() {
@@ -1204,23 +1238,26 @@
         const actual = el("actualNumerator")?.value || "";
         if (!state.schema || !actual) return null;
         const actualOption = el("actualNumerator")?.selectedOptions?.[0] || null;
+        const selectedDenominator = denominatorSelection();
+        if (selectedDenominator.unavailable) return null;
         return {
           source: actualOption?.dataset.sourceId || state.source || "dataset",
           actual,
-          denominator: el("denominator")?.value || "__none__",
+          denominator: selectedDenominator.value,
+          denominatorSource: selectedDenominator.sourceId,
           filter: state.activeFilter || "",
         };
       }
 
       function resetMetricSummaryTitles() {
-        renderMetricTitle(el("actualMetricTitle"), "Actual");
-        renderMetricTitle(el("weightMetricTitle"), "Weight", null, formatWeightValue);
+        renderMetricTitle(el("actualMetricTitle"), "Numerator");
+        renderMetricTitle(el("weightMetricTitle"), "Denominator", null, formatWeightValue);
       }
 
       function renderMetricSummary(data) {
         const summaries = Array.isArray(data?.response_summaries) ? data.response_summaries : [];
-        renderMetricTitle(el("actualMetricTitle"), "Actual", summaries[0]?.value);
-        renderMetricTitle(el("weightMetricTitle"), "Weight", data?.denominator?.value, formatWeightValue);
+        renderMetricTitle(el("actualMetricTitle"), "Numerator", summaries[0]?.value);
+        renderMetricTitle(el("weightMetricTitle"), "Denominator", data?.denominator?.value, formatWeightValue);
       }
 
       function cancelMetricSummaryRequests() {
@@ -2290,7 +2327,7 @@
       }
 
       function sortedDenominatorColumns() {
-        return sortedMetricColumns(numericColumns().map((column) => ({ ...column, label: column.name })));
+        return sortedMetricColumns(numericColumnsForSource("dataset").map((column) => ({ ...column, label: column.name })));
       }
 
       function setActualSelection(value, sourceId = "") {
@@ -2425,11 +2462,131 @@
         return option.value;
       }
 
-      function fillDenominatorSelect(select) {
+      function activeDenominatorPredictionColumns() {
+        return activeModelSources(["glm_predictions", "gbm_predictions"]).flatMap((source) => {
+          const primaryName = source.kind === "glm_predictions" ? "glm_prediction" : "gbm_prediction";
+          return numericColumnsForSource(source.id)
+            .filter((column) => column.name === primaryName)
+            .map((column) => ({
+              ...column,
+              label: `${source.kind === "glm_predictions" ? "GLM" : "GBM"} · ${metricColumnLabel(column)}`,
+              source_id: source.id,
+            }));
+        });
+      }
+
+      function denominatorSelectionFromOption(option) {
+        const value = option?.value || "__none__";
+        return {
+          value,
+          sourceId: option?.dataset.sourceId || "dataset",
+          metricKind: option?.dataset.metricKind || "dataset",
+          modelKind: option?.dataset.modelKind || "",
+          unavailable: option?.dataset.unavailable === "true",
+        };
+      }
+
+      function denominatorSelection() {
+        return denominatorSelectionFromOption(el("denominator")?.selectedOptions?.[0] || null);
+      }
+
+      function denominatorOption(value, sourceId = "") {
+        const name = String(value || "__none__");
+        const source = String(sourceId || "");
+        const options = Array.from(el("denominator")?.options || []);
+        return options.find((option) => (
+          option.value === name
+          && (!source || option.dataset.sourceId === source)
+        )) || null;
+      }
+
+      function appendUnavailableDenominator(select, selection) {
+        const modelKind = selection.modelKind
+          || modelKindForPredictionSource(selection.sourceId)
+          || modelKindForPredictionColumn(selection.value);
+        if (!modelKind) return null;
+        const group = document.createElement("optgroup");
+        group.label = "Model predictions";
+        const label = `${modelKind.toUpperCase()} · ${selection.value} (no active model)`;
+        const option = new Option(label, selection.value);
+        option.dataset.sourceId = selection.sourceId || "";
+        option.dataset.metricKind = "prediction";
+        option.dataset.modelKind = modelKind;
+        option.dataset.unavailable = "true";
+        option.disabled = true;
+        option.selected = true;
+        group.append(option);
+        select.append(group);
+        return option;
+      }
+
+      function setDenominatorSelection(selection, options = {}) {
+        const requested = typeof selection === "string"
+          ? { value: selection, sourceId: options.sourceId || "dataset" }
+          : { ...(selection || {}) };
+        const value = String(requested.value || "__none__");
+        if (value === "__none__") {
+          const noneOption = denominatorOption("__none__", "dataset");
+          if (noneOption) noneOption.selected = true;
+          return Boolean(noneOption);
+        }
+        const requestedSource = String(requested.sourceId || "dataset");
+        const modelKind = requested.modelKind
+          || modelKindForPredictionSource(requestedSource)
+          || (requestedSource !== "dataset" ? modelKindForPredictionColumn(value) : "");
+        const resolvedSource = modelKind
+          ? activePredictionSourceForModelKind(modelKind)?.id || requestedSource
+          : requestedSource;
+        const option = denominatorOption(value, resolvedSource);
+        if (option) {
+          option.selected = true;
+          return true;
+        }
+        if (modelKind && options.preserveUnavailable !== false) {
+          return Boolean(appendUnavailableDenominator(el("denominator"), {
+            value,
+            sourceId: resolvedSource,
+            modelKind,
+          }));
+        }
+        return false;
+      }
+
+      function fillDenominatorSelect(select, requestedSelection = null) {
+        const previousSelection = requestedSelection || denominatorSelection();
         select.innerHTML = "";
-        select.append(new Option("Average row value", "__none__"));
+        const noneOption = new Option("Average row value", "__none__");
+        noneOption.dataset.sourceId = "dataset";
+        noneOption.dataset.metricKind = "dataset";
+        select.append(noneOption);
+        const datasetGroup = document.createElement("optgroup");
+        datasetGroup.label = "Dataset features";
         for (const col of sortedDenominatorColumns()) {
-          select.append(new Option(col.name, col.name));
+          const option = new Option(col.name, col.name);
+          option.dataset.sourceId = "dataset";
+          option.dataset.metricKind = "dataset";
+          datasetGroup.append(option);
+        }
+        select.append(datasetGroup);
+        const predictionGroup = document.createElement("optgroup");
+        predictionGroup.label = "Model predictions";
+        const predictionColumns = activeDenominatorPredictionColumns();
+        if (!predictionColumns.length) {
+          const option = new Option(modelPredictionSourcesExist() ? "No predictions for selected model" : "No trained models", "");
+          option.disabled = true;
+          predictionGroup.append(option);
+        } else {
+          for (const column of sortedMetricColumns(predictionColumns)) {
+            const option = new Option(metricColumnLabel(column), column.name);
+            option.dataset.sourceId = column.source_id;
+            option.dataset.metricKind = "prediction";
+            option.dataset.modelKind = modelKindForPredictionColumn(column.name);
+            predictionGroup.append(option);
+          }
+        }
+        select.append(predictionGroup);
+        if (!setDenominatorSelection(previousSelection, { preserveUnavailable: true })) {
+          noneOption.selected = true;
         }
       }
 
@@ -2542,7 +2699,7 @@
         if (!expectedSnapshot.length && previousExpected) {
           expectedSnapshot.push({ value: previousExpected, sourceId: previousExpectedSource });
         }
-        const previousDenominator = el("denominator").value;
+        const previousDenominator = denominatorSelection();
         syncLineBarXFallback();
         fillMetricSelect(el("actualNumerator"));
         if (previousActual && !setActualSelection(previousActual, previousActualSource)) {
@@ -2551,7 +2708,7 @@
         fillMetricSelect(el("expectedNumerator"), true);
         fillDenominatorSelect(el("denominator"));
         setExpectedSelections(expectedSnapshot, { allowAnySource: true });
-        el("denominator").value = numericColumnExists(previousDenominator) ? previousDenominator : "__none__";
+        setDenominatorSelection(previousDenominator, { preserveUnavailable: true });
         syncLineBarXFallback();
         lineBarTool.renderExpectedNumerators();
         lineBarTool.renderFeatures();
@@ -2564,7 +2721,7 @@
         const previousActual = el("actualNumerator").value;
         const previousActualSource = actualSelectionSourceId();
         const previousExpectedSelections = expectedSelectionsSnapshot();
-        const previousDenominator = el("denominator").value;
+        const previousDenominator = denominatorSelection();
         state.schema = await api("/api/schema");
         state.datasetViewerColumnCount = null;
         renderSidebarVersion();
@@ -2585,12 +2742,12 @@
         syncLineBarXFallback();
         fillMetricSelect(el("actualNumerator"));
         fillMetricSelect(el("expectedNumerator"), true);
-        fillDenominatorSelect(el("denominator"));
+        fillDenominatorSelect(el("denominator"), previousDenominator);
         if (!setActualSelection(previousActual, previousActualSource)) {
           el("actualNumerator").value = numericColumnExists(previousActual) ? previousActual : numericColumns()[0]?.name || "";
         }
         restoreExpectedSelectionsAfterModelMutation(previousExpectedSelections, modelKind);
-        el("denominator").value = numericColumnExists(previousDenominator) ? previousDenominator : "__none__";
+        const denominatorRestored = setDenominatorSelection(previousDenominator, { preserveUnavailable: true });
         syncLineBarXFallback();
         lineBarTool.renderExpectedNumerators();
         lineBarTool.renderFeatures();
@@ -2598,6 +2755,9 @@
         syncKpiSelectionFromMetrics();
         renderKpis();
         renderFavourites();
+        if (denominatorRestored && denominatorSelection().unavailable) {
+          setStatus(`The selected ${denominatorSelection().modelKind.toUpperCase()} prediction Denominator is unavailable because there is no active model.`, true);
+        }
         await refreshMetricSummary({ force: true });
       }
 
@@ -2682,6 +2842,7 @@
 
       function selectedKpiForCurrentMetric() {
         const actual = el("actualNumerator").value;
+        if (denominatorSelection().sourceId !== "dataset") return null;
         const denominator = normaliseKpiDenominator(el("denominator").value);
         return availableKpis().find((kpi) => kpi.actual === actual && kpi.denominator === denominator) || null;
       }
@@ -2908,10 +3069,10 @@
         });
       }
 
-      function applyMetricValues(actualValue, actualSource, denominatorValue) {
+      function applyMetricValues(actualValue, actualSource, denominatorValue, denominatorSource = "dataset") {
         const previousActual = el("actualNumerator").value;
         const previousActualSource = actualSelectionSourceId();
-        const previousDenominator = normaliseKpiDenominator(el("denominator").value);
+        const previousDenominator = denominatorSelection();
         const resolvedActualSource = resolveFavouriteSourceId(actualValue, actualSource || state.source || "dataset");
         if (!setActualSelection(actualValue, resolvedActualSource)) {
           if (!setActualSelection(actualValue)) chooseFirstActualSelection();
@@ -2923,11 +3084,18 @@
           syncControlsForSourceChange({ actualValue: selectedActual, actualSource: selectedActualSource });
         }
         const nextDenominator = normaliseKpiDenominator(denominatorValue);
-        el("denominator").value = numericColumnExists(nextDenominator) ? nextDenominator : "__none__";
+        const resolvedDenominatorSource = resolveFavouriteSourceId(nextDenominator, denominatorSource || "dataset");
+        if (!setDenominatorSelection({
+          value: nextDenominator,
+          sourceId: resolvedDenominatorSource,
+        }, { preserveUnavailable: true })) {
+          setDenominatorSelection("__none__");
+        }
         syncKpiSelectionFromMetrics();
         return previousActual !== el("actualNumerator").value
           || previousActualSource !== actualSelectionSourceId()
-          || previousDenominator !== normaliseKpiDenominator(el("denominator").value);
+          || previousDenominator.value !== denominatorSelection().value
+          || previousDenominator.sourceId !== denominatorSelection().sourceId;
       }
 
       function selectKpi(kpi) {
@@ -2944,7 +3112,12 @@
       function applyFavouriteMetricState(favourite) {
         const view = favourite?.view || {};
         const actual = view.actual && typeof view.actual === "object" ? view.actual : {};
-        return applyMetricValues(actual.value, actual.sourceId || view.source || "dataset", view.denominator || "__none__");
+        return applyMetricValues(
+          actual.value,
+          actual.sourceId || view.source || "dataset",
+          view.denominator || "__none__",
+          view.denominatorSource || "dataset",
+        );
       }
 
       function applyFavouriteFilterState(view) {
@@ -3852,6 +4025,7 @@
             metricKind: actualOption?.dataset.metricKind || "metric",
           },
           denominator: el("denominator").value || "__none__",
+          denominatorSource: denominatorSelection().sourceId,
           kpi: currentKpiSnapshot(),
           filter: state.activeFilter || "",
           filterSelectionMode: state.filterSelectionMode,
@@ -3905,6 +4079,7 @@
         const scope = normaliseFavouriteScopeValue(options.scope);
         const view = {
           ...captureMetricFilterFavouriteView(scope),
+          version: 2,
           source: state.source || "dataset",
           x: state.x || "",
           xSource: state.xSource || "",
@@ -3922,6 +4097,29 @@
           featureSort: state.featureSort,
           expectedSort: state.expectedSort,
           expectedSelections: expectedSelectionsSnapshot(),
+          groupings: [
+            {
+              feature: state.x || "",
+              source: state.xSource || state.source || "dataset",
+              bandWidth: state.bandWidth,
+              quantileMode: state.quantileMode,
+              dateBucket: state.dateBucket,
+              asFactor: Boolean(state.xAsFactor),
+              tailPercent: state.tailPercent,
+            },
+            ...(state.x2 ? [{
+              feature: state.x2,
+              source: state.x2Source || state.source || "dataset",
+              bandWidth: state.bandWidth2,
+              quantileMode: state.quantileMode2,
+              dateBucket: state.dateBucket2,
+              asFactor: Boolean(state.x2AsFactor),
+              tailPercent: state.tailPercent2,
+            }] : []),
+          ],
+          tailPercent: state.tailPercent,
+          plotMetric: state.twoFeaturePlotMetric,
+          heatmapLabels: state.heatmapLabels,
         };
         if (scope === "map_view") {
           view.map = ukMapTool.captureFavouriteState();
@@ -3974,6 +4172,13 @@
         state.dateBucketManualKey = state.dateBucketFeature;
         state.bandSuggestionPendingKey = null;
         state.dateBucketSuggestionPendingKey = null;
+        const sourceId2 = state.x2Source || state.source || "dataset";
+        const feature2 = state.x2 || "";
+        state.bandFeature2 = JSON.stringify([sourceId2, feature2]);
+        state.dateBucketFeature2 = JSON.stringify([sourceId2, feature2]);
+        state.dateBucketManualKey2 = state.dateBucketFeature2;
+        state.bandSuggestionPendingKey2 = null;
+        state.dateBucketSuggestionPendingKey2 = null;
       }
 
       async function applyLineBarFavouriteView(favourite, options = {}) {
@@ -3984,15 +4189,52 @@
         const view = favourite?.view || {};
         state.activeLineBarFavouriteId = favourite?.id || "";
         state.source = resolveFavouriteSourceId("", view.source || "dataset") || "dataset";
-        state.x = String(view.x || state.x || "");
-        state.xSource = resolveFavouriteSourceId(state.x, view.xSource || state.source || "dataset") || state.source || "dataset";
+        const groupingViews = Array.isArray(view.groupings) && view.groupings.length
+          ? view.groupings
+          : [{
+              feature: view.x,
+              source: view.xSource,
+              bandWidth: view.bandWidth,
+              quantileMode: view.quantileMode,
+              dateBucket: view.dateBucket,
+              asFactor: false,
+            }];
+        const firstGrouping = groupingViews[0] || {};
+        const secondGrouping = groupingViews[1] || null;
+        state.x = String(firstGrouping.feature || view.x || state.x || "");
+        state.xSource = resolveFavouriteSourceId(
+          state.x,
+          firstGrouping.source || view.xSource || state.source || "dataset",
+        ) || state.source || "dataset";
+        const secondFeature = secondGrouping ? String(secondGrouping.feature || "") : "";
+        const secondSource = secondFeature
+          ? resolveFavouriteSourceId(secondFeature, secondGrouping.source || state.source || "dataset")
+          : "";
+        state.x2 = secondFeature && lineBarColumnExists(secondFeature, secondSource)
+          ? secondFeature
+          : null;
+        state.x2Source = state.x2 ? secondSource : "";
         state.view = view.view === "table" ? "table" : "chart";
         state.sort = String(view.sort || "alpha");
         state.lowGroup = String(view.lowGroup || "0");
         state.labels = String(view.labels || "none");
-        state.bandWidth = String(view.bandWidth ?? "0");
-        state.quantileMode = view.quantileMode === "quantile" ? "quantile" : "off";
-        state.dateBucket = String(view.dateBucket || "none");
+        state.bandWidth = String(firstGrouping.bandWidth ?? view.bandWidth ?? "0");
+        state.quantileMode = firstGrouping.quantileMode === "quantile" ? "quantile" : "off";
+        state.dateBucket = String(firstGrouping.dateBucket || view.dateBucket || "none");
+        state.xAsFactor = Boolean(firstGrouping.asFactor);
+        state.bandWidth2 = String(secondGrouping?.bandWidth ?? "0");
+        state.quantileMode2 = secondGrouping?.quantileMode === "quantile" ? "quantile" : "off";
+        state.dateBucket2 = String(secondGrouping?.dateBucket || "none");
+        state.x2AsFactor = Boolean(secondGrouping?.asFactor);
+        const legacyTailPercent = String(view.tailPercent ?? "0");
+        state.tailPercent = String(firstGrouping.tailPercent ?? legacyTailPercent);
+        state.tailPercent2 = state.x2
+          ? String(secondGrouping?.tailPercent ?? legacyTailPercent)
+          : "0";
+        state.twoFeaturePlotMetric = String(view.plotMetric || "resp0");
+        state.heatmapLabels = ["actual", "weight", "both"].includes(String(view.heatmapLabels || "").toLowerCase())
+          ? String(view.heatmapLabels).toLowerCase()
+          : "none";
         state.emptyPeriods = view.emptyPeriods === "skip" ? "skip" : "show";
         state.transform = String(view.transform || "none");
         state.sigma = String(view.sigma ?? "0");
@@ -4018,7 +4260,12 @@
         const expectedSelections = Array.isArray(view.expectedSelections) ? view.expectedSelections : [];
         setExpectedSelections(expectedSelections, { allowAnySource: true });
         const denominator = String(view.denominator || "__none__");
-        el("denominator").value = numericColumnExists(denominator) ? denominator : "__none__";
+        if (!setDenominatorSelection({
+          value: denominator,
+          sourceId: view.denominatorSource || "dataset",
+        }, { preserveUnavailable: true })) {
+          setDenominatorSelection("__none__");
+        }
         syncKpiSelectionFromMetrics();
         syncLineBarXFallback();
         setLineBarManualGroupingKeys();
@@ -4054,6 +4301,10 @@
         } else {
           syncLineBarXFallback();
         }
+        state.x2 = null;
+        state.x2Source = "";
+        state.tailPercent = "0";
+        state.tailPercent2 = "0";
         fillMetricSelect(el("actualNumerator"));
         fillMetricSelect(el("expectedNumerator"), true);
         fillDenominatorSelect(el("denominator"));
@@ -4069,7 +4320,12 @@
           { value: requestedExpected, sourceId: "" },
           { value: requestedExpected2, sourceId: "" },
         ]);
-        el("denominator").value = numericColumnExists(requestedDenominator) ? requestedDenominator : "__none__";
+        if (!setDenominatorSelection({
+          value: requestedDenominator,
+          sourceId: "dataset",
+        }, { preserveUnavailable: false })) {
+          setDenominatorSelection("__none__");
+        }
         applyInitialKpiDefault();
       }
 
@@ -4078,7 +4334,7 @@
         const firstKpi = availableKpis()[0];
         if (!firstKpi) return;
         el("actualNumerator").value = firstKpi.actual;
-        el("denominator").value = firstKpi.denominator;
+        setDenominatorSelection({ value: firstKpi.denominator, sourceId: "dataset" });
       }
 
       function applyFilter() {
@@ -4527,6 +4783,8 @@
         });
         el("denominator").addEventListener("change", () => {
           syncKpiSelectionFromMetrics();
+          glmTool.syncDenominatorBuildState();
+          gbmTool.syncDenominatorBuildState();
           clearActiveFavouriteSelectionForScope("metrics");
           refreshMetricSummary();
           refreshActiveToolForMetricChange();

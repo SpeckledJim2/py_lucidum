@@ -1,5 +1,10 @@
 import { loadTabulator } from "./shared/tabulator.js";
 import { bindSettingsStripOverflowCue } from "./shared/settings-strip.js";
+import { ensureEchartsGl } from "./shared/echarts-gl.js";
+import {
+  twoFeatureChartOption,
+  twoFeatureHeatmapLabelConfig,
+} from "./line-bar-two-feature-chart.js";
 
 const LINE_BAR_SPECIAL_COLUMN_NAMES = [
   "gbm_to_glm_ratio",
@@ -24,6 +29,7 @@ export function createLineBarTool({
   formatLineLabel,
   formatLineValue,
   formatLineValueForFormat = formatLineValue,
+  formatWeightValue = formatNumber,
   formatXLabel,
   formatRowMeta,
   measureToolRender,
@@ -57,6 +63,7 @@ export function createLineBarTool({
   const TABLE_PAGE_SIZE = 10000;
   const TABLE_SEARCH_DEBOUNCE_MS = 250;
   const LABEL_DENSITY_LIMIT = 200;
+  const HEATMAP_LABEL_MODES = new Set(["none", "actual", "weight", "both"]);
   const DATE_AXIS_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const DATE_AXIS_WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   const DATE_AXIS_FONT_SIZES = [10, 9, 8, 7];
@@ -89,7 +96,9 @@ export function createLineBarTool({
   ];
   const SHAP_LINE_COLOR = "#d13f3f";
   const GLM_LINE_COLOR = "#1f7a8c";
-  const chart = echartsImpl.init(el("chart"));
+  let chart = echartsImpl.init(el("chart"));
+  let chartSupportsSurface = false;
+  let currentHeatmapLabelConfig = null;
   let featureImportanceData = null;
   let featureImportanceKey = "";
   let featureImportancePendingKey = "";
@@ -117,6 +126,33 @@ export function createLineBarTool({
 
   function isDateKind(kind) {
     return kind === "date" || kind === "datetime";
+  }
+
+  function hasTwoFeatures() {
+    return Boolean(state.x && state.x2);
+  }
+
+  function selectedGroupingColumn(index) {
+    if (index === 0) return selectedColumn();
+    const sourceId = state.x2Source || state.source || "dataset";
+    const columns = sourceColumns();
+    return columns.find((column) => (
+      column.name === state.x2 && (column.source_id || state.source || "dataset") === sourceId
+    )) || columns.find((column) => column.name === state.x2) || null;
+  }
+
+  function groupingIdentity(feature, sourceId) {
+    return `${sourceId || "dataset"}\u0000${feature || ""}`;
+  }
+
+  function currentGroupingIdentity(index) {
+    return index === 0
+      ? groupingIdentity(state.x, state.xSource || state.source || "dataset")
+      : groupingIdentity(state.x2, state.x2Source || state.source || "dataset");
+  }
+
+  function isSelectedGrouping(feature, sourceId, index) {
+    return currentGroupingIdentity(index) === groupingIdentity(feature, sourceId);
   }
 
   function isLineBarSpecialColumn(column) {
@@ -167,8 +203,19 @@ export function createLineBarTool({
     state.source = targetSource;
     state.x = name;
     state.xSource = targetSource;
+    state.x2 = null;
+    state.x2Source = "";
+    state.xAsFactor = false;
+    state.x2AsFactor = false;
+    state.tailPercent = "0";
+    state.tailPercent2 = "0";
     state.bandFeature = null;
+    state.bandFeature2 = null;
+    state.bandSuggestionPendingKey2 = null;
     resetDateBucketSuggestionState();
+    state.dateBucketFeature2 = null;
+    state.dateBucketManualKey2 = null;
+    state.dateBucketSuggestionPendingKey2 = null;
     renderFeatures();
     renderExpectedNumerators();
     updateAxisControls();
@@ -407,7 +454,7 @@ export function createLineBarTool({
       } else {
         syncBandingControl();
       }
-      if (state.tool === "line_bar") refreshChart({ force: true });
+      if (state.tool === "line_bar") refreshGroupingData({ force: true });
     } catch (error) {
       if (requestSeq !== state.bandSuggestionRequestSeq || state.bandSuggestionPendingKey !== bandFeatureKey) return;
       if (currentBandFeatureKey() !== bandFeatureKey) return;
@@ -417,7 +464,7 @@ export function createLineBarTool({
       syncBandingControl();
       const warning = `Banding estimate failed; using ${state.bandWidth}. ${error.message}`;
       if (state.tool === "line_bar") {
-        refreshChart({ force: true }).then(() => setStatus(warning, false));
+        refreshGroupingData({ force: true }).then(() => setStatus(warning, false));
       } else {
         setStatus(warning, false);
       }
@@ -449,7 +496,7 @@ export function createLineBarTool({
       state.dateBucketFeature = dateBucketKey;
       clearPendingDateBucketSuggestion();
       syncDateBucketControl();
-      if (state.tool === "line_bar") refreshChart({ force: true });
+      if (state.tool === "line_bar") refreshGroupingData({ force: true });
     } catch (error) {
       if (requestSeq !== state.dateBucketSuggestionRequestSeq || state.dateBucketSuggestionPendingKey !== dateBucketKey) return;
       if (currentDateBucketFeatureKey() !== dateBucketKey || state.dateBucketManualKey === dateBucketKey) return;
@@ -459,7 +506,121 @@ export function createLineBarTool({
       syncDateBucketControl();
       const warning = `Date bucket estimate failed; using Year. ${error.message}`;
       if (state.tool === "line_bar") {
-        refreshChart({ force: true }).then(() => setStatus(warning, false));
+        refreshGroupingData({ force: true }).then(() => setStatus(warning, false));
+      } else {
+        setStatus(warning, false);
+      }
+    }
+  }
+
+  function currentSecondBandFeatureKey() {
+    const sourceId = selectedGroupingColumn(1)?.source_id || state.x2Source || state.source || "dataset";
+    return JSON.stringify([sourceId, state.x2 || ""]);
+  }
+
+  function currentSecondDateBucketFeatureKey() {
+    const sourceId = selectedGroupingColumn(1)?.source_id || state.x2Source || state.source || "dataset";
+    return JSON.stringify([sourceId, state.x2 || ""]);
+  }
+
+  function clearPendingSecondBandSuggestion() {
+    state.bandSuggestionPendingKey2 = null;
+  }
+
+  function clearPendingSecondDateBucketSuggestion() {
+    state.dateBucketSuggestionPendingKey2 = null;
+  }
+
+  async function requestBandSuggestionForSecondColumn(bandFeatureKey = currentSecondBandFeatureKey()) {
+    if (!state.schema || !state.x2 || state.bandSuggestionPendingKey2 === bandFeatureKey) return;
+    const column = selectedGroupingColumn(1);
+    if (!isNumericKind(column?.kind)) return;
+    if (state.quantileMode2 === "quantile") {
+      state.bandFeature2 = bandFeatureKey;
+      clearPendingSecondBandSuggestion();
+      renderTwoFeatureControls();
+      return;
+    }
+    const requestSeq = (state.bandSuggestionRequestSeq2 || 0) + 1;
+    state.bandSuggestionRequestSeq2 = requestSeq;
+    state.bandSuggestionPendingKey2 = bandFeatureKey;
+    renderTwoFeatureControls();
+    try {
+      const sourceId = column?.source_id || state.x2Source || state.source || "dataset";
+      const baseSource = state.source || "dataset";
+      const requestPayload = {
+        source: baseSource,
+        feature: state.x2,
+        filter: state.activeFilter,
+        responses: currentResponses(),
+      };
+      if (sourceId && (sourceId !== baseSource || isModelPredictionColumn(column))) {
+        requestPayload.xSource = sourceId;
+      }
+      const data = await api("/api/banding/suggestion", {
+        method: "POST",
+        body: JSON.stringify(requestPayload),
+      });
+      if (requestSeq !== state.bandSuggestionRequestSeq2 || state.bandSuggestionPendingKey2 !== bandFeatureKey) return;
+      if (currentSecondBandFeatureKey() !== bandFeatureKey) return;
+      const formatted = formatBandWidth(data.band_suggestion);
+      state.bandWidth2 = formatted === "0" ? "1" : formatted;
+      state.bandFeature2 = bandFeatureKey;
+      clearPendingSecondBandSuggestion();
+      renderTwoFeatureControls();
+      if (state.tool === "line_bar") refreshGroupingData({ force: true });
+    } catch (error) {
+      if (requestSeq !== state.bandSuggestionRequestSeq2 || state.bandSuggestionPendingKey2 !== bandFeatureKey) return;
+      if (currentSecondBandFeatureKey() !== bandFeatureKey) return;
+      state.bandWidth2 = "1";
+      state.bandFeature2 = bandFeatureKey;
+      clearPendingSecondBandSuggestion();
+      renderTwoFeatureControls();
+      const warning = `Feature 2 banding estimate failed; using 1. ${error.message}`;
+      if (state.tool === "line_bar") {
+        refreshGroupingData({ force: true }).then(() => setStatus(warning, false));
+      } else {
+        setStatus(warning, false);
+      }
+    }
+  }
+
+  async function requestDateBucketSuggestionForSecondColumn(dateBucketKey = currentSecondDateBucketFeatureKey()) {
+    if (!state.schema || !state.x2 || state.dateBucketSuggestionPendingKey2 === dateBucketKey) return;
+    const column = selectedGroupingColumn(1);
+    if (!isDateKind(column?.kind) || state.dateBucketManualKey2 === dateBucketKey) return;
+    const requestSeq = (state.dateBucketSuggestionRequestSeq2 || 0) + 1;
+    state.dateBucketSuggestionRequestSeq2 = requestSeq;
+    state.dateBucketSuggestionPendingKey2 = dateBucketKey;
+    renderTwoFeatureControls();
+    try {
+      const sourceId = column?.source_id || state.x2Source || state.source || "dataset";
+      const data = await api("/api/date-bucket/suggestion", {
+        method: "POST",
+        body: JSON.stringify({
+          source: sourceId,
+          xSource: sourceId,
+          feature: state.x2,
+          filter: state.activeFilter,
+        }),
+      });
+      if (requestSeq !== state.dateBucketSuggestionRequestSeq2 || state.dateBucketSuggestionPendingKey2 !== dateBucketKey) return;
+      if (currentSecondDateBucketFeatureKey() !== dateBucketKey || state.dateBucketManualKey2 === dateBucketKey) return;
+      state.dateBucket2 = normaliseDateBucket(data.date_bucket);
+      state.dateBucketFeature2 = dateBucketKey;
+      clearPendingSecondDateBucketSuggestion();
+      renderTwoFeatureControls();
+      if (state.tool === "line_bar") refreshGroupingData({ force: true });
+    } catch (error) {
+      if (requestSeq !== state.dateBucketSuggestionRequestSeq2 || state.dateBucketSuggestionPendingKey2 !== dateBucketKey) return;
+      if (currentSecondDateBucketFeatureKey() !== dateBucketKey || state.dateBucketManualKey2 === dateBucketKey) return;
+      state.dateBucket2 = "year";
+      state.dateBucketFeature2 = dateBucketKey;
+      clearPendingSecondDateBucketSuggestion();
+      renderTwoFeatureControls();
+      const warning = `Feature 2 date bucket estimate failed; using Year. ${error.message}`;
+      if (state.tool === "line_bar") {
+        refreshGroupingData({ force: true }).then(() => setStatus(warning, false));
       } else {
         setStatus(warning, false);
       }
@@ -482,7 +643,224 @@ export function createLineBarTool({
     refreshChart();
   }
 
+  function twoFeatureBandButtons(index) {
+    const value = String(index === 0 ? state.bandWidth : state.bandWidth2);
+    const buttons = [
+      `<button type="button" data-two-action="band-down" data-feature-index="${index}" data-stable-label="&lt;">&lt;</button>`,
+      ...["0", "0.1", "1", "5", "10"].map((candidate) => (
+        `<button type="button" data-two-control="bandWidth" data-feature-index="${index}" data-value="${candidate}" data-stable-label="${candidate === "0" ? "-" : candidate}" class="${candidate === value ? "active" : ""}">${candidate === "0" ? "-" : candidate}</button>`
+      )),
+      `<button type="button" data-two-action="band-up" data-feature-index="${index}" data-stable-label="&gt;">&gt;</button>`,
+    ];
+    return buttons.join("");
+  }
+
+  function twoFeatureDateButtons(index) {
+    const value = normaliseDateBucket(index === 0 ? state.dateBucket : state.dateBucket2);
+    return ["none", "hour", "day", "week", "month", "year"].map((candidate) => (
+      `<button type="button" data-two-control="dateBucket" data-feature-index="${index}" data-value="${candidate}" class="${candidate === value ? "active" : ""}">${candidate === "none" ? "-" : candidate[0].toUpperCase() + candidate.slice(1)}</button>`
+    )).join("");
+  }
+
+  function currentTwoFeaturePlotType() {
+    const continuousCount = [0, 1].filter(twoFeatureGroupingIsContinuous).length;
+    if (continuousCount === 2) return "surface";
+    if (continuousCount === 1) return "lines";
+    return "heatmap";
+  }
+
+  function twoFeatureGroupingIsContinuous(index) {
+    const column = selectedGroupingColumn(index);
+    const quantileMode = index === 0 ? state.quantileMode : state.quantileMode2;
+    const asFactor = index === 0 ? state.xAsFactor : state.x2AsFactor;
+    if (isDateKind(column?.kind)) return !asFactor;
+    return isNumericKind(column?.kind) && quantileMode !== "quantile" && !asFactor;
+  }
+
+  function validTwoFeatureMetricKeys(plotType = currentTwoFeaturePlotType()) {
+    const keys = currentResponses().map((_, index) => `resp${index}`);
+    if (plotType !== "lines") keys.push("volume");
+    return keys;
+  }
+
+  function normaliseTwoFeaturePlotMetric(plotType = currentTwoFeaturePlotType()) {
+    const keys = validTwoFeatureMetricKeys(plotType);
+    if (!keys.includes(state.twoFeaturePlotMetric)) {
+      state.twoFeaturePlotMetric = keys.includes("resp0") ? "resp0" : "volume";
+    }
+    return state.twoFeaturePlotMetric;
+  }
+
+  function twoFeaturePlotChoices(plotType = currentTwoFeaturePlotType()) {
+    const choices = [];
+    if (el("actualNumerator").value) choices.push(["resp0", "Actual"]);
+    expectedSelections().forEach((selection, index) => {
+      choices.push([`resp${choices.length}`, selection.value || `Expected ${index + 1}`]);
+    });
+    if (plotType !== "lines") {
+      const weightLabel = el("denominator").value && el("denominator").value !== "__none__" ? "Weight" : "N";
+      choices.push(["volume", weightLabel]);
+    }
+    return choices;
+  }
+
+  function twoFeaturePlotButtons(plotType = currentTwoFeaturePlotType()) {
+    const current = normaliseTwoFeaturePlotMetric(plotType);
+    const choices = twoFeaturePlotChoices(plotType);
+    return choices.map(([value, label]) => (
+      `<button type="button" data-two-control="plotMetric" data-value="${escapeHtml(value)}" class="${value === current ? "active" : ""}">${escapeHtml(label)}</button>`
+    )).join("");
+  }
+
+  function normaliseHeatmapLabels(value = state.heatmapLabels) {
+    const mode = String(value || "none").toLowerCase();
+    return HEATMAP_LABEL_MODES.has(mode) ? mode : "none";
+  }
+
+  function twoFeatureHeatmapLabelButtons(config = currentHeatmapLabelConfig) {
+    const current = normaliseHeatmapLabels();
+    state.heatmapLabels = current;
+    const availableModes = config?.availableModes || {
+      actual: true,
+      weight: true,
+      both: true,
+    };
+    return [
+      ["none", "-"],
+      ["actual", "Actual"],
+      ["weight", "Weight"],
+      ["both", "Both"],
+    ].filter(([value]) => value === "none" || availableModes[value]).map(([value, label]) => (
+      `<button type="button" data-two-control="heatmapLabels" data-value="${value}" class="${value === current ? "active" : ""}">${label}</button>`
+    )).join("");
+  }
+
+  function twoFeatureGroupingControls(index) {
+    const column = selectedGroupingColumn(index);
+    const numeric = isNumericKind(column?.kind);
+    const date = isDateKind(column?.kind);
+    const bandWidth = index === 0 ? state.bandWidth : state.bandWidth2;
+    const quantileMode = index === 0 ? state.quantileMode : state.quantileMode2;
+    const asFactor = index === 0 ? state.xAsFactor : state.x2AsFactor;
+    const bandPending = index === 0
+      ? state.bandSuggestionPendingKey === currentBandFeatureKey()
+      : state.bandSuggestionPendingKey2 === currentSecondBandFeatureKey();
+    const datePending = index === 0
+      ? state.dateBucketSuggestionPendingKey === currentDateBucketFeatureKey()
+      : state.dateBucketSuggestionPendingKey2 === currentSecondDateBucketFeatureKey();
+    const controls = [];
+    if (numeric) {
+      const display = bandPending ? "estimating..." : (Number(bandWidth) > 0 ? bandWidth : "auto off");
+      controls.push(`
+        <div class="control two-feature-grouping-control" data-feature-index="${index}">
+          <h3>Feature ${index + 1} ${quantileMode === "quantile" ? "quantiles" : "banding"} <span>(${escapeHtml(display)})</span></h3>
+          <div class="segmented">${twoFeatureBandButtons(index)}</div>
+        </div>
+        <div class="control two-feature-grouping-control" data-feature-index="${index}">
+          <h3>Feature ${index + 1} quantile</h3>
+          <div class="segmented">
+            <button type="button" data-two-control="quantileMode" data-feature-index="${index}" data-value="off" class="${quantileMode !== "quantile" ? "active" : ""}">-</button>
+            <button type="button" data-two-control="quantileMode" data-feature-index="${index}" data-value="quantile" class="${quantileMode === "quantile" ? "active" : ""}">Use quantiles</button>
+          </div>
+        </div>
+        <div class="control two-feature-grouping-control" data-feature-index="${index}">
+          <h3>Feature ${index + 1}</h3>
+          <div class="segmented">
+            <button type="button" data-two-action="as-factor" data-feature-index="${index}" class="${asFactor ? "active" : ""}" aria-pressed="${Boolean(asFactor)}">Treat as factor</button>
+          </div>
+        </div>`);
+    } else if (date) {
+      controls.push(`
+        <div class="control two-feature-grouping-control" data-feature-index="${index}">
+          <h3>Feature ${index + 1} date bucket${datePending ? " (estimating...)" : ""}</h3>
+          <div class="segmented">${twoFeatureDateButtons(index)}</div>
+        </div>
+        <div class="control two-feature-grouping-control" data-feature-index="${index}">
+          <h3>Feature ${index + 1}</h3>
+          <div class="segmented">
+            <button type="button" data-two-action="as-factor" data-feature-index="${index}" class="${asFactor ? "active" : ""}" aria-pressed="${Boolean(asFactor)}">Treat as factor</button>
+          </div>
+        </div>`);
+    }
+    const tailEligible = (!numeric && !date)
+      || (numeric && quantileMode !== "quantile" && Number(bandWidth) > 0);
+    if (tailEligible) {
+      const tailKey = twoFeatureStateKey(index, "tailPercent", "tailPercent2");
+      const tailValue = String(state[tailKey] ?? "0");
+      const tailButtons = ["0", "0.1", "0.5", "1", "2", "5"].map((value) => (
+        `<button type="button" data-two-control="tailPercent" data-feature-index="${index}" data-value="${value}" class="${value === tailValue ? "active" : ""}">${value === "0" ? "-" : `${value}%`}</button>`
+      )).join("");
+      controls.push(`
+        <div class="control two-feature-tail-control" data-feature-index="${index}">
+          <h3>Feature ${index + 1} tail grouping</h3>
+          <div class="segmented">${tailButtons}</div>
+        </div>`);
+    }
+    return controls.join("");
+  }
+
+  function renderTwoFeatureControls(
+    plotType = currentTwoFeaturePlotType(),
+    heatmapLabels = currentHeatmapLabelConfig,
+  ) {
+    const container = el("lineBarTwoFeatureControls");
+    if (!container || !hasTwoFeatures()) return;
+    const plotChoices = twoFeaturePlotChoices(plotType);
+    const showPlotControl = plotType !== "lines" || plotChoices.length > 1;
+    const showHeatmapLabelControl = plotType === "heatmap" && Boolean(heatmapLabels?.available);
+    container.innerHTML = `
+      ${showPlotControl ? `<div class="control two-feature-plot-control">
+        <h3>Plot</h3>
+        <div class="segmented">${twoFeaturePlotButtons(plotType)}</div>
+      </div>` : ""}
+      ${showHeatmapLabelControl ? `<div class="control two-feature-label-control">
+        <h3>Labels</h3>
+        <div class="segmented">${twoFeatureHeatmapLabelButtons(heatmapLabels)}</div>
+      </div>` : ""}
+      ${twoFeatureGroupingControls(0)}
+      ${twoFeatureGroupingControls(1)}`;
+  }
+
   function updateAxisControls() {
+    const twoFeatureMode = hasTwoFeatures();
+    el("lineBarSingleFeatureControls")?.classList.toggle("hidden", twoFeatureMode);
+    el("lineBarTwoFeatureControls")?.classList.toggle("hidden", !twoFeatureMode);
+    if (twoFeatureMode) {
+      const firstColumn = selectedGroupingColumn(0);
+      const secondColumn = selectedGroupingColumn(1);
+      if (!isNumericKind(firstColumn?.kind)) {
+        state.quantileMode = "off";
+      }
+      if (!isNumericKind(firstColumn?.kind) && !isDateKind(firstColumn?.kind)) {
+        state.xAsFactor = false;
+      }
+      if (!isNumericKind(secondColumn?.kind)) {
+        state.quantileMode2 = "off";
+      }
+      if (!isNumericKind(secondColumn?.kind) && !isDateKind(secondColumn?.kind)) {
+        state.x2AsFactor = false;
+      }
+      if (!isDateKind(firstColumn?.kind)) state.dateBucket = "none";
+      if (!isDateKind(secondColumn?.kind)) state.dateBucket2 = "none";
+      renderTwoFeatureControls();
+      const firstBandKey = currentBandFeatureKey();
+      const secondBandKey = currentSecondBandFeatureKey();
+      const firstDateKey = currentDateBucketFeatureKey();
+      const secondDateKey = currentSecondDateBucketFeatureKey();
+      if (isNumericKind(firstColumn?.kind) && state.quantileMode !== "quantile" && state.tool === "line_bar" && state.bandFeature !== firstBandKey) {
+        requestBandSuggestionForSelectedColumn(firstBandKey);
+      }
+      if (isNumericKind(secondColumn?.kind) && state.quantileMode2 !== "quantile" && state.tool === "line_bar" && state.bandFeature2 !== secondBandKey) {
+        requestBandSuggestionForSecondColumn(secondBandKey);
+      }
+      if (isDateKind(firstColumn?.kind) && state.tool === "line_bar" && state.dateBucketManualKey !== firstDateKey && state.dateBucketFeature !== firstDateKey) {
+        requestDateBucketSuggestionForSelectedColumn(firstDateKey);
+      }
+      if (isDateKind(secondColumn?.kind) && state.tool === "line_bar" && state.dateBucketManualKey2 !== secondDateKey && state.dateBucketFeature2 !== secondDateKey) {
+        requestDateBucketSuggestionForSecondColumn(secondDateKey);
+      }
+      return;
+    }
     const kind = selectedColumn()?.kind;
     const isDate = kind === "date" || kind === "datetime";
     const isNumeric = isNumericKind(kind);
@@ -711,6 +1089,7 @@ export function createLineBarTool({
   }
 
   function renderFeatures(options = {}) {
+    syncFeatureSwapButton();
     const query = el("featureSearch").value.trim().toLowerCase();
     const list = el("featureList");
     const scrollPosition = captureLineBarPickerScroll(list, options.preserveScroll);
@@ -754,26 +1133,12 @@ export function createLineBarTool({
 
   function addLineBarFeatureButton(list, col, extraClass = "") {
     const sourceId = col.source_id || state.source || "dataset";
-    const active = col.name === state.x && (!state.xSource || state.xSource === sourceId);
-    const isRawDatasetFeature = sourceId === "dataset" && !isModelPredictionColumn(col) && !isGbmGlmRatioColumn(col);
     addFeatureButton(list, {
       label: col.name,
       detail: col.kind,
       sourceId,
       extraClass,
-      active,
-      onClick: () => {
-        const previousDateBucketKey = currentDateBucketFeatureKey();
-        const changed = state.x !== col.name || state.xSource !== sourceId;
-        if (isRawDatasetFeature) state.source = "dataset";
-        state.x = col.name;
-        state.xSource = sourceId;
-        resetDateBucketSuggestionIfKeyChanged(previousDateBucketKey);
-        renderFeatures({ preserveScroll: true });
-        updateAxisControls();
-        if (changed) clearActiveFavouriteSelection();
-        refreshChart();
-      },
+      onClick: (options) => toggleLineBarGroupingFeature(col, options),
     });
   }
 
@@ -828,7 +1193,7 @@ export function createLineBarTool({
         detail: featureImportanceDetail(row, model?.metric),
         sourceId: "dataset",
         extraClass: "line-bar-importance-row",
-        onClick: () => selectDatasetFeature(column.name),
+        onClick: (options) => selectDatasetFeature(column.name, options),
       });
     }
     return true;
@@ -844,7 +1209,7 @@ export function createLineBarTool({
         detail: row.kind || "",
         sourceId: "dataset",
         extraClass: "line-bar-not-used-row",
-        onClick: () => selectDatasetFeature(row.feature),
+        onClick: (options) => selectDatasetFeature(row.feature, options),
       });
     }
   }
@@ -966,15 +1331,25 @@ export function createLineBarTool({
 
   function addFeatureButton(list, { label, detail, sourceId, extraClass = "", active = null, onClick }) {
     const activeSource = state.xSource || state.source || "dataset";
-    const isActive = active === null ? label === state.x && activeSource === sourceId : Boolean(active);
+    const firstActive = label === state.x && activeSource === sourceId;
+    const secondActive = label === state.x2 && (state.x2Source || state.source || "dataset") === sourceId;
+    const isActive = active === null ? firstActive || secondActive : Boolean(active);
+    const selectedIndex = firstActive ? 0 : (secondActive ? 1 : -1);
+    const multipleSelected = hasTwoFeatures();
     const button = document.createElement("button");
     button.className = `feature ${extraClass} ${isActive ? "active" : ""}`.trim();
     button.dataset.sourceId = sourceId;
     button.dataset.value = label;
-    button.innerHTML = `<span>${escapeHtml(label)}</span><span class="kind">${escapeHtml(detail)}</span>`;
+    button.setAttribute("aria-selected", String(isActive));
+    const selectedMarker = multipleSelected && selectedIndex >= 0
+      ? `<span class="line-bar-feature-marker" data-label="Feature ${selectedIndex + 1}" aria-label="Feature ${selectedIndex + 1}"></span>`
+      : "";
+    button.innerHTML = `<span>${escapeHtml(label)}</span><span class="kind">${selectedMarker}${escapeHtml(detail)}</span>`;
     button.addEventListener("click", (event) => {
       const pickerList = list.closest("#featureList") || list;
-      onClick();
+      const platform = String(navigator.userAgentData?.platform || navigator.platform || "");
+      const additive = /mac|iphone|ipad|ipod/i.test(platform) ? event.metaKey : event.ctrlKey;
+      onClick({ additive });
       if (event.isTrusted) {
         focusLineBarPickerButton(pickerList, { value: label, sourceId, index: 0 });
       }
@@ -982,15 +1357,143 @@ export function createLineBarTool({
     list.append(button);
   }
 
-  function selectDatasetFeature(featureName) {
-    const previousDateBucketKey = currentDateBucketFeatureKey();
-    state.source = "dataset";
-    state.x = featureName;
-    state.xSource = "dataset";
-    resetDateBucketSuggestionIfKeyChanged(previousDateBucketKey);
+  function selectDatasetFeature(featureName, options = {}) {
+    const column = sourceColumns().find((item) => (
+      item.name === featureName && (item.source_id || "dataset") === "dataset"
+    )) || { name: featureName, kind: "", source_id: "dataset" };
+    toggleLineBarGroupingFeature(column, options);
+  }
+
+  function clearSecondGroupingFeature() {
+    state.x2 = null;
+    state.x2Source = "";
+    state.bandFeature2 = null;
+    state.bandSuggestionPendingKey2 = null;
+    state.dateBucketFeature2 = null;
+    state.dateBucketManualKey2 = null;
+    state.dateBucketSuggestionPendingKey2 = null;
+    state.tailPercent2 = "0";
+  }
+
+  function syncFeatureSwapButton() {
+    const button = el("lineBarSwapFeaturesBtn");
+    const visible = hasTwoFeatures();
+    button.hidden = !visible;
+    button.disabled = !visible;
+  }
+
+  function invalidateGroupingSuggestions() {
+    state.bandSuggestionRequestSeq = (state.bandSuggestionRequestSeq || 0) + 1;
+    state.bandSuggestionRequestSeq2 = (state.bandSuggestionRequestSeq2 || 0) + 1;
+    state.dateBucketSuggestionRequestSeq = (state.dateBucketSuggestionRequestSeq || 0) + 1;
+    state.dateBucketSuggestionRequestSeq2 = (state.dateBucketSuggestionRequestSeq2 || 0) + 1;
+    state.bandSuggestionPendingKey = null;
+    state.bandSuggestionPendingKey2 = null;
+    state.dateBucketSuggestionPendingKey = null;
+    state.dateBucketSuggestionPendingKey2 = null;
+  }
+
+  function swapGroupingStateValue(firstKey, secondKey) {
+    const firstValue = state[firstKey];
+    state[firstKey] = state[secondKey];
+    state[secondKey] = firstValue;
+  }
+
+  function swapLineBarGroupingFeatures() {
+    if (!hasTwoFeatures()) return;
+    cancelLineBarRequests();
+    invalidateGroupingSuggestions();
+    [
+      ["x", "x2"],
+      ["xSource", "x2Source"],
+      ["bandWidth", "bandWidth2"],
+      ["quantileMode", "quantileMode2"],
+      ["dateBucket", "dateBucket2"],
+      ["xAsFactor", "x2AsFactor"],
+      ["tailPercent", "tailPercent2"],
+      ["bandFeature", "bandFeature2"],
+      ["dateBucketFeature", "dateBucketFeature2"],
+      ["dateBucketManualKey", "dateBucketManualKey2"],
+    ].forEach(([firstKey, secondKey]) => swapGroupingStateValue(firstKey, secondKey));
+    state.tablePage = 1;
     renderFeatures({ preserveScroll: true });
     renderExpectedNumerators();
     updateAxisControls();
+    clearActiveFavouriteSelection();
+    refreshGroupingData({ force: true });
+  }
+
+  function promoteSecondGroupingFeature() {
+    state.x = state.x2;
+    state.xSource = state.x2Source;
+    state.bandWidth = state.bandWidth2;
+    state.quantileMode = state.quantileMode2;
+    state.dateBucket = state.dateBucket2;
+    state.xAsFactor = Boolean(state.x2AsFactor);
+    state.tailPercent = state.tailPercent2;
+    state.bandFeature = state.bandFeature2;
+    state.bandSuggestionPendingKey = null;
+    state.dateBucketFeature = state.dateBucketFeature2;
+    state.dateBucketManualKey = state.dateBucketManualKey2;
+    state.dateBucketSuggestionPendingKey = null;
+    clearSecondGroupingFeature();
+  }
+
+  function toggleLineBarGroupingFeature(column, { additive = false } = {}) {
+    const feature = String(column?.name || "");
+    const sourceId = column?.source_id || state.source || "dataset";
+    if (!feature) return;
+    const isFirst = isSelectedGrouping(feature, sourceId, 0);
+    const isSecond = isSelectedGrouping(feature, sourceId, 1);
+    const multipleSelected = hasTwoFeatures();
+    if (additive) {
+      if (isFirst) {
+        if (!multipleSelected) return;
+        promoteSecondGroupingFeature();
+      } else if (isSecond) {
+        clearSecondGroupingFeature();
+      } else if (!multipleSelected) {
+        state.x2 = feature;
+        state.x2Source = sourceId;
+        state.bandWidth2 = "0";
+        state.quantileMode2 = "off";
+        state.dateBucket2 = "none";
+        state.x2AsFactor = false;
+        state.tailPercent2 = "0";
+        state.bandFeature2 = null;
+        state.bandSuggestionPendingKey2 = null;
+        state.dateBucketFeature2 = null;
+        state.dateBucketManualKey2 = null;
+        state.dateBucketSuggestionPendingKey2 = null;
+      } else {
+        return;
+      }
+    } else if (isFirst) {
+      if (!multipleSelected) return;
+      clearSecondGroupingFeature();
+    } else if (isSecond) {
+      promoteSecondGroupingFeature();
+    } else {
+      const previousDateBucketKey = currentDateBucketFeatureKey();
+      const isRawDatasetFeature = sourceId === "dataset"
+        && !isModelPredictionColumn(column)
+        && !isGbmGlmRatioColumn(column);
+      if (multipleSelected) {
+        invalidateGroupingSuggestions();
+        clearSecondGroupingFeature();
+      }
+      if (isRawDatasetFeature) state.source = "dataset";
+      state.x = feature;
+      state.xSource = sourceId;
+      state.xAsFactor = false;
+      state.tailPercent = "0";
+      resetDateBucketSuggestionIfKeyChanged(previousDateBucketKey);
+    }
+    state.tablePage = 1;
+    renderFeatures({ preserveScroll: true });
+    renderExpectedNumerators();
+    updateAxisControls();
+    clearActiveFavouriteSelection();
     refreshChart({ force: true });
   }
 
@@ -1062,8 +1565,93 @@ export function createLineBarTool({
     return responses;
   }
 
+  function twoFeatureGroupingRequest(index) {
+    const column = selectedGroupingColumn(index);
+    const numeric = isNumericKind(column?.kind);
+    const date = isDateKind(column?.kind);
+    const factorOverrideSupported = numeric || date;
+    return {
+      feature: index === 0 ? state.x : state.x2,
+      source: column?.source_id || (index === 0 ? state.xSource : state.x2Source) || state.source || "dataset",
+      bandWidth: numeric ? Number(index === 0 ? state.bandWidth : state.bandWidth2) : 0,
+      quantileMode: numeric ? (index === 0 ? state.quantileMode : state.quantileMode2) : "off",
+      dateBucket: date ? (index === 0 ? state.dateBucket : state.dateBucket2) : "none",
+      asFactor: factorOverrideSupported ? Boolean(index === 0 ? state.xAsFactor : state.x2AsFactor) : false,
+      tailPercent: Number(state[twoFeatureStateKey(index, "tailPercent", "tailPercent2")]) || 0,
+    };
+  }
+
+  function twoFeatureGroupingReady(index) {
+    const column = selectedGroupingColumn(index);
+    const numeric = isNumericKind(column?.kind);
+    const date = isDateKind(column?.kind);
+    const quantileMode = index === 0 ? state.quantileMode : state.quantileMode2;
+    const bandKey = index === 0 ? currentBandFeatureKey() : currentSecondBandFeatureKey();
+    const bandFeature = index === 0 ? state.bandFeature : state.bandFeature2;
+    const bandPending = index === 0 ? state.bandSuggestionPendingKey : state.bandSuggestionPendingKey2;
+    if (numeric && quantileMode !== "quantile" && bandFeature !== bandKey) {
+      if (index === 0) requestBandSuggestionForSelectedColumn(bandKey);
+      else requestBandSuggestionForSecondColumn(bandKey);
+      return false;
+    }
+    if (numeric && quantileMode !== "quantile" && bandPending === bandKey) {
+      setGroupMeta("line_bar", `Estimating Feature ${index + 1} banding...`);
+      return false;
+    }
+    const dateKey = index === 0 ? currentDateBucketFeatureKey() : currentSecondDateBucketFeatureKey();
+    const dateFeature = index === 0 ? state.dateBucketFeature : state.dateBucketFeature2;
+    const dateManualKey = index === 0 ? state.dateBucketManualKey : state.dateBucketManualKey2;
+    const datePending = index === 0 ? state.dateBucketSuggestionPendingKey : state.dateBucketSuggestionPendingKey2;
+    if (date && dateManualKey !== dateKey && dateFeature !== dateKey) {
+      if (index === 0) requestDateBucketSuggestionForSelectedColumn(dateKey);
+      else requestDateBucketSuggestionForSecondColumn(dateKey);
+      return false;
+    }
+    if (date && datePending === dateKey) {
+      setGroupMeta("line_bar", `Estimating Feature ${index + 1} date bucket...`);
+      return false;
+    }
+    return true;
+  }
+
+  function denominatorRequestFields() {
+    const option = el("denominator")?.selectedOptions?.[0] || null;
+    if (option?.dataset.unavailable === "true") {
+      setStatus("The selected model prediction Denominator is unavailable because there is no active model.", true);
+      return null;
+    }
+    return {
+      denominator: option?.value || "__none__",
+      denominatorSource: option?.dataset.sourceId || "dataset",
+    };
+  }
+
+  function buildTwoFeatureChartRequest() {
+    if (!twoFeatureGroupingReady(0) || !twoFeatureGroupingReady(1)) return null;
+    const denominatorFields = denominatorRequestFields();
+    if (!denominatorFields) return null;
+    const tailPercent = Number(state.tailPercent);
+    return {
+      source: state.source || "dataset",
+      groupings: [twoFeatureGroupingRequest(0), twoFeatureGroupingRequest(1)],
+      tailPercent: Number.isFinite(tailPercent) ? tailPercent : 0,
+      sort: "alpha",
+      lowGroup: "0",
+      labels: "none",
+      emptyPeriods: "skip",
+      transform: "none",
+      partialDependence: { mode: "none" },
+      sigma: 0,
+      filter: state.activeFilter,
+      ...denominatorFields,
+      responses: currentResponses(),
+      maxGroups: 10000,
+    };
+  }
+
   function buildChartRequest() {
     if (!state.schema || !state.x) return null;
+    if (hasTwoFeatures()) return buildTwoFeatureChartRequest();
     const kind = selectedColumn()?.kind;
     const isDate = kind === "date" || kind === "datetime";
     const isNumeric = isNumericKind(kind);
@@ -1089,6 +1677,8 @@ export function createLineBarTool({
       return null;
     }
     const column = selectedColumn();
+    const denominatorFields = denominatorRequestFields();
+    if (!denominatorFields) return null;
     const sourceId = column?.source_id || state.xSource || state.source || "dataset";
     const xSource = column && (isModelPredictionColumn(column) || sourceId !== (state.source || "dataset")) ? sourceId : "";
     return {
@@ -1106,7 +1696,7 @@ export function createLineBarTool({
       base: selectedFeatureBase(),
       sigma: Number(state.sigma),
       filter: state.activeFilter,
-      denominator: el("denominator").value,
+      ...denominatorFields,
       responses: currentResponses(),
       maxGroups: 10000,
     };
@@ -1114,6 +1704,16 @@ export function createLineBarTool({
 
   async function refreshChart(options = {}) {
     return refreshLineBar(options);
+  }
+
+  async function refreshGroupingData(options = {}) {
+    if (state.view === "table") {
+      lineBarChartDirty = true;
+      invalidateLineBarTableCache();
+      return refreshLineBarTable(options);
+    }
+    lineBarChartDirty = false;
+    return refreshChart(options);
   }
 
   async function fetchChartData(request, requestKey) {
@@ -1127,6 +1727,15 @@ export function createLineBarTool({
     try {
       const data = await api("/api/chart", { method: "POST", body: JSON.stringify(request), clientTiming: true });
       if (requestSeq !== state.chartRequestSeq) return;
+      if (data?.plot_type === "surface" && Array.isArray(data?.groupings) && data.groupings.length === 2) {
+        const previousPlotType = state.lastData?.plot_type || "";
+        await ensureEchartsGl("surface");
+        if (requestSeq !== state.chartRequestSeq) return;
+        if (!chartSupportsSurface || previousPlotType !== "surface") {
+          await recreateChartForSurface();
+          if (requestSeq !== state.chartRequestSeq) return;
+        }
+      }
       const cache = toolCache("line_bar");
       cache.requestKey = requestKey;
       cache.data = data;
@@ -1222,12 +1831,210 @@ export function createLineBarTool({
     });
   }
 
+  function selectedTwoFeatureMetric(data) {
+    const responses = Array.isArray(data?.responses) ? data.responses : [];
+    const validKeys = [
+      ...responses.map((_, index) => `resp${index}`),
+      ...(data?.plot_type === "lines" ? [] : ["volume"]),
+    ];
+    let key = String(state.twoFeaturePlotMetric || "resp0");
+    if (!validKeys.includes(key)) key = responses.length ? "resp0" : "volume";
+    state.twoFeaturePlotMetric = key;
+    if (key === "volume") {
+      return {
+        key,
+        label: data.denominator?.bar_label || "Weight",
+        format: formatNumber,
+      };
+    }
+    const index = Number(key.slice(4));
+    return {
+      key,
+      label: index === 0 ? "Actual" : (responses[index]?.label || `Expected ${index}`),
+      axisLabel: responseMetricAxisLabel(data, index),
+      format: chartResponseFormatter("none"),
+    };
+  }
+
+  function responseMetricAxisLabel(data, responseIndex = 0) {
+    const response = Array.isArray(data?.responses) ? data.responses[responseIndex] : null;
+    const numerator = String(response?.numerator || response?.label || "").trim();
+    const denominator = String(data?.denominator?.column || "").trim();
+    if (!numerator) return denominator ? `Actual / ${denominator}` : "Actual";
+    return denominator ? `${numerator} / ${denominator}` : numerator;
+  }
+
+  function twoFeatureXAxisPresentation(data) {
+    if (!Array.isArray(data?.groupings)) return null;
+    let grouping = null;
+    let labels = [];
+    let rawValues = [];
+    if (data.plot_type === "lines") {
+      const continuousIndex = data.groupings[0]?.continuous ? 0 : 1;
+      grouping = data.groupings[continuousIndex] || {};
+      const byCoordinate = new Map();
+      for (const row of data.rows || []) {
+        if (row?.[`group${continuousIndex}_missing`]) continue;
+        const sortValue = row?.[`group${continuousIndex}_sort`];
+        const coordinate = twoFeatureContinuousCoordinate(sortValue, grouping);
+        if (coordinate === null || byCoordinate.has(coordinate)) continue;
+        const rawValue = row?.[`group${continuousIndex}`] ?? sortValue;
+        byCoordinate.set(coordinate, {
+          coordinate,
+          label: formatXLabel(rawValue, grouping.kind),
+          rawValue,
+        });
+      }
+      const groupedValues = [...byCoordinate.values()]
+        .sort((left, right) => left.coordinate - right.coordinate);
+      labels = groupedValues.map((item) => item.label);
+      rawValues = groupedValues.map((item) => item.rawValue);
+    } else if (data.plot_type === "heatmap") {
+      grouping = data.groupings[1] || {};
+      const byLabel = new Map();
+      for (const row of data.rows || []) {
+        const label = String(row?.group1 ?? "");
+        if (!byLabel.has(label)) byLabel.set(label, row?.group1_sort);
+      }
+      const groupedValues = [...byLabel.entries()]
+        .map(([label, sort]) => ({ label, sort }))
+        .sort((left, right) => compareTwoFeatureSortValues(left, right));
+      labels = groupedValues.map((item) => item.label);
+      rawValues = groupedValues.map((item) => item.sort);
+    } else {
+      return null;
+    }
+    const policy = getXAxisLabelPolicy(
+      labels,
+      grouping.group_kind || grouping.kind,
+      rawValues,
+      grouping.date_bucket || "none",
+      chart.getWidth?.() || el("chart").clientWidth,
+    );
+    return {
+      labels,
+      policy,
+      dateContext: data.plot_type === "lines" && isDateKind(grouping.kind)
+        ? {
+            labels,
+            rawXValues: rawValues,
+            dateBucket: grouping.date_bucket || "none",
+            xKind: grouping.kind,
+          }
+        : null,
+    };
+  }
+
+  function twoFeatureContinuousCoordinate(value, grouping) {
+    if (!isDateKind(grouping?.kind)) return finiteNumberOrNull(value);
+    const parsed = parseDateCategory(value);
+    if (!parsed) return null;
+    return Date.UTC(
+      parsed.year,
+      parsed.month - 1,
+      parsed.day,
+      parsed.hour,
+      parsed.minute,
+      parsed.second,
+    );
+  }
+
+  function formatTwoFeatureDateCoordinate(value, grouping) {
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue)) return String(value ?? "");
+    const date = new Date(numericValue);
+    if (!Number.isFinite(date.getTime())) return String(value ?? "");
+    const parsed = {
+      year: date.getUTCFullYear(),
+      month: date.getUTCMonth() + 1,
+      day: date.getUTCDate(),
+      hour: date.getUTCHours(),
+      minute: date.getUTCMinutes(),
+      second: date.getUTCSeconds(),
+      weekday: date.getUTCDay(),
+    };
+    return formatDateAxisLabel(
+      date.toISOString(),
+      parsed,
+      grouping?.date_bucket || "none",
+    );
+  }
+
+  function compareTwoFeatureSortValues(left, right) {
+    const leftNumber = finiteNumberOrNull(left?.sort);
+    const rightNumber = finiteNumberOrNull(right?.sort);
+    if (leftNumber !== null && rightNumber !== null) {
+      const difference = leftNumber - rightNumber;
+      if (difference) return difference;
+    }
+    return String(left?.sort ?? "").localeCompare(
+      String(right?.sort ?? ""),
+      undefined,
+      { numeric: true, sensitivity: "base" },
+    ) || String(left?.label ?? "").localeCompare(String(right?.label ?? ""));
+  }
+
+  function renderTwoFeatureChart(data) {
+    const metric = selectedTwoFeatureMetric(data);
+    const xAxisPresentation = twoFeatureXAxisPresentation(data);
+    dateXAxisContext = xAxisPresentation?.dateContext || null;
+    const optionContext = {
+      text: getCss("--text"),
+      muted: getCss("--muted"),
+      line: getCss("--line"),
+      grid: getCss("--line"),
+      formatGroupValue: formatNumber,
+      chartWidth: chart.getWidth?.() || el("chart").clientWidth,
+      chartHeight: chart.getHeight?.() || el("chart").clientHeight,
+      measureText: (value, fontSize = 12) => (
+        echartsImpl.format?.getTextRect?.(String(value), `${fontSize}px sans-serif`)?.width
+      ),
+      xAxisLabels: xAxisPresentation?.labels,
+      xAxisLabelPolicy: xAxisPresentation?.policy,
+      dataZoomOptions: xAxisPresentation?.policy?.dataZoomEnabled ? lineBarDataZoomOptions() : [],
+      heatmapLabelMode: normaliseHeatmapLabels(),
+      formatActual: chartResponseFormatter("none"),
+      formatWeight: formatWeightValue,
+      formatDateGroupValue: formatTwoFeatureDateCoordinate,
+    };
+    currentHeatmapLabelConfig = data.plot_type === "heatmap"
+      ? twoFeatureHeatmapLabelConfig(data, optionContext)
+      : null;
+    renderTwoFeatureControls(data.plot_type, currentHeatmapLabelConfig);
+    chart.setOption(twoFeatureChartOption(data, metric, {
+      ...optionContext,
+      heatmapLabelConfig: currentHeatmapLabelConfig,
+    }), true);
+    chartRenderTransform = "none";
+    requestAnimationFrame(() => {
+      chart.resize();
+      refreshDateXAxisLabelsForCurrentZoom();
+    });
+    return xAxisPresentation
+      ? chartDensityMessage(
+          xAxisPresentation.labels.length,
+          !xAxisPresentation.policy.show,
+          false,
+          xAxisPresentation.policy.hiddenReason,
+          Boolean(xAxisPresentation.policy.hideOverlap),
+        )
+      : "";
+  }
+
   function renderChart(data) {
     if (data?.groups_truncated && !(data.rows || []).length) {
       dateXAxisContext = null;
+      currentHeatmapLabelConfig = null;
+      if (Array.isArray(data?.groupings) && data.groupings.length === 2) {
+        renderTwoFeatureControls(data.plot_type, null);
+      }
       chart.clear();
       return "";
     }
+    if (Array.isArray(data?.groupings) && data.groupings.length === 2) {
+      return renderTwoFeatureChart(data);
+    }
+    currentHeatmapLabelConfig = null;
     const labels = data.rows.map((r) => formatChartXLabel(r, data));
     const labelMode = state.labels;
     const renderTransform = String(state.transform || "none");
@@ -1262,6 +2069,14 @@ export function createLineBarTool({
     const mainLegendSelection = matchingLegendSelection(previousOption, legendData);
     const overlayLegendSelection = matchingLegendSelection(previousOption, overlayLegendData);
     const responseAxis = responseAxisOptions(data, { ...mainLegendSelection, ...overlayLegendSelection }, renderTransform);
+    const responseAxisLayout = lineBarVerticalAxisLayout(
+      [responseAxis.min, responseAxis.max],
+      formatChartResponseValue,
+    );
+    const volumeAxisLayout = lineBarVerticalAxisLayout(
+      data.rows.map((row) => row.volume),
+      formatNumber,
+    );
     const barSeries = {
       name: weightLabel,
       type: "bar",
@@ -1344,7 +2159,13 @@ export function createLineBarTool({
           formatter: (params) => formatChartTooltip(params, weightLabel, formatChartResponseValue),
         },
         legend: lineBarLegendOptions(legendData, mainLegendSelection, overlayLegendData, overlayLegendSelection),
-        grid: { left: 72, right: 76, top: hasOverlaySeries ? LINE_BAR_OVERLAY_GRID_TOP : LINE_BAR_GRID_TOP, bottom: xLabelPolicy.bottom, containLabel: false },
+        grid: {
+          left: responseAxisLayout.gridMargin,
+          right: volumeAxisLayout.gridMargin,
+          top: hasOverlaySeries ? LINE_BAR_OVERLAY_GRID_TOP : LINE_BAR_GRID_TOP,
+          bottom: xLabelPolicy.bottom,
+          containLabel: false,
+        },
         xAxis: {
           type: "category",
           name: data.x || "",
@@ -1367,8 +2188,30 @@ export function createLineBarTool({
           axisLine: { lineStyle: { color: getCss("--line") } },
         },
         yAxis: [
-          { type: "value", scale: true, splitNumber: RESPONSE_AXIS_TARGET_INTERVALS, min: responseAxis.min, max: responseAxis.max, interval: responseAxis.interval, axisLabel: { color: getCss("--text"), formatter: (value) => formatChartResponseValue(value) }, splitLine: { lineStyle: { color: getCss("--line") } } },
-          { type: "value", axisLabel: { color: getCss("--text"), formatter: (value) => formatNumber(value) }, splitLine: { show: false } },
+          {
+            type: "value",
+            name: responseMetricAxisLabel(data, 0),
+            nameLocation: "middle",
+            nameGap: responseAxisLayout.nameGap,
+            nameTextStyle: { color: getCss("--text"), fontWeight: 700 },
+            scale: true,
+            splitNumber: RESPONSE_AXIS_TARGET_INTERVALS,
+            min: responseAxis.min,
+            max: responseAxis.max,
+            interval: responseAxis.interval,
+            axisLabel: { color: getCss("--text"), formatter: (value) => formatChartResponseValue(value) },
+            splitLine: { lineStyle: { color: getCss("--line") } },
+          },
+          {
+            type: "value",
+            name: weightLabel,
+            nameLocation: "middle",
+            nameGap: volumeAxisLayout.nameGap,
+            nameTextStyle: { color: getCss("--text"), fontWeight: 700 },
+            position: "right",
+            axisLabel: { color: getCss("--text"), formatter: (value) => formatNumber(value) },
+            splitLine: { show: false },
+          },
         ],
         dataZoom: xLabelPolicy.dataZoomEnabled ? lineBarDataZoomOptions() : [],
         series: [barSeries, ...shapSeries, ...glmSeries, ...lineSeries, ...(upliftBaseline ? [upliftBaseline] : []), ...customSeries],
@@ -1381,6 +2224,30 @@ export function createLineBarTool({
       refreshDateXAxisLabelsForCurrentZoom();
     });
     return chartDensityMessage(labels.length, !xLabelPolicy.show, !dataLabelsAllowed && labelMode !== "-", xLabelPolicy.hiddenReason, Boolean(xLabelPolicy.hideOverlap));
+  }
+
+  function lineBarVerticalAxisLayout(values, formatter) {
+    const formatted = (Array.isArray(values) ? values : [])
+      .map(finiteNumberOrNull)
+      .filter((value) => value !== null)
+      .flatMap((value) => {
+        try {
+          return [String(formatter(value) ?? "")];
+        } catch (_error) {
+          return [String(value)];
+        }
+      });
+    if (!formatted.includes("0")) formatted.push("0");
+    const labelWidth = formatted.reduce((maximum, value) => {
+      const measured = echartsImpl.format?.getTextRect?.(value, "12px sans-serif")?.width;
+      const width = Number.isFinite(Number(measured)) ? Number(measured) : value.length * 6.72;
+      return Math.max(maximum, width);
+    }, 0);
+    const nameGap = Math.max(52, Math.ceil(labelWidth + 18));
+    return {
+      nameGap,
+      gridMargin: Math.max(76, nameGap + 28),
+    };
   }
 
   function lineBarDataZoomOptions() {
@@ -1723,6 +2590,7 @@ export function createLineBarTool({
   function applyClientLineBarSort(options = {}) {
     const cache = toolCache("line_bar");
     const data = state.lastData || cache.data;
+    if (Array.isArray(data?.groupings) && data.groupings.length === 2) return false;
     if (!data || data.x_group_kind !== "categorical") return false;
     if (!data.groups_truncated) {
       data.rows = [...(data.rows || [])].sort(compareLineBarRowsForSort(state.sort, shapMedianMap(data)));
@@ -1756,6 +2624,7 @@ export function createLineBarTool({
   }
 
   function canSortLineBarTableClientSide(data, shapMedians) {
+    if (Array.isArray(data?.groupings) && data.groupings.length === 2) return false;
     const table = data?.table || {};
     const rows = Array.isArray(data?.rows) ? data.rows : [];
     const pageCount = Number(table.page_count);
@@ -1798,6 +2667,7 @@ export function createLineBarTool({
     return {
       ...(data || {}),
       rows: rows.map((row) => ({ ...row })),
+      groupings: Array.isArray(data?.groupings) ? data.groupings.map((grouping) => ({ ...grouping })) : data?.groupings,
       responses: (data?.responses || []).map((response) => ({ ...response })),
       denominator: { ...(data?.denominator || {}) },
       summary: {
@@ -1871,9 +2741,25 @@ export function createLineBarTool({
     return formatted === "-0" ? "0" : formatted;
   }
 
-  function lineBarTableRowMatchesSearch(row, search, xKind) {
+  function lineBarTableRowMatchesSearch(row, search, data) {
     const needle = normaliseLineBarTableSearch(search).toLowerCase();
     if (!needle) return true;
+    if (Array.isArray(data?.groupings) && data.groupings.length === 2) {
+      const candidates = [
+        row?.group0,
+        row?.group0_sort,
+        row?.group1,
+        row?.group1_sort,
+      ];
+      data.groupings.forEach((grouping, index) => {
+        if (!isNumericKind(grouping?.kind)) return;
+        candidates.push(formatLineBarTableNumericSearchLabel(row?.[`group${index}_sort`]));
+      });
+      return candidates.some((value) => (
+        value !== null && value !== undefined && String(value).toLowerCase().includes(needle)
+      ));
+    }
+    const xKind = data?.x_kind;
     const rawCandidates = [row?.x, row?.x_sort];
     const candidates = [...rawCandidates];
     if (xKind === "integer" || xKind === "numeric") {
@@ -1920,7 +2806,7 @@ export function createLineBarTool({
 
   function filteredLineBarTableDataFromSource(sourceData, search) {
     const tableSearch = normaliseLineBarTableSearch(search);
-    const rows = (sourceData.rows || []).filter((row) => lineBarTableRowMatchesSearch(row, tableSearch, sourceData.x_kind));
+    const rows = (sourceData.rows || []).filter((row) => lineBarTableRowMatchesSearch(row, tableSearch, sourceData));
     const data = cloneLineBarTableData(sourceData, rows);
     data.summary = buildClientLineBarTableSummary(rows, sourceData);
     data.table = {
@@ -1968,6 +2854,17 @@ export function createLineBarTool({
   function formatTableXLabel(row, data) {
     const rangeLabel = formatQuantileRangeLabel(row, data, ": ");
     return rangeLabel || formatXLabel(row?.x, data.x_kind);
+  }
+
+  function formatTwoFeatureTableLabel(row, data, index) {
+    const grouping = data?.groupings?.[index] || {};
+    const label = row?.[`group${index}`];
+    if (grouping.group_kind === "quantile" && label !== "Missing") {
+      const start = formatQuantileEndpoint(row?.[`group${index}_start`]);
+      const end = formatQuantileEndpoint(row?.[`group${index}_end`]);
+      if (start && end) return start === end ? `${label}: ${start}` : `${label}: ${start} to ${end}`;
+    }
+    return formatXLabel(label, grouping.kind);
   }
 
   function formatQuantileRangeLabel(row, data, separator) {
@@ -2986,6 +3883,13 @@ export function createLineBarTool({
 
   function renderLineBarTableContents(data) {
     const rowsData = Array.isArray(data.rows) ? data.rows : [];
+    const twoFeatureMode = Array.isArray(data.groupings) && data.groupings.length === 2;
+    const groupingColumns = twoFeatureMode
+      ? data.groupings.map((grouping, index) => ({
+          title: grouping.feature || `Feature ${index + 1}`,
+          field: `group${index}`,
+        }))
+      : [{ title: data.x, field: "x" }];
     const weightLabel = data.denominator?.bar_label || "Weight";
     const weightedMode = Boolean(data.denominator?.column);
     const summaryResponses = Array.isArray(data.summary?.responses) ? data.summary.responses : [];
@@ -3027,10 +3931,15 @@ export function createLineBarTool({
       const rowCount = finiteNumberOrNull(row.row_count);
       const displayRow = {
         __id: `${page}:${index}`,
-        x: formatTableXLabel(row, data),
         row_count: formatNumber(rowCount === null ? row.volume : rowCount),
         volume: formatNumber(row.volume),
       };
+      if (twoFeatureMode) {
+        displayRow.group0 = formatTwoFeatureTableLabel(row, data, 0);
+        displayRow.group1 = formatTwoFeatureTableLabel(row, data, 1);
+      } else {
+        displayRow.x = formatTableXLabel(row, data);
+      }
       data.responses.forEach((_, responseIndex) => {
         displayRow[`resp${responseIndex}`] = formatResponseValue(row[`resp${responseIndex}`]);
       });
@@ -3038,13 +3947,14 @@ export function createLineBarTool({
     });
     lineBarTableCopyRows = tableRows.map((row) => ({ ...row }));
     lineBarTableCopyColumns = [
-      { title: data.x, field: "x" },
+      ...groupingColumns,
       ...(weightedMode ? [{ title: "Row count", field: "row_count" }] : []),
       { title: weightLabel, field: "volume" },
       ...data.responses.map((response, responseIndex) => ({ title: response.label, field: `resp${responseIndex}` })),
     ];
     lineBarTableCopyFooterRow = {
-      x: "Total",
+      [groupingColumns[0].field]: "Total",
+      ...(twoFeatureMode ? { [groupingColumns[1].field]: "" } : {}),
       ...(weightedMode ? { row_count: formatNumber(summaryRowCount) } : {}),
       volume: formatNumber(summaryVolume),
     };
@@ -3052,16 +3962,16 @@ export function createLineBarTool({
       lineBarTableCopyFooterRow[`resp${responseIndex}`] = formatResponseValue(summaryResponses[responseIndex]);
     });
     const columns = [
-      {
-        title: data.x,
-        field: "x",
+      ...groupingColumns.map((grouping, index) => ({
+        title: grouping.title,
+        field: grouping.field,
         headerSort: false,
         frozen: true,
-        minWidth: lineBarTableHeaderMinWidth(data.x, 130),
+        minWidth: lineBarTableHeaderMinWidth(grouping.title, 130),
         widthGrow: 2,
         hozAlign: "left",
-        bottomCalc: () => "Total",
-      },
+        bottomCalc: () => index === 0 ? "Total" : "",
+      })),
       ...(weightedMode ? [{
         title: "Row count",
         field: "row_count",
@@ -3169,10 +4079,135 @@ export function createLineBarTool({
     setChartPendingHidden(true);
   }
 
-  function bindControls() {
+  function twoFeatureStateKey(index, primary, secondary) {
+    return index === 0 ? primary : secondary;
+  }
+
+  function stepTwoFeatureBandWidth(index, direction) {
+    const bandKey = twoFeatureStateKey(index, "bandWidth", "bandWidth2");
+    const quantileKey = twoFeatureStateKey(index, "quantileMode", "quantileMode2");
+    const current = Number(state[bandKey]) > 0 ? Number(state[bandKey]) : 1;
+    let next = current;
+    if (direction < 0) {
+      const smallerSteps = bandSteps.filter((step) => step < current);
+      next = smallerSteps.length ? smallerSteps[smallerSteps.length - 1] : current;
+    } else {
+      next = bandSteps.find((step) => step > current) || current;
+    }
+    state[bandKey] = state[quantileKey] === "quantile"
+      ? String(quantileCountForBandWidth(next))
+      : formatBandWidth(next);
+  }
+
+  function handleTwoFeatureControlClick(event) {
+    const button = event.target.closest("button");
+    if (!button || !hasTwoFeatures()) return;
+    const control = button.dataset.twoControl || "";
+    const action = button.dataset.twoAction || "";
+    const index = Number(button.dataset.featureIndex || 0);
+    if (control === "plotMetric") {
+      const previous = state.twoFeaturePlotMetric;
+      state.twoFeaturePlotMetric = button.dataset.value || "resp0";
+      renderTwoFeatureControls();
+      if (previous !== state.twoFeaturePlotMetric) clearActiveFavouriteSelection();
+      if (state.lastData?.groupings?.length === 2) {
+        measureToolRender("line_bar", () => renderChart(state.lastData));
+      }
+      return;
+    }
+    if (control === "heatmapLabels") {
+      const previous = normaliseHeatmapLabels();
+      state.heatmapLabels = normaliseHeatmapLabels(button.dataset.value);
+      if (previous !== state.heatmapLabels) clearActiveFavouriteSelection();
+      if (state.lastData?.groupings?.length === 2 && state.lastData?.plot_type === "heatmap") {
+        measureToolRender("line_bar", () => renderChart(state.lastData));
+      } else {
+        renderTwoFeatureControls();
+      }
+      return;
+    }
+    if (control === "tailPercent") {
+      const tailKey = twoFeatureStateKey(index, "tailPercent", "tailPercent2");
+      state[tailKey] = button.dataset.value || "0";
+    } else if (action === "as-factor") {
+      const key = twoFeatureStateKey(index, "xAsFactor", "x2AsFactor");
+      state[key] = !state[key];
+    } else if (action === "band-down" || action === "band-up") {
+      stepTwoFeatureBandWidth(index, action === "band-down" ? -1 : 1);
+      if (index === 0) {
+        clearPendingBandSuggestion();
+        state.bandFeature = currentBandFeatureKey();
+      } else {
+        clearPendingSecondBandSuggestion();
+        state.bandFeature2 = currentSecondBandFeatureKey();
+      }
+    } else if (control === "bandWidth") {
+      const bandKey = twoFeatureStateKey(index, "bandWidth", "bandWidth2");
+      state[bandKey] = String(button.dataset.value || "0");
+      if (index === 0) {
+        clearPendingBandSuggestion();
+        state.bandFeature = currentBandFeatureKey();
+      } else {
+        clearPendingSecondBandSuggestion();
+        state.bandFeature2 = currentSecondBandFeatureKey();
+      }
+    } else if (control === "quantileMode") {
+      const modeKey = twoFeatureStateKey(index, "quantileMode", "quantileMode2");
+      const bandKey = twoFeatureStateKey(index, "bandWidth", "bandWidth2");
+      const featureKey = index === 0 ? currentBandFeatureKey() : currentSecondBandFeatureKey();
+      const previousMode = state[modeKey];
+      state[modeKey] = button.dataset.value === "quantile" ? "quantile" : "off";
+      if (state[modeKey] === "quantile" && previousMode !== "quantile") {
+        previousBandWidthsByFeature()[featureKey] = String(state[bandKey] ?? "0");
+        state[bandKey] = "10";
+      } else if (state[modeKey] !== "quantile" && previousMode === "quantile") {
+        state[bandKey] = String(previousBandWidthsByFeature()[featureKey] ?? "1");
+      }
+      if (index === 0) {
+        clearPendingBandSuggestion();
+        state.bandFeature = featureKey;
+      } else {
+        clearPendingSecondBandSuggestion();
+        state.bandFeature2 = featureKey;
+      }
+    } else if (control === "dateBucket") {
+      const dateKey = twoFeatureStateKey(index, "dateBucket", "dateBucket2");
+      state[dateKey] = normaliseDateBucket(button.dataset.value);
+      if (index === 0) {
+        clearPendingDateBucketSuggestion();
+        state.dateBucketFeature = currentDateBucketFeatureKey();
+        state.dateBucketManualKey = state.dateBucketFeature;
+      } else {
+        clearPendingSecondDateBucketSuggestion();
+        state.dateBucketFeature2 = currentSecondDateBucketFeatureKey();
+        state.dateBucketManualKey2 = state.dateBucketFeature2;
+      }
+    } else {
+      return;
+    }
+    clearActiveFavouriteSelection();
+    updateAxisControls();
+    refreshGroupingData({ force: true });
+  }
+
+  function bindChartEvents() {
     chart.on("legendselectchanged", updateResponseAxisForLegendSelection);
     chart.on("datazoom", scheduleDateXAxisLabelRefresh);
+  }
+
+  async function recreateChartForSurface() {
+    chart.dispose();
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    chart = echartsImpl.init(el("chart"));
+    bindChartEvents();
+    chartSupportsSurface = true;
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+  }
+
+  function bindControls() {
+    bindChartEvents();
     bindSettingsStripOverflowCue(el("lineBarToolbar"));
+    el("lineBarTwoFeatureControls")?.addEventListener("click", handleTwoFeatureControlClick);
     const lineBarControls = new Set(["sort", "lowGroup", "labels", "bandWidth", "quantileMode", "dateBucket", "emptyPeriods", "transform", "sigma", "partialDependence", "featureSort", "expectedSort"]);
     document.querySelectorAll(".segmented").forEach((group) => {
       if (!lineBarControls.has(group.dataset.control)) return;
@@ -3271,6 +4306,7 @@ export function createLineBarTool({
     el("expectedSearchClear").addEventListener("click", () => clearSearchInput("expectedSearch", renderExpectedNumerators));
     el("featureSearchClear").addEventListener("click", () => clearSearchInput("featureSearch", renderFeatures));
     el("lineBarCopyBtn")?.addEventListener("click", copyVisibleLineBarView);
+    el("lineBarSwapFeaturesBtn")?.addEventListener("click", swapLineBarGroupingFeatures);
     el("chartTab").addEventListener("click", () => {
       const changed = state.view !== "chart";
       setView("chart");
@@ -3290,6 +4326,13 @@ export function createLineBarTool({
       return;
     }
     chart.resize();
+    if (
+      state.lastData?.groupings?.length === 2
+      && ["heatmap", "surface"].includes(state.lastData?.plot_type)
+    ) {
+      measureToolRender("line_bar", () => renderTwoFeatureChart(state.lastData));
+      return;
+    }
     refreshDateXAxisLabelsForCurrentZoom();
   }
 

@@ -130,6 +130,7 @@ export function createGbmTool({
   updateAxisControls,
   refreshActiveTool,
   reloadSchema,
+  getDenominatorSelection = () => ({ value: "__none__", sourceId: "dataset", metricKind: "dataset" }),
   onExternalModelActivation = async () => false,
 }) {
   const tool = "gbm";
@@ -282,6 +283,7 @@ export function createGbmTool({
     setGroupMeta(tool, groupMeta);
     setStatus("");
     setChartMessage("");
+    const predictionDenominator = getDenominatorSelection().metricKind === "prediction";
     const mount = el("modelToolWrap");
     if (!mount) return;
     closeGbmFeatureContextMenu();
@@ -351,7 +353,8 @@ export function createGbmTool({
             <div id="gbmParameterControlDivider" class="gbm-parameter-control-divider" aria-hidden="true"></div>
             <section class="gbm-parameter-controls-column">
               <div class="gbm-actions">
-                <button id="gbmTrainBtn" class="tab model-busy-button gbm-action-button gbm-train-button ${isTraining ? "training" : ""}" type="button" ${isTraining ? "disabled aria-busy=\"true\"" : ""}>${isTraining ? "Training..." : "Train GBM"}</button>
+                <button id="gbmTrainBtn" class="tab model-busy-button gbm-action-button gbm-train-button ${isTraining ? "training" : ""}" type="button" ${isTraining || predictionDenominator ? "disabled" : ""} ${isTraining ? "aria-busy=\"true\"" : ""}>${isTraining ? "Training..." : "Train GBM"}</button>
+                <div id="gbmModelDenominatorBuildNotice" class="gbm-model-denominator-build-notice ${predictionDenominator ? "" : "hidden"}">Training is unavailable while Denominator is a model prediction. Use init_score for prediction chaining.</div>
                 ${sampleStatusHtml(data.sample)}
                 <div id="gbmShapRows" class="gbm-shap-rows" role="radiogroup" aria-label="SHAP rows">
                   <span class="gbm-shap-label">SHAP rows</span>
@@ -1995,12 +1998,19 @@ export function createGbmTool({
     if (!button) return;
     button.textContent = isTraining ? "Training..." : "Train GBM";
     button.classList.toggle("training", isTraining);
-    button.disabled = isTraining;
+    button.disabled = isTraining || getDenominatorSelection().metricKind === "prediction";
     if (isTraining) {
       button.setAttribute("aria-busy", "true");
     } else {
       button.removeAttribute("aria-busy");
     }
+  }
+
+  function syncDenominatorBuildState() {
+    const blocked = getDenominatorSelection().metricKind === "prediction";
+    const button = el("gbmTrainBtn");
+    if (button) button.disabled = isTraining || blocked;
+    el("gbmModelDenominatorBuildNotice")?.classList.toggle("hidden", !blocked);
   }
 
   function setGbmNotice(message) {
@@ -3232,6 +3242,11 @@ export function createGbmTool({
 
   async function train() {
     if (isTraining) return;
+    const denominatorSelection = getDenominatorSelection();
+    if (denominatorSelection.metricKind === "prediction") {
+      setGbmNotice("Training is unavailable while Denominator is a model prediction. Use init_score for prediction chaining.");
+      return;
+    }
     trainingElapsedStartedAt = performance.now();
     setStatus("");
     setChartMessage("");
@@ -3242,7 +3257,8 @@ export function createGbmTool({
     const payload = {
       label: `GBM ${gbmAutoModelTimeLabel()}`,
       response: el("actualNumerator")?.value || "actualNumerator",
-      offset: el("denominator")?.value || "denominator",
+      offset: denominatorSelection.value || "__none__",
+      offset_source: denominatorSelection.sourceId || "dataset",
       features: currentFeatureRows(),
       parameters: currentParameters(),
       shap_rows: document.querySelector("input[name='gbmShapRows']:checked")?.value || "100k",
@@ -3583,6 +3599,7 @@ export function createGbmTool({
       if (activeTab === "shap") shapTool.resize();
       if (activeTab === "stacked-shap") stackedShapTool.resize();
     },
+    syncDenominatorBuildState,
     syncSidebarFromSchema,
     useCached,
   };

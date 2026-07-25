@@ -756,8 +756,14 @@ def validate_request(dataset: Dataset, payload: dict[str, Any]) -> dict[str, Any
     elif response_column and response_column not in numeric_columns:
         errors.append("Choose a numeric response column for GLM fitting")
 
+    denominator_source = str(payload.get("denominator_source") or "dataset").strip() or "dataset"
     denominator_column = selected_denominator_column(payload)
-    if denominator_column:
+    if denominator_source != "dataset":
+        errors.append(
+            "GLM building is unavailable while Denominator is a model prediction; "
+            "use GBM init_score for prediction chaining"
+        )
+    elif denominator_column:
         if denominator_column not in valid_columns:
             errors.append(f"Choose a valid denominator column: {denominator_column}")
         elif denominator_column not in numeric_columns:
@@ -781,6 +787,7 @@ def validate_request(dataset: Dataset, payload: dict[str, Any]) -> dict[str, Any
         "training_scope": training_scope,
         "response_column": response_column,
         "denominator_column": denominator_column,
+        "denominator_source": denominator_source,
         "sample": sample,
     }
     if formula:

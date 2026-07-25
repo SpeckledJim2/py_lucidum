@@ -18,17 +18,21 @@ from py_lucidum.core import (
     Dataset,
     denominator_warnings,
     duckdb_error_message,
+    has_denominator_column,
     is_numeric_kind,
     json_number,
     load_features,
     load_kpis,
     load_saved_filters,
+    metric_relation_context,
     normalise_denominator,
-    response_summary,
+    normalise_denominator_source,
+    relation_row_count,
+    response_summary_for_relation,
     resolve_features_path,
     resolve_filters_path,
     resolve_kpis_path,
-    summarize_denominator,
+    summarize_denominator_for_relation,
 )
 from py_lucidum.tools.registry import normalise_tools, register_tools, tool_payload
 
@@ -331,17 +335,40 @@ def create_app(
             started = time.perf_counter_ns()
             with dataset.lock:
                 source_id = dataset.normalise_source(payload.get("source"))
-                columns = dataset.column_map_for_source(source_id)
                 actual = str(payload.get("actual") or "").strip()
+                raw_denominator = payload.get("denominator", payload.get("weight"))
+                denominator_source = normalise_denominator_source(
+                    dataset,
+                    payload.get("denominatorSource"),
+                    raw_denominator,
+                )
+                fields = [(actual, source_id)]
+                if has_denominator_column(raw_denominator):
+                    fields.append((str(raw_denominator), denominator_source))
+                context = metric_relation_context(dataset, source_id=source_id, fields=fields)
+                relation = context["relation"]
+                columns = context["columns"]
                 if actual not in columns or not is_numeric_kind(columns[actual].kind):
                     raise ValueError("Choose a valid numeric Actual column")
-                denominator = normalise_denominator(payload.get("denominator", payload.get("weight")), columns)
-                filter_sql = dataset.normalise_filter(payload.get("filter"), source_id=source_id)
+                denominator = normalise_denominator(raw_denominator, columns)
+                filter_sql = dataset.normalise_filter_for_relation(payload.get("filter"), relation)
                 responses = [{"label": actual, "numerator": actual}]
-                row_count = dataset.row_count_for_source(source_id)
-                filtered_row_count = dataset.filtered_row_count(filter_sql, source_id=source_id)
-                denominator_summary = summarize_denominator(dataset, responses, denominator, filter_sql, source_id=source_id)
-                response_summaries = response_summary(dataset, responses, denominator, filter_sql, source_id=source_id)
+                row_count = context["row_count"]
+                filtered_row_count = relation_row_count(dataset, relation, filter_sql)
+                denominator_summary = summarize_denominator_for_relation(
+                    dataset,
+                    relation,
+                    responses,
+                    denominator,
+                    filter_sql,
+                )
+                response_summaries = response_summary_for_relation(
+                    dataset,
+                    relation,
+                    responses,
+                    denominator,
+                    filter_sql,
+                )
             elapsed_ns = time.perf_counter_ns() - started
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -352,6 +379,7 @@ def create_app(
             "actual": {"column": actual, "label": actual},
             "denominator": {
                 "column": denominator["column"],
+                "source": denominator_source,
                 "label": denominator["label"],
                 "bar_label": denominator["bar_label"],
                 "value": json_number(denominator_summary.get("value")),

@@ -3,7 +3,17 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from py_lucidum.core import ColumnInfo, Dataset, is_numeric_kind, json_number, normalise_denominator, quote_ident
+from py_lucidum.core import (
+    ColumnInfo,
+    Dataset,
+    has_denominator_column,
+    is_numeric_kind,
+    json_number,
+    metric_relation_context,
+    normalise_denominator,
+    normalise_denominator_source,
+    quote_ident,
+)
 
 
 AUTO_MIN_BINS = 10
@@ -32,8 +42,19 @@ PERCENTILE_VALUES_SQL = "[" + ", ".join(str(percentile) for _, percentile in PER
 def histogram(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
     with dataset.lock:
         source_id = dataset.normalise_source(request.get("source"))
-        relation = dataset.relation_sql_for_source(source_id)
-        columns = dataset.column_map_for_source(source_id)
+        raw_actual = str(request.get("actual") or request.get("numerator") or "").strip()
+        raw_denominator = request.get("denominator", request.get("weight"))
+        denominator_source = normalise_denominator_source(
+            dataset,
+            request.get("denominatorSource"),
+            raw_denominator,
+        )
+        fields = [(raw_actual, source_id)]
+        if has_denominator_column(raw_denominator):
+            fields.append((str(raw_denominator), denominator_source))
+        context = metric_relation_context(dataset, source_id=source_id, fields=fields)
+        relation = context["relation"]
+        columns = context["columns"]
         actual = normalise_actual(request, columns)
         denominator = normalise_denominator(request.get("denominator", request.get("weight")), columns)
         distribution = normalise_distribution(request.get("distribution"))
@@ -44,7 +65,7 @@ def histogram(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
         bin_width_requested = normalise_bin_width(request.get("binWidth")) if bin_mode == "width" else None
         filter_sql = dataset.normalise_filter_for_relation(request.get("filter"), relation)
 
-        row_count = dataset.row_count_for_source(source_id)
+        row_count = context["row_count"]
         counts = validity_counts(dataset, relation, actual, denominator, filter_sql, log_scale)
         valid_count = int(counts.get("valid_count") or 0)
         filtered_row_count = int(counts.get("filtered_count") or 0)
@@ -164,6 +185,7 @@ def histogram(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
             },
             "denominator": {
                 "column": denominator["column"],
+                "source": denominator_source,
                 "label": denominator["label"],
                 "bar_label": denominator["bar_label"],
                 "value": json_number(counts.get("weight_sum")),
