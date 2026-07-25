@@ -46,8 +46,11 @@ DATE_BUCKET_INTERVALS = {
 EMPTY_PERIOD_VALUES = {"show", "skip"}
 
 
-def overlarge_chart_message(max_groups: int) -> str:
-    return f"More than {max_groups:,} x-axis groups; too many to plot. Use Table view to inspect all groups, or choose grouping, banding, or filtering."
+def overlarge_chart_message(max_groups: int, group_label: str = "x-axis groups") -> str:
+    return (
+        f"More than {max_groups:,} {group_label}; too many to plot. "
+        "Use Table view to inspect all groups, or choose grouping, banding, or filtering."
+    )
 
 
 def request_with_single_grouping(request: dict[str, Any]) -> dict[str, Any]:

@@ -10,8 +10,12 @@ const HEATMAP_Y_AXIS_LABEL_MEASURE_PADDING = 6;
 const HEATMAP_Y_AXIS_TITLE_CLEARANCE = 14;
 const HEATMAP_Y_AXIS_OUTER_PADDING = 20;
 const HEATMAP_Y_AXIS_MAX_FONT_SIZE = 12;
-const HEATMAP_Y_AXIS_MIN_FONT_SIZE = 6;
+const HEATMAP_AXIS_MIN_FONT_SIZE = 8;
 const HEATMAP_Y_AXIS_FONT_HEIGHT_RATIO = 0.78;
+const HEATMAP_X_AXIS_RIGHT = 96;
+const HEATMAP_X_AXIS_TOP = 42;
+const HEATMAP_X_AXIS_ROTATIONS = [0, 65, 75];
+const HEATMAP_X_AXIS_LABEL_PADDING = 8;
 const HEATMAP_LABEL_MAX_FONT_SIZE = 12;
 const HEATMAP_LABEL_MIN_FONT_SIZE = 7;
 const HEATMAP_LABEL_HORIZONTAL_PADDING = 8;
@@ -279,25 +283,17 @@ function heatmapOption(data, metric, options) {
   const xLabels = Array.isArray(options.xAxisLabels) && options.xAxisLabels.length === xValues.length
     ? options.xAxisLabels
     : xValues.map((item) => item.label);
-  const xAxisLabelPolicy = options.xAxisLabelPolicy || null;
   const yLabels = yValues.map((item) => item.label);
-  const yAxisLayout = heatmapYAxisLayout(yLabels, options);
+  const axisLayout = options.heatmapAxisLayout
+    || fitTwoFeatureHeatmapAxes(xLabels, yLabels, options);
+  const xAxisLabelPolicy = axisLayout.xAxisLabelPolicy;
+  const yAxisLayout = axisLayout.yAxisLayout;
   const heatmapLabels = options.heatmapLabelConfig || twoFeatureHeatmapLabelConfig(data, options);
   const yAxis = categoryAxis(yLabels, data.groupings[0].feature, theme);
   yAxis.nameGap = yAxisLayout.nameGap;
   yAxis.axisLabel = {
     ...yAxis.axisLabel,
-    align: "right",
-    rotate: 0,
-    interval: 0,
-    hideOverlap: false,
-    fontSize: yAxisLayout.fontSize,
-    formatter: (value) => truncateHeatmapYAxisLabel(
-      value,
-      yAxisLayout.labelWidth,
-      options,
-      yAxisLayout.fontSize,
-    ),
+    ...yAxisLayout.axisLabel,
   };
   return {
     backgroundColor: "transparent",
@@ -313,10 +309,7 @@ function heatmapOption(data, metric, options) {
       },
     },
     grid: {
-      left: yAxisLayout.gridLeft,
-      right: 96,
-      top: 42,
-      bottom: xAxisLabelPolicy?.bottom ?? 84,
+      ...axisLayout.grid,
     },
     xAxis: categoryAxis(xLabels, data.groupings[1].feature, theme, xAxisLabelPolicy),
     yAxis,
@@ -488,20 +481,15 @@ export function twoFeatureHeatmapLabelConfig(data, options = {}) {
   const yValues = sortedGroupValues(rows, 0);
   const xIndex = new Map(xValues.map((item, index) => [item.label, index]));
   const yIndex = new Map(yValues.map((item, index) => [item.label, index]));
-  const rowByCell = new Map(rows.map((row) => [
-    cellKey(xIndex.get(String(row.group1)), yIndex.get(String(row.group0))),
-    row,
-  ]));
   const mode = normaliseHeatmapLabelMode(options.heatmapLabelMode);
   const formatActual = typeof options.formatActual === "function" ? options.formatActual : String;
   const formatWeight = typeof options.formatWeight === "function" ? options.formatWeight : String;
-  const yAxisLayout = heatmapYAxisLayout(yValues.map((item) => item.label), options);
-  const grid = {
-    left: yAxisLayout.gridLeft,
-    right: 96,
-    top: 42,
-    bottom: options.xAxisLabelPolicy?.bottom ?? 84,
-  };
+  const axisLayout = options.heatmapAxisLayout || fitTwoFeatureHeatmapAxes(
+    xValues.map((item) => item.label),
+    yValues.map((item) => item.label),
+    options,
+  );
+  const grid = axisLayout.grid;
   const chartWidth = finiteNumber(options.chartWidth) || 1200;
   const chartHeight = finiteNumber(options.chartHeight) || 800;
   const cellLimit = finiteNumber(options.heatmapLabelCellLimit);
@@ -534,16 +522,23 @@ export function twoFeatureHeatmapLabelConfig(data, options = {}) {
   const fontSize = availableModes[mode]
     ? Math.max(HEATMAP_LABEL_MIN_FONT_SIZE, Math.min(HEATMAP_LABEL_MAX_FONT_SIZE, fittedFontSize))
     : HEATMAP_LABEL_MIN_FONT_SIZE;
+  const show = mode !== "none" && Boolean(availableModes[mode]);
+  const rowByCell = show
+    ? new Map(rows.map((row) => [
+        cellKey(xIndex.get(String(row.group1)), yIndex.get(String(row.group0))),
+        row,
+      ]))
+    : null;
   return {
     available,
     availableModes,
-    show: mode !== "none" && Boolean(availableModes[mode]),
+    show,
     mode,
     denseCellCount,
     fontSize,
     lineHeight: Math.ceil(fontSize * HEATMAP_LABEL_LINE_HEIGHT_FACTOR),
     formatCell: (x, y) => {
-      const row = rowByCell.get(cellKey(x, y));
+      const row = rowByCell?.get(cellKey(x, y));
       return row ? heatmapCellLabel(row, mode, formatActual, formatWeight) : "";
     },
   };
@@ -556,14 +551,15 @@ function normaliseHeatmapLabelMode(value) {
 
 function heatmapLabelFontSize(rows, mode, cellWidth, cellHeight, formatActual, formatWeight, options) {
   const lineCount = mode === "both" ? 2 : 1;
-  const labels = rows.flatMap((row) => heatmapCellLabelLines(row, mode, formatActual, formatWeight));
-  const widest = labels.reduce(
-    (maximum, label) => Math.max(
-      maximum,
-      measureHeatmapLabelWidth(label, HEATMAP_LABEL_MAX_FONT_SIZE, options),
-    ),
-    0,
-  );
+  let widest = 0;
+  for (const row of rows) {
+    for (const label of heatmapCellLabelLines(row, mode, formatActual, formatWeight)) {
+      widest = Math.max(
+        widest,
+        measureHeatmapLabelWidth(label, HEATMAP_LABEL_MAX_FONT_SIZE, options),
+      );
+    }
+  }
   const usableWidth = Math.max(0, cellWidth - HEATMAP_LABEL_HORIZONTAL_PADDING);
   const usableHeight = Math.max(0, cellHeight - HEATMAP_LABEL_VERTICAL_PADDING);
   const widthScale = widest > 0 ? usableWidth / widest : 1;
@@ -606,8 +602,166 @@ function measureHeatmapLabelWidth(value, fontSize, options) {
   return text.length * fontSize * 0.58;
 }
 
+export function fitTwoFeatureHeatmapAxes(xLabels, yLabels, options = {}) {
+  const horizontalLabels = Array.isArray(xLabels) ? xLabels : [];
+  const verticalLabels = Array.isArray(yLabels) ? yLabels : [];
+  const baseXAxisPolicy = normaliseHeatmapXAxisPolicy(horizontalLabels, options.xAxisLabelPolicy);
+  let xAxisLabelPolicy = baseXAxisPolicy;
+  let yAxisLayout = null;
+  for (let iteration = 0; iteration < 3; iteration += 1) {
+    yAxisLayout = heatmapYAxisLayout(verticalLabels, {
+      ...options,
+      xAxisLabelPolicy,
+    });
+    xAxisLabelPolicy = heatmapXAxisLabelPolicy(
+      horizontalLabels,
+      yAxisLayout,
+      baseXAxisPolicy,
+      options,
+    );
+  }
+  yAxisLayout = heatmapYAxisLayout(verticalLabels, {
+    ...options,
+    xAxisLabelPolicy,
+  });
+  return {
+    xAxisLabelPolicy,
+    yAxisLayout,
+    grid: {
+      left: yAxisLayout.gridLeft,
+      right: HEATMAP_X_AXIS_RIGHT,
+      top: HEATMAP_X_AXIS_TOP,
+      bottom: xAxisLabelPolicy.bottom,
+    },
+  };
+}
+
+function normaliseHeatmapXAxisPolicy(labels, policy) {
+  const initialFontSize = finiteNumber(policy?.fontSize);
+  const initialRotate = finiteNumber(policy?.rotate);
+  return {
+    show: policy?.show !== false,
+    interval: 0,
+    formatter: policy?.formatter,
+    showMinLabel: true,
+    showMaxLabel: true,
+    rotate: initialRotate ?? (labels.length > 25 ? 65 : 0),
+    fontSize: Math.max(
+      HEATMAP_AXIS_MIN_FONT_SIZE,
+      initialFontSize ?? (labels.length > 50 ? HEATMAP_AXIS_MIN_FONT_SIZE : 10),
+    ),
+    nameGap: finiteNumber(policy?.nameGap) ?? 26,
+    bottom: finiteNumber(policy?.bottom) ?? 42,
+    dataZoomEnabled: Boolean(policy?.dataZoomEnabled),
+    hideOverlap: false,
+    hiddenReason: String(policy?.hiddenReason || ""),
+  };
+}
+
+function heatmapXAxisLabelPolicy(labels, yAxisLayout, basePolicy, options) {
+  const chartWidth = finiteNumber(options?.chartWidth) || 1200;
+  const plotWidth = Math.max(0, chartWidth - yAxisLayout.gridLeft - HEATMAP_X_AXIS_RIGHT);
+  const visibleRange = normaliseHeatmapXAxisVisibleRange(options?.xAxisVisibleRange, labels.length);
+  const visibleLabels = labels.slice(visibleRange.startIndex, visibleRange.endIndex + 1);
+  const visibleCount = visibleLabels.length;
+  const slotWidth = plotWidth / Math.max(1, visibleCount);
+  const initialFontSize = Math.max(
+    HEATMAP_AXIS_MIN_FONT_SIZE,
+    Math.min(12, Math.floor(basePolicy.fontSize)),
+  );
+  const fontSizes = [];
+  for (let fontSize = initialFontSize; fontSize >= HEATMAP_AXIS_MIN_FONT_SIZE; fontSize -= 1) {
+    fontSizes.push(fontSize);
+  }
+  const rotations = [...new Set([
+    basePolicy.rotate,
+    ...HEATMAP_X_AXIS_ROTATIONS,
+  ].map((value) => Math.max(0, Math.min(90, Number(value) || 0))))];
+  for (const rotate of rotations) {
+    for (const fontSize of fontSizes) {
+      const maximumWidth = visibleLabels.reduce(
+        (maximum, label) => Math.max(maximum, measureLabelWidth(label, options, fontSize)),
+        0,
+      );
+      const footprint = heatmapXAxisLabelFootprint(maximumWidth, fontSize, rotate);
+      if (visibleCount <= 1 || footprint <= slotWidth) {
+        if (
+          basePolicy.show
+          && fontSize === basePolicy.fontSize
+          && rotate === basePolicy.rotate
+        ) {
+          return { ...basePolicy, show: true, hiddenReason: "" };
+        }
+        return visibleHeatmapXAxisPolicy(basePolicy, maximumWidth, fontSize, rotate);
+      }
+    }
+  }
+  const dataZoomSpace = basePolicy.dataZoomEnabled ? 36 : 0;
+  return {
+    ...basePolicy,
+    show: false,
+    showMinLabel: undefined,
+    showMaxLabel: undefined,
+    rotate: 0,
+    fontSize: HEATMAP_AXIS_MIN_FONT_SIZE,
+    nameGap: 22,
+    bottom: 38 + dataZoomSpace,
+    hiddenReason: basePolicy.dataZoomEnabled
+      ? "because factor labels would be smaller than 8px; use zoom to inspect labels"
+      : "because factor labels would be smaller than 8px",
+  };
+}
+
+function visibleHeatmapXAxisPolicy(basePolicy, labelWidth, fontSize, rotate) {
+  const labelSpace = heatmapXAxisLabelSpace(labelWidth, fontSize, rotate);
+  const titleGap = rotate ? Math.max(26, labelSpace - 10) : 26;
+  return {
+    ...basePolicy,
+    show: true,
+    showMinLabel: true,
+    showMaxLabel: true,
+    rotate,
+    fontSize,
+    nameGap: titleGap,
+    bottom: titleGap + 16 + (basePolicy.dataZoomEnabled ? 36 : 0),
+    hiddenReason: "",
+  };
+}
+
+function normaliseHeatmapXAxisVisibleRange(range, count) {
+  if (count <= 0) return { startIndex: 0, endIndex: -1 };
+  const lastIndex = count - 1;
+  const startIndex = Math.max(
+    0,
+    Math.min(lastIndex, Math.floor(Number(range?.startIndex ?? 0))),
+  );
+  const endIndex = Math.max(
+    startIndex,
+    Math.min(lastIndex, Math.ceil(Number(range?.endIndex ?? lastIndex))),
+  );
+  return { startIndex, endIndex };
+}
+
+function heatmapXAxisLabelFootprint(labelWidth, fontSize, rotate) {
+  if (!rotate) return labelWidth + HEATMAP_X_AXIS_LABEL_PADDING;
+  const radians = (rotate * Math.PI) / 180;
+  return (
+    labelWidth * Math.cos(radians)
+    + fontSize * Math.sin(radians)
+    + HEATMAP_X_AXIS_LABEL_PADDING
+  );
+}
+
+function heatmapXAxisLabelSpace(labelWidth, fontSize, rotate) {
+  if (!rotate) return 38;
+  const radians = (rotate * Math.PI) / 180;
+  const rotatedHeight = labelWidth * Math.sin(radians) + fontSize * Math.cos(radians);
+  return Math.min(140, Math.max(58, Math.ceil(rotatedHeight) + 18));
+}
+
 function heatmapYAxisLayout(labels, options) {
-  const fontSize = heatmapYAxisFontSize(labels.length, options);
+  const fit = heatmapYAxisLabelFit(labels.length, options);
+  const fontSize = fit.fontSize;
   const measuredWidth = labels.reduce(
     (maximum, label) => Math.max(maximum, measureLabelWidth(label, options, fontSize)),
     0,
@@ -625,7 +779,7 @@ function heatmapYAxisLayout(labels, options) {
       - HEATMAP_Y_AXIS_OUTER_PADDING,
   );
   const labelWidth = Math.min(
-    Math.ceil(measuredWidth) + HEATMAP_Y_AXIS_LABEL_MEASURE_PADDING,
+    fit.show ? Math.ceil(measuredWidth) + HEATMAP_Y_AXIS_LABEL_MEASURE_PADDING : 0,
     maximumLabelWidth,
   );
   const nameGap = labelWidth + HEATMAP_Y_AXIS_LABEL_MARGIN + HEATMAP_Y_AXIS_TITLE_CLEARANCE;
@@ -633,19 +787,44 @@ function heatmapYAxisLayout(labels, options) {
     HEATMAP_Y_AXIS_MIN_LEFT,
     Math.min(maximumLeft, nameGap + HEATMAP_Y_AXIS_OUTER_PADDING),
   );
-  return { gridLeft, labelWidth, nameGap, fontSize };
+  return {
+    gridLeft,
+    labelWidth,
+    nameGap,
+    fontSize,
+    show: fit.show,
+    axisLabel: {
+      show: fit.show,
+      align: "right",
+      rotate: 0,
+      interval: 0,
+      hideOverlap: false,
+      showMinLabel: fit.show ? true : undefined,
+      showMaxLabel: fit.show ? true : undefined,
+      fontSize,
+      formatter: (value) => truncateHeatmapYAxisLabel(
+        value,
+        labelWidth,
+        options,
+        fontSize,
+      ),
+    },
+  };
 }
 
-function heatmapYAxisFontSize(categoryCount, options) {
+function heatmapYAxisLabelFit(categoryCount, options) {
   const chartHeight = finiteNumber(options?.chartHeight) || 800;
   const gridBottom = finiteNumber(options?.xAxisLabelPolicy?.bottom) ?? 84;
-  const plotHeight = Math.max(0, chartHeight - 42 - gridBottom);
+  const plotHeight = Math.max(0, chartHeight - HEATMAP_X_AXIS_TOP - gridBottom);
   const categoryHeight = plotHeight / Math.max(1, categoryCount);
   const fitted = Math.floor(categoryHeight * HEATMAP_Y_AXIS_FONT_HEIGHT_RATIO);
-  return Math.max(
-    HEATMAP_Y_AXIS_MIN_FONT_SIZE,
-    Math.min(HEATMAP_Y_AXIS_MAX_FONT_SIZE, fitted),
-  );
+  return {
+    show: fitted >= HEATMAP_AXIS_MIN_FONT_SIZE,
+    fontSize: Math.max(
+      HEATMAP_AXIS_MIN_FONT_SIZE,
+      Math.min(HEATMAP_Y_AXIS_MAX_FONT_SIZE, fitted),
+    ),
+  };
 }
 
 function truncateHeatmapYAxisLabel(value, maximumWidth, options, fontSize) {
@@ -740,10 +919,15 @@ function compareSortValues(left, right) {
 }
 
 function numericExtent(values) {
-  const finite = values.map(finiteNumber).filter((value) => value !== null);
-  if (!finite.length) return { min: 0, max: 1 };
-  const min = Math.min(...finite);
-  const max = Math.max(...finite);
+  let min = null;
+  let max = null;
+  for (const rawValue of values) {
+    const value = finiteNumber(rawValue);
+    if (value === null) continue;
+    min = min === null ? value : Math.min(min, value);
+    max = max === null ? value : Math.max(max, value);
+  }
+  if (min === null || max === null) return { min: 0, max: 1 };
   if (min === max) {
     const padding = Math.abs(min || 1) * 0.1;
     return { min: min - padding, max: max + padding };

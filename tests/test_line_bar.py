@@ -3861,6 +3861,34 @@ COPY (
 
     def test_two_feature_chart_enforces_group_series_and_dense_grid_limits(self) -> None:
         dataset = Dataset(self.data_path)
+        heatmap_request = self.two_feature_request()
+        heatmap_request["groupings"][0]["asFactor"] = True
+        heatmap_request.pop("maxGroups")
+        heatmap_default = chart(dataset, heatmap_request)
+        self.assertEqual(heatmap_default["plot_type"], "heatmap")
+        self.assertEqual(heatmap_default["max_groups"], 100_000)
+        self.assertFalse(heatmap_default["groups_truncated"])
+        heatmap_group_count = heatmap_default["group_count"]
+
+        exact_heatmap = chart(dataset, {**heatmap_request, "maxGroups": heatmap_group_count})
+        self.assertEqual(exact_heatmap["group_count"], heatmap_group_count)
+        self.assertEqual(len(exact_heatmap["rows"]), heatmap_group_count)
+        self.assertFalse(exact_heatmap["groups_truncated"])
+
+        overlarge_heatmap = chart(dataset, {**heatmap_request, "maxGroups": heatmap_group_count - 1})
+        self.assertEqual(overlarge_heatmap["rows"], [])
+        self.assertTrue(overlarge_heatmap["groups_truncated"])
+        self.assertIn(
+            f"More than {heatmap_group_count - 1} grouped heatmap cells; too many to plot",
+            " ".join(overlarge_heatmap["warnings"]),
+        )
+
+        mixed_request = self.two_feature_request()
+        mixed_request.pop("maxGroups")
+        mixed_default = chart(dataset, mixed_request)
+        self.assertEqual(mixed_default["plot_type"], "lines")
+        self.assertEqual(mixed_default["max_groups"], 10_000)
+
         group_limited = chart(dataset, {**self.two_feature_request(), "maxGroups": 2})
         self.assertTrue(group_limited["groups_truncated"])
         self.assertEqual(group_limited["rows"], [])

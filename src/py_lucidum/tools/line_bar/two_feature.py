@@ -21,6 +21,7 @@ from py_lucidum.core import (
 
 
 DEFAULT_MAX_GROUPS = 10_000
+DEFAULT_HEATMAP_MAX_GROUPS = 100_000
 DEFAULT_TABLE_PAGE_SIZE = 10_000
 MAX_LINE_SERIES = 80
 MAX_DENSE_GRID_CELLS = 40_000
@@ -30,6 +31,11 @@ DATE_BUCKETS = {"hour", "day", "week", "month", "year"}
 def has_two_groupings(request: dict[str, Any]) -> bool:
     raw = request.get("groupings")
     return isinstance(raw, list) and len(raw) == 2
+
+
+def chart_max_groups(result: dict[str, Any]) -> int:
+    default = DEFAULT_HEATMAP_MAX_GROUPS if result["plot_type"] == "heatmap" else DEFAULT_MAX_GROUPS
+    return positive_int(result["request"].get("maxGroups"), default)
 
 
 def chart(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
@@ -42,10 +48,11 @@ def chart(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
         warnings = [*result["warnings"]]
         missing_warnings = continuous_missing_warnings(rows, result["groupings"])
         group_count = fetched["group_count"]
-        max_groups = positive_int(request.get("maxGroups"), DEFAULT_MAX_GROUPS)
+        max_groups = chart_max_groups(result)
         groups_truncated = group_count > max_groups
         if groups_truncated:
-            warnings.append(line_bar_query.overlarge_chart_message(max_groups))
+            group_label = "grouped heatmap cells" if result["plot_type"] == "heatmap" else "two-feature groups"
+            warnings.append(line_bar_query.overlarge_chart_message(max_groups, group_label))
 
         dense_grid_cells = 0
         dense_grid_too_large = False
@@ -711,7 +718,7 @@ def group_sql_columns(
 
 
 def fetch_chart_rows(dataset: Dataset, result: dict[str, Any]) -> dict[str, Any]:
-    max_groups = positive_int(result["request"].get("maxGroups"), DEFAULT_MAX_GROUPS)
+    max_groups = chart_max_groups(result)
     sql = f"""
 {result['grouped_sql']},
 group_total AS (

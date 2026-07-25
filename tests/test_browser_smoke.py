@@ -5112,6 +5112,10 @@ class BrowserSmokeTests(unittest.TestCase):
                             '#featureList .feature[data-value="segment"][data-source-id="dataset"]'
                         ).click(modifiers=[row_selection_modifier])
                     added_segment_response.value.finished()
+                    self.assertEqual(
+                        added_segment_response.value.request.post_data_json["maxGroups"],
+                        10_000,
+                    )
                     page.wait_for_timeout(100)
                     page.wait_for_function(
                         """
@@ -5166,7 +5170,16 @@ class BrowserSmokeTests(unittest.TestCase):
                         page.locator('#lineBarTwoFeatureControls [data-two-control="heatmapLabels"]').count(),
                         0,
                     )
-                    page.locator('#lineBarTwoFeatureControls [data-two-action="as-factor"][data-feature-index="0"]').click()
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                        timeout=10_000,
+                    ) as heatmap_response:
+                        page.locator('#lineBarTwoFeatureControls [data-two-action="as-factor"][data-feature-index="0"]').click()
+                    heatmap_response.value.finished()
+                    self.assertEqual(
+                        heatmap_response.value.request.post_data_json["maxGroups"],
+                        100_000,
+                    )
                     page.wait_for_function(
                         """
                         () => {
@@ -5719,6 +5732,108 @@ class BrowserSmokeTests(unittest.TestCase):
                         """() => (document.querySelector("#lineBarGroupMeta")?.textContent || "").includes("of")""",
                         timeout=10_000,
                     )
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_line_bar_dense_heatmap_renders_13003_cells_and_x_labels_return_on_zoom(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "dense_heatmap.csv"
+            data_path.write_text(
+                "y_factor,x_factor,actual\n"
+                + "".join(
+                    f"Y {index % 432:03d},X {index % 402:03d},{index + 1}\n"
+                    for index in range(13_003)
+                ),
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                use_kpis=False,
+                defaults={"x": "y_factor", "actual": "actual"},
+                tools=["line_bar"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1000, "height": 700})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#lineBarGroupMeta")
+                          ?.textContent?.includes("groups")
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator("#lineBarSideControlsToggleBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#lineBarSideControlsToggleBtn")
+                          ?.getAttribute("aria-expanded") === "true"
+                        """,
+                        timeout=10_000,
+                    )
+                    modifier = "Meta" if sys.platform == "darwin" else "Control"
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                        timeout=10_000,
+                    ) as heatmap_response:
+                        page.locator(
+                            '#featureList .feature[data-value="x_factor"][data-source-id="dataset"]'
+                        ).click(modifiers=[modifier])
+                    heatmap_response.value.finished()
+                    self.assertEqual(
+                        heatmap_response.value.request.post_data_json["maxGroups"],
+                        100_000,
+                    )
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const option = echarts.getInstanceByDom(document.querySelector("#chart"))
+                            ?.getOption();
+                          return option?.series?.[0]?.type === "heatmap"
+                            && option?.series?.[0]?.data?.length === 13003
+                            && option?.xAxis?.[0]?.axisLabel?.show === false
+                            && option?.yAxis?.[0]?.axisLabel?.show === false
+                            && option?.xAxis?.[0]?.name === "x_factor"
+                            && option?.yAxis?.[0]?.name === "y_factor"
+                            && option?.dataZoom?.length === 2
+                            && document.querySelector("#lineBarGroupMeta")
+                              ?.textContent?.includes("13,003 groups");
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    page.evaluate("performance.clearResourceTimings()")
+                    page.evaluate(
+                        """
+                        () => echarts.getInstanceByDom(document.querySelector("#chart"))
+                          ?.dispatchAction({ type: "dataZoom", start: 0, end: 1 })
+                        """
+                    )
+                    page.wait_for_function(
+                        """
+                        () => echarts.getInstanceByDom(document.querySelector("#chart"))
+                          ?.getOption()?.xAxis?.[0]?.axisLabel?.show === true
+                        """,
+                        timeout=10_000,
+                    )
+                    page.wait_for_timeout(100)
+                    chart_requests = page.evaluate(
+                        """
+                        () => performance.getEntriesByType("resource")
+                          .filter((entry) => new URL(entry.name).pathname === "/api/chart").length
+                        """
+                    )
+                    self.assertEqual(chart_requests, 0)
                     self.assertEqual(page_errors, [])
                     browser.close()
             finally:
@@ -6380,7 +6495,7 @@ class BrowserSmokeTests(unittest.TestCase):
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
-    def test_line_bar_factor_heatmap_shows_all_dense_y_labels(self) -> None:
+    def test_line_bar_factor_heatmap_suppresses_unreadable_dense_y_labels(self) -> None:
         makes = [f"MAKE_{index:02d}" for index in range(1, 91)]
         with TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
@@ -6422,21 +6537,16 @@ class BrowserSmokeTests(unittest.TestCase):
                     ).click(modifiers=[row_selection_modifier])
                     page.wait_for_function(
                         """
-                        (labels) => {
+                        (labelCount) => {
                           const chart = echarts.getInstanceByDom(document.querySelector("#chart"));
                           const option = chart?.getOption();
                           if (option?.series?.[0]?.type !== "heatmap"
-                              || option?.yAxis?.[0]?.data?.length !== labels.length) return false;
-                          const wanted = new Set(labels);
-                          const rendered = new Set(
-                            chart.getZr().storage.getDisplayList(true)
-                              .map((element) => String(element.style?.text || ""))
-                              .filter((text) => wanted.has(text))
-                          );
-                          return rendered.size === labels.length;
+                              || option?.yAxis?.[0]?.data?.length !== labelCount) return false;
+                          return option.yAxis[0].axisLabel.show === false
+                            && option.xAxis[0].axisLabel.show !== false;
                         }
                         """,
-                        arg=makes,
+                        arg=len(makes),
                         timeout=10_000,
                     )
 
@@ -6458,11 +6568,11 @@ class BrowserSmokeTests(unittest.TestCase):
                             });
                           return {
                             data: option.yAxis[0].data,
-                            align: option.yAxis[0].axisLabel.align,
-                            rotate: option.yAxis[0].axisLabel.rotate,
-                            interval: option.yAxis[0].axisLabel.interval,
-                            hideOverlap: option.yAxis[0].axisLabel.hideOverlap,
+                            show: option.yAxis[0].axisLabel.show,
                             fontSize: option.yAxis[0].axisLabel.fontSize,
+                            yTitle: option.yAxis[0].name,
+                            xShow: option.xAxis[0].axisLabel.show,
+                            xTitle: option.xAxis[0].name,
                             rendered,
                           };
                         }
@@ -6470,33 +6580,39 @@ class BrowserSmokeTests(unittest.TestCase):
                         makes,
                     )
                     self.assertEqual(dense_axis["data"], makes)
-                    self.assertEqual(dense_axis["align"], "right")
-                    self.assertEqual(dense_axis["rotate"], 0)
-                    self.assertEqual(dense_axis["interval"], 0)
-                    self.assertFalse(dense_axis["hideOverlap"])
-                    self.assertGreaterEqual(dense_axis["fontSize"], 6)
-                    self.assertLess(dense_axis["fontSize"], 12)
-                    self.assertEqual(
-                        {item["text"] for item in dense_axis["rendered"]},
-                        set(makes),
-                    )
-                    label_rights = [item["right"] for item in dense_axis["rendered"]]
-                    self.assertLessEqual(max(label_rights) - min(label_rights), 1)
+                    self.assertFalse(dense_axis["show"])
+                    self.assertEqual(dense_axis["fontSize"], 8)
+                    self.assertEqual(dense_axis["yTitle"], "Make")
+                    self.assertTrue(dense_axis["xShow"])
+                    self.assertEqual(dense_axis["xTitle"], "AgeBand")
+                    self.assertEqual(dense_axis["rendered"], [])
 
                     page.wait_for_load_state("networkidle")
                     page.evaluate("performance.clearResourceTimings()")
                     page.set_viewport_size({"width": 1440, "height": 1200})
                     page.wait_for_function(
                         """
-                        previous => echarts.getInstanceByDom(document.querySelector("#chart"))
-                          ?.getOption()?.yAxis?.[0]?.axisLabel?.fontSize > previous
+                        (labels) => {
+                          const chart = echarts.getInstanceByDom(document.querySelector("#chart"));
+                          const option = chart?.getOption();
+                          if (option?.yAxis?.[0]?.axisLabel?.show !== true
+                              || option.yAxis[0].axisLabel.fontSize < 8) return false;
+                          const wanted = new Set(labels);
+                          return new Set(
+                            chart.getZr().storage.getDisplayList(true)
+                              .map((element) => String(element.style?.text || ""))
+                              .filter((text) => wanted.has(text))
+                          ).size === labels.length;
+                        }
                         """,
-                        arg=dense_axis["fontSize"],
+                        arg=makes,
                         timeout=10_000,
                     )
                     resize_state = page.evaluate(
                         """
                         () => ({
+                          show: echarts.getInstanceByDom(document.querySelector("#chart"))
+                            ?.getOption()?.yAxis?.[0]?.axisLabel?.show,
                           fontSize: echarts.getInstanceByDom(document.querySelector("#chart"))
                             ?.getOption()?.yAxis?.[0]?.axisLabel?.fontSize,
                           chartRequests: performance.getEntriesByType("resource")
@@ -6504,6 +6620,7 @@ class BrowserSmokeTests(unittest.TestCase):
                         })
                         """
                     )
+                    self.assertTrue(resize_state["show"])
                     self.assertGreater(resize_state["fontSize"], dense_axis["fontSize"])
                     self.assertEqual(resize_state["chartRequests"], 0)
                     self.assertEqual(page_errors, [])
@@ -25410,6 +25527,31 @@ COPY (
                 )
                 page.locator("#gbmTrainBtn", has_text="Train GBM").wait_for(timeout=10_000)
                 page.locator("#appStatusBadge.ready", has_text="Ready").wait_for(timeout=10_000)
+                page.wait_for_function(
+                    """
+                    () => new Promise((resolve) => {
+                      const button = document.querySelector("#gbmTrainBtn");
+                      if (!button) {
+                        resolve(false);
+                        return;
+                      }
+                      requestAnimationFrame(() => requestAnimationFrame(() => {
+                        const current = document.querySelector("#gbmTrainBtn");
+                        const style = getComputedStyle(button);
+                        resolve(
+                          button.isConnected
+                          && button === current
+                          && button.textContent.trim() === "Train GBM"
+                          && !button.disabled
+                          && !button.classList.contains("training")
+                          && style.cursor === "pointer"
+                          && style.backgroundColor === "rgb(21, 128, 61)"
+                        );
+                      }));
+                    })
+                    """,
+                    timeout=10_000,
+                )
                 page.evaluate("window.__gbmStatusObserver?.disconnect()")
                 self.assertEqual(page.locator("#appStatusBadge .app-status-badge-elapsed").text_content(), "")
                 gbm_ready_button = page.locator("#gbmTrainBtn").evaluate(
@@ -27938,8 +28080,6 @@ COPY (
                 assert_compact_feature_layout(compact_feature_layout())
 
                 page.set_viewport_size({"width": 390, "height": 844})
-                if not page.locator("body").evaluate("node => node.classList.contains('sidebar-collapsed')"):
-                    page.locator("#sidebarToggleBtn").click()
                 page.wait_for_function(
                     "() => document.body.classList.contains('sidebar-collapsed')",
                     timeout=10_000,

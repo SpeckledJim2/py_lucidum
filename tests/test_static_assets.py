@@ -149,7 +149,7 @@ if (formatters.formatLineValue(-0.125) !== "-12.5%") throw new Error("KPI percen
     def test_two_feature_line_bar_chart_options_follow_feature_axis_ordering(self) -> None:
         module = Path("src/py_lucidum/static/app/line-bar-two-feature-chart.js").resolve().as_uri()
         script = f"""
-import {{ twoFeatureChartOption }} from "{module}";
+import {{ fitTwoFeatureHeatmapAxes, twoFeatureChartOption }} from "{module}";
 const metric = {{ key: "resp0", label: "Actual", format: (value) => String(value) }};
 const rows = [
   {{ group0: "1", group0_sort: 1, group0_missing: false, group1: "A", group1_sort: "A", group1_missing: false, resp0: 10, volume: 1 }},
@@ -468,8 +468,92 @@ if (manyYHeatmap.yAxis.axisLabel.rotate !== 0
     || manyYHeatmap.yAxis.axisLabel.align !== "right"
     || manyYHeatmap.yAxis.axisLabel.interval !== 0
     || manyYHeatmap.yAxis.axisLabel.hideOverlap !== false
-    || manyYHeatmap.yAxis.axisLabel.fontSize !== 6) {{
-  throw new Error("dense heatmap y-axis labels must shrink and remain fully enabled");
+    || manyYHeatmap.yAxis.axisLabel.show !== false
+    || manyYHeatmap.yAxis.axisLabel.fontSize !== 8
+    || manyYHeatmap.xAxis.axisLabel.show === false
+    || manyYHeatmap.yAxis.name !== "Y") {{
+  throw new Error("only the unreadable heatmap y-axis labels should be suppressed");
+}}
+const manyXRows = Array.from({{ length: 80 }}, (_, index) => ({{
+  group0: "Y",
+  group0_sort: "Y",
+  group1: `Factor ${{index + 1}}`,
+  group1_sort: index,
+  resp0: index,
+}}));
+const manyXHeatmap = twoFeatureChartOption({{
+  plot_type: "heatmap",
+  groupings: [
+    {{ feature: "Y", kind: "categorical", continuous: false }},
+    {{ feature: "X", kind: "categorical", continuous: false }},
+  ],
+  rows: manyXRows,
+}}, metric, {{ chartWidth: 800, chartHeight: 600 }});
+if (manyXHeatmap.xAxis.axisLabel.show !== false
+    || manyXHeatmap.yAxis.axisLabel.show === false
+    || manyXHeatmap.xAxis.name !== "X") {{
+  throw new Error("only the unreadable heatmap x-axis labels should be suppressed");
+}}
+const zoomXAxisPolicy = {{
+  show: false,
+  interval: 0,
+  rotate: 0,
+  fontSize: 10,
+  nameGap: 22,
+  bottom: 74,
+  dataZoomEnabled: true,
+  hideOverlap: false,
+}};
+const xAxisLabels = manyXRows.map((row) => row.group1);
+const fullHeatmapAxes = fitTwoFeatureHeatmapAxes(xAxisLabels, ["Y"], {{
+  chartWidth: 800,
+  chartHeight: 600,
+  xAxisLabelPolicy: zoomXAxisPolicy,
+}});
+const zoomedHeatmapAxes = fitTwoFeatureHeatmapAxes(xAxisLabels, ["Y"], {{
+  chartWidth: 800,
+  chartHeight: 600,
+  xAxisLabelPolicy: zoomXAxisPolicy,
+  xAxisVisibleRange: {{ startIndex: 0, endIndex: 9 }},
+}});
+if (fullHeatmapAxes.xAxisLabelPolicy.show !== false
+    || zoomedHeatmapAxes.xAxisLabelPolicy.show !== true
+    || zoomedHeatmapAxes.xAxisLabelPolicy.fontSize < 8) {{
+  throw new Error("heatmap x-axis labels should reappear after sufficient zoom");
+}}
+const shortHeatmapAxes = fitTwoFeatureHeatmapAxes(["X"], manyYRows.map((row) => row.group0), {{
+  chartWidth: 800,
+  chartHeight: 600,
+}});
+const tallHeatmapAxes = fitTwoFeatureHeatmapAxes(["X"], manyYRows.map((row) => row.group0), {{
+  chartWidth: 800,
+  chartHeight: 1200,
+}});
+if (shortHeatmapAxes.yAxisLayout.show !== false
+    || tallHeatmapAxes.yAxisLayout.show !== true
+    || tallHeatmapAxes.yAxisLayout.fontSize < 8) {{
+  throw new Error("heatmap y-axis labels should reappear after sufficient resize");
+}}
+const maximumHeatmapRows = Array.from({{ length: 100000 }}, (_, index) => ({{
+  group0: `Y${{Math.floor(index / 400)}}`,
+  group0_sort: Math.floor(index / 400),
+  group1: `X${{index % 400}}`,
+  group1_sort: index % 400,
+  resp0: index,
+  volume: 1,
+}}));
+const maximumHeatmap = twoFeatureChartOption({{
+  plot_type: "heatmap",
+  groupings: [
+    {{ feature: "Y", kind: "categorical", continuous: false }},
+    {{ feature: "X", kind: "categorical", continuous: false }},
+  ],
+  rows: maximumHeatmapRows,
+}}, metric, {{ chartWidth: 1200, chartHeight: 800 }});
+if (maximumHeatmap.series[0].data.length !== 100000
+    || maximumHeatmap.visualMap.min !== 0
+    || maximumHeatmap.visualMap.max !== 99999) {{
+  throw new Error("100,000-cell heatmap option construction failed");
 }}
 const surfaceRows = rows.map((row) => ({{
   ...row,

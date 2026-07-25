@@ -2,6 +2,7 @@ import { loadTabulator } from "./shared/tabulator.js";
 import { bindSettingsStripOverflowCue } from "./shared/settings-strip.js";
 import { ensureEchartsGl } from "./shared/echarts-gl.js";
 import {
+  fitTwoFeatureHeatmapAxes,
   twoFeatureChartOption,
   twoFeatureHeatmapLabelConfig,
 } from "./line-bar-two-feature-chart.js";
@@ -60,6 +61,8 @@ export function createLineBarTool({
   refreshLineBar,
   clearActiveFavouriteSelection = () => false,
 }) {
+  const CHART_MAX_GROUPS = 10000;
+  const HEATMAP_MAX_GROUPS = 100000;
   const TABLE_PAGE_SIZE = 10000;
   const TABLE_SEARCH_DEBOUNCE_MS = 250;
   const LABEL_DENSITY_LIMIT = 200;
@@ -116,7 +119,8 @@ export function createLineBarTool({
   let lineBarTableCopyColumns = [];
   let lineBarTableCopyFooterRow = null;
   let dateXAxisContext = null;
-  let dateXAxisRefreshFrame = null;
+  let heatmapAxisContext = null;
+  let xAxisLabelRefreshFrame = null;
   let chartRenderTransform = "none";
   let lineBarChartDirty = false;
 
@@ -1645,7 +1649,7 @@ export function createLineBarTool({
       filter: state.activeFilter,
       ...denominatorFields,
       responses: currentResponses(),
-      maxGroups: 10000,
+      maxGroups: currentTwoFeaturePlotType() === "heatmap" ? HEATMAP_MAX_GROUPS : CHART_MAX_GROUPS,
     };
   }
 
@@ -1698,7 +1702,7 @@ export function createLineBarTool({
       filter: state.activeFilter,
       ...denominatorFields,
       responses: currentResponses(),
-      maxGroups: 10000,
+      maxGroups: CHART_MAX_GROUPS,
     };
   }
 
@@ -1826,7 +1830,7 @@ export function createLineBarTool({
       applyToolPresentation("line_bar");
       requestAnimationFrame(() => {
         chart.resize();
-        refreshDateXAxisLabelsForCurrentZoom();
+        refreshXAxisLabelsForCurrentZoom();
       });
     });
   }
@@ -1891,14 +1895,7 @@ export function createLineBarTool({
       rawValues = groupedValues.map((item) => item.rawValue);
     } else if (data.plot_type === "heatmap") {
       grouping = data.groupings[1] || {};
-      const byLabel = new Map();
-      for (const row of data.rows || []) {
-        const label = String(row?.group1 ?? "");
-        if (!byLabel.has(label)) byLabel.set(label, row?.group1_sort);
-      }
-      const groupedValues = [...byLabel.entries()]
-        .map(([label, sort]) => ({ label, sort }))
-        .sort((left, right) => compareTwoFeatureSortValues(left, right));
+      const groupedValues = sortedTwoFeatureFactorValues(data, 1);
       labels = groupedValues.map((item) => item.label);
       rawValues = groupedValues.map((item) => item.sort);
     } else {
@@ -1923,6 +1920,17 @@ export function createLineBarTool({
           }
         : null,
     };
+  }
+
+  function sortedTwoFeatureFactorValues(data, index) {
+    const byLabel = new Map();
+    for (const row of data?.rows || []) {
+      const label = String(row?.[`group${index}`] ?? "");
+      if (!byLabel.has(label)) byLabel.set(label, row?.[`group${index}_sort`]);
+    }
+    return [...byLabel.entries()]
+      .map(([label, sort]) => ({ label, sort }))
+      .sort((left, right) => compareTwoFeatureSortValues(left, right));
   }
 
   function twoFeatureContinuousCoordinate(value, grouping) {
@@ -1978,6 +1986,9 @@ export function createLineBarTool({
     const metric = selectedTwoFeatureMetric(data);
     const xAxisPresentation = twoFeatureXAxisPresentation(data);
     dateXAxisContext = xAxisPresentation?.dateContext || null;
+    const measureText = (value, fontSize = 12) => (
+      echartsImpl.format?.getTextRect?.(String(value), `${fontSize}px sans-serif`)?.width
+    );
     const optionContext = {
       text: getCss("--text"),
       muted: getCss("--muted"),
@@ -1986,9 +1997,7 @@ export function createLineBarTool({
       formatGroupValue: formatNumber,
       chartWidth: chart.getWidth?.() || el("chart").clientWidth,
       chartHeight: chart.getHeight?.() || el("chart").clientHeight,
-      measureText: (value, fontSize = 12) => (
-        echartsImpl.format?.getTextRect?.(String(value), `${fontSize}px sans-serif`)?.width
-      ),
+      measureText,
       xAxisLabels: xAxisPresentation?.labels,
       xAxisLabelPolicy: xAxisPresentation?.policy,
       dataZoomOptions: xAxisPresentation?.policy?.dataZoomEnabled ? lineBarDataZoomOptions() : [],
@@ -1997,6 +2006,22 @@ export function createLineBarTool({
       formatWeight: formatWeightValue,
       formatDateGroupValue: formatTwoFeatureDateCoordinate,
     };
+    if (data.plot_type === "heatmap" && xAxisPresentation) {
+      const yAxisLabels = sortedTwoFeatureFactorValues(data, 0).map((item) => item.label);
+      optionContext.heatmapAxisLayout = fitTwoFeatureHeatmapAxes(
+        xAxisPresentation.labels,
+        yAxisLabels,
+        optionContext,
+      );
+      heatmapAxisContext = {
+        xLabels: xAxisPresentation.labels,
+        yLabels: yAxisLabels,
+        baseXAxisPolicy: xAxisPresentation.policy,
+        measureText,
+      };
+    } else {
+      heatmapAxisContext = null;
+    }
     currentHeatmapLabelConfig = data.plot_type === "heatmap"
       ? twoFeatureHeatmapLabelConfig(data, optionContext)
       : null;
@@ -2008,15 +2033,17 @@ export function createLineBarTool({
     chartRenderTransform = "none";
     requestAnimationFrame(() => {
       chart.resize();
-      refreshDateXAxisLabelsForCurrentZoom();
+      refreshXAxisLabelsForCurrentZoom();
     });
-    return xAxisPresentation
+    const renderedXAxisPolicy = optionContext.heatmapAxisLayout?.xAxisLabelPolicy
+      || xAxisPresentation?.policy;
+    return renderedXAxisPolicy
       ? chartDensityMessage(
           xAxisPresentation.labels.length,
-          !xAxisPresentation.policy.show,
+          !renderedXAxisPolicy.show,
           false,
-          xAxisPresentation.policy.hiddenReason,
-          Boolean(xAxisPresentation.policy.hideOverlap),
+          renderedXAxisPolicy.hiddenReason,
+          Boolean(renderedXAxisPolicy.hideOverlap),
         )
       : "";
   }
@@ -2024,6 +2051,7 @@ export function createLineBarTool({
   function renderChart(data) {
     if (data?.groups_truncated && !(data.rows || []).length) {
       dateXAxisContext = null;
+      heatmapAxisContext = null;
       currentHeatmapLabelConfig = null;
       if (Array.isArray(data?.groupings) && data.groupings.length === 2) {
         renderTwoFeatureControls(data.plot_type, null);
@@ -2035,6 +2063,7 @@ export function createLineBarTool({
       return renderTwoFeatureChart(data);
     }
     currentHeatmapLabelConfig = null;
+    heatmapAxisContext = null;
     const labels = data.rows.map((r) => formatChartXLabel(r, data));
     const labelMode = state.labels;
     const renderTransform = String(state.transform || "none");
@@ -2231,7 +2260,7 @@ export function createLineBarTool({
     chartRenderTransform = renderTransform;
     requestAnimationFrame(() => {
       chart.resize();
-      refreshDateXAxisLabelsForCurrentZoom();
+      refreshXAxisLabelsForCurrentZoom();
     });
     return chartDensityMessage(labels.length, !xLabelPolicy.show, !dataLabelsAllowed && labelMode !== "-", xLabelPolicy.hiddenReason, Boolean(xLabelPolicy.hideOverlap));
   }
@@ -2264,17 +2293,21 @@ export function createLineBarTool({
     return [{ type: "inside" }, { type: "slider", height: 18, bottom: 18 }];
   }
 
-  function scheduleDateXAxisLabelRefresh() {
-    if (dateXAxisRefreshFrame !== null) return;
-    dateXAxisRefreshFrame = requestAnimationFrame(() => {
-      dateXAxisRefreshFrame = null;
-      refreshDateXAxisLabelsForCurrentZoom();
+  function scheduleXAxisLabelRefresh() {
+    if (xAxisLabelRefreshFrame !== null) return;
+    xAxisLabelRefreshFrame = requestAnimationFrame(() => {
+      xAxisLabelRefreshFrame = null;
+      refreshXAxisLabelsForCurrentZoom();
     });
   }
 
-  function refreshDateXAxisLabelsForCurrentZoom() {
+  function refreshXAxisLabelsForCurrentZoom() {
+    if (heatmapAxisContext) {
+      refreshHeatmapAxesForCurrentZoom();
+      return;
+    }
     if (!dateXAxisContext) return;
-    const range = currentDateXAxisVisibleRange(dateXAxisContext.labels.length);
+    const range = currentXAxisVisibleRange(dateXAxisContext.labels);
     const policy = getDateXAxisLabelPolicy(
       dateXAxisContext.labels,
       dateXAxisContext.rawXValues,
@@ -2304,15 +2337,54 @@ export function createLineBarTool({
     chart.setOption(option);
   }
 
-  function currentDateXAxisVisibleRange(count) {
+  function refreshHeatmapAxesForCurrentZoom() {
+    if (!heatmapAxisContext) return;
+    const range = currentXAxisVisibleRange(heatmapAxisContext.xLabels);
+    const layout = fitTwoFeatureHeatmapAxes(
+      heatmapAxisContext.xLabels,
+      heatmapAxisContext.yLabels,
+      {
+        chartWidth: chart.getWidth?.() || el("chart").clientWidth,
+        chartHeight: chart.getHeight?.() || el("chart").clientHeight,
+        measureText: heatmapAxisContext.measureText,
+        xAxisLabelPolicy: heatmapAxisContext.baseXAxisPolicy,
+        xAxisVisibleRange: range,
+      },
+    );
+    const xPolicy = layout.xAxisLabelPolicy;
+    const yLayout = layout.yAxisLayout;
+    chart.setOption({
+      grid: { ...layout.grid },
+      xAxis: {
+        nameGap: xPolicy.nameGap,
+        axisLabel: {
+          show: xPolicy.show,
+          interval: xPolicy.interval,
+          formatter: xPolicy.formatter,
+          hideOverlap: Boolean(xPolicy.hideOverlap),
+          showMinLabel: xPolicy.showMinLabel,
+          showMaxLabel: xPolicy.showMaxLabel,
+          rotate: xPolicy.rotate,
+          fontSize: xPolicy.fontSize,
+        },
+      },
+      yAxis: {
+        nameGap: yLayout.nameGap,
+        axisLabel: { ...yLayout.axisLabel },
+      },
+    });
+  }
+
+  function currentXAxisVisibleRange(labels) {
+    const count = labels.length;
     const zooms = Array.isArray(chart.getOption?.()?.dataZoom) ? chart.getOption().dataZoom : [];
     const zoom = zooms.find((item) => item && (Number.isFinite(Number(item.start)) || Number.isFinite(Number(item.end)) || item.startValue !== undefined || item.endValue !== undefined));
     if (!zoom) return normaliseDateXAxisVisibleRange(null, count);
     const lastIndex = Math.max(0, count - 1);
     if (zoom.startValue !== undefined || zoom.endValue !== undefined) {
       return normaliseDateXAxisVisibleRange({
-        startIndex: dateXAxisZoomValueIndex(zoom.startValue, count, 0),
-        endIndex: dateXAxisZoomValueIndex(zoom.endValue, count, lastIndex),
+        startIndex: xAxisZoomValueIndex(zoom.startValue, labels, 0),
+        endIndex: xAxisZoomValueIndex(zoom.endValue, labels, lastIndex),
       }, count);
     }
     return normaliseDateXAxisVisibleRange({
@@ -2321,11 +2393,11 @@ export function createLineBarTool({
     }, count);
   }
 
-  function dateXAxisZoomValueIndex(value, count, fallback) {
+  function xAxisZoomValueIndex(value, labels, fallback) {
     if (value === undefined || value === null || value === "") return fallback;
     const numeric = Number(value);
     if (Number.isFinite(numeric)) return Math.round(numeric);
-    const labelIndex = dateXAxisContext?.labels?.indexOf(String(value)) ?? -1;
+    const labelIndex = labels.indexOf(String(value));
     return labelIndex >= 0 ? labelIndex : fallback;
   }
 
@@ -4064,7 +4136,7 @@ export function createLineBarTool({
     if (view === "chart") {
       if (!shouldRefresh) {
         chart.resize();
-        refreshDateXAxisLabelsForCurrentZoom();
+        refreshXAxisLabelsForCurrentZoom();
         return;
       }
       if (lineBarChartDirty) {
@@ -4073,7 +4145,7 @@ export function createLineBarTool({
         return;
       }
       chart.resize();
-      refreshDateXAxisLabelsForCurrentZoom();
+      refreshXAxisLabelsForCurrentZoom();
     } else {
       renderTableShell();
       if (shouldRefresh) refreshLineBarTable();
@@ -4209,7 +4281,7 @@ export function createLineBarTool({
 
   function bindChartEvents() {
     chart.on("legendselectchanged", updateResponseAxisForLegendSelection);
-    chart.on("datazoom", scheduleDateXAxisLabelRefresh);
+    chart.on("datazoom", scheduleXAxisLabelRefresh);
   }
 
   async function recreateChartForSurface() {
@@ -4350,7 +4422,7 @@ export function createLineBarTool({
       measureToolRender("line_bar", () => renderTwoFeatureChart(state.lastData));
       return;
     }
-    refreshDateXAxisLabelsForCurrentZoom();
+    refreshXAxisLabelsForCurrentZoom();
   }
 
   function refreshTheme() {
