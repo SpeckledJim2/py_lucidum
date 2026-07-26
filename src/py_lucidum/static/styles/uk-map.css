@@ -801,12 +801,256 @@
         border: 1px solid rgb(0 0 0 / 10%);
       }
 
-      .map-popup {
-        font-size: 12px;
-        line-height: 1.35;
+      .map-region-filter-panel {
+        box-sizing: border-box;
+        position: fixed;
+        z-index: 1150;
+        width: min(276px, calc(100vw - 16px));
+        max-height: min(520px, calc(100vh - 16px));
+        overflow: auto;
+        overscroll-behavior: contain;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+        box-shadow: 0 14px 34px rgb(15 23 42 / 22%);
+        color: var(--text);
+        padding: 8px;
       }
 
-      .map-popup strong {
+      .map-region-filter-panel[hidden] {
+        display: none;
+      }
+
+      .map-region-filter-panel:focus {
+        outline: none;
+      }
+
+      .map-region-filter-header {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 30px;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .map-region-filter-shortcuts {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        min-width: 0;
+      }
+
+      .map-region-filter-shortcuts button,
+      .map-region-filter-apply {
+        border: 0;
+        border-radius: 5px;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+        font: inherit;
+      }
+
+      .map-region-filter-shortcuts button {
+        min-height: 28px;
+        padding: 4px 7px;
+        font-size: 12px;
+        line-height: 1.2;
+        white-space: nowrap;
+      }
+
+      .map-region-filter-shortcuts button:hover,
+      .map-region-filter-apply:hover:not(:disabled) {
+        background: color-mix(in srgb, var(--accent) 10%, transparent);
+        color: var(--accent);
+      }
+
+      .map-region-filter-shortcuts button:focus-visible,
+      .map-region-filter-apply:focus-visible {
+        outline: 2px solid color-mix(in srgb, var(--accent) 72%, white);
+        outline-offset: 1px;
+      }
+
+      .map-region-filter-apply {
+        display: grid;
+        place-items: center;
+        width: 30px;
+        height: 30px;
+        padding: 0;
+      }
+
+      .map-region-filter-apply:disabled {
+        cursor: default;
+        opacity: 0.38;
+      }
+
+      .map-region-filter-apply .map-popup-action-icon {
+        width: 17px;
+        height: 17px;
+      }
+
+      .map-region-filter-title {
+        margin: 7px 5px 4px;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 650;
+        line-height: 1.2;
+      }
+
+      .map-region-filter-options {
+        display: grid;
+        gap: 1px;
+      }
+
+      .map-region-filter-option {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 27px;
+        border-radius: 5px;
+        cursor: pointer;
+        padding: 3px 6px;
+        font-size: 12px;
+        line-height: 1.25;
+      }
+
+      .map-region-filter-option:hover,
+      .map-region-filter-option:has(input:focus-visible) {
+        background: color-mix(in srgb, var(--accent) 10%, transparent);
+      }
+
+      .map-region-filter-option input {
+        flex: 0 0 auto;
+        width: 15px;
+        height: 15px;
+        margin: 0;
+        accent-color: var(--accent);
+        cursor: pointer;
+      }
+
+      .map-region-filter-option input:focus-visible {
+        outline: 2px solid color-mix(in srgb, var(--accent) 72%, white);
+        outline-offset: 1px;
+      }
+
+      .map-popup {
+        column-gap: 4px;
+        display: grid;
+        font-size: 12px;
+        grid-template-columns: max-content minmax(0, 1fr);
+        line-height: 1.35;
+        min-width: 210px;
+        max-width: min(440px, calc(100vw - 80px));
+        width: max-content;
+      }
+
+      .map-popup > strong {
         display: block;
-        margin-bottom: 4px;
+        grid-column: 1;
+        margin-bottom: 6px;
+        font-size: 16px;
+        line-height: 1.2;
+      }
+
+      .map-popup > :not(strong):not(.map-popup-header-copy) {
+        grid-column: 1 / -1;
+      }
+
+      .map-popup-metrics > div,
+      .map-popup-section > div {
+        overflow-wrap: anywhere;
+      }
+
+      .map-popup-quantity {
+        font-weight: 700;
+      }
+
+      .map-popup-section + .map-popup-section,
+      .map-popup-actions {
+        margin-top: 8px;
+        padding-top: 8px;
+        border-top: 1px solid var(--line);
+      }
+
+      .map-popup-section-title {
+        margin-bottom: 3px;
+        color: var(--muted);
+        font-weight: 700;
+      }
+
+      .map-popup-actions {
+        display: flex;
+        flex-wrap: nowrap;
+        gap: 5px;
+        width: 100%;
+      }
+
+      .map-popup-action {
+        align-items: center;
+        border: 0;
+        border-radius: 5px;
+        display: inline-flex;
+        gap: 4px;
+        justify-content: center;
+        min-height: 26px;
+        padding: 3px 7px;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+        font: inherit;
+        font-weight: 500;
+        line-height: 1.2;
+      }
+
+      .map-popup-action:hover {
+        background: color-mix(in srgb, var(--accent) 10%, transparent);
+        color: var(--accent);
+      }
+
+      .map-popup-action--active,
+      .map-popup-action--active:hover {
+        background: color-mix(in srgb, var(--accent) 16%, transparent);
+        color: var(--accent);
+      }
+
+      .map-popup-action:focus-visible {
+        background: color-mix(in srgb, var(--accent) 10%, transparent);
+        color: var(--accent);
+        outline: 2px solid color-mix(in srgb, var(--accent) 72%, white);
+        outline-offset: 1px;
+      }
+
+      .map-popup-action--icon {
+        padding-inline: 5px;
+        width: 26px;
+      }
+
+      .map-popup-action[data-map-popup-action="filter"] {
+        margin-inline-start: auto;
+      }
+
+      .map-popup-header-copy {
+        align-self: start;
+        grid-column: 2;
+        justify-self: start;
+        margin-top: -3px;
+      }
+
+      .map-popup-action-icon {
+        display: block;
+        fill: none;
+        height: 16px;
+        stroke: currentColor;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 2;
+        width: 16px;
+      }
+
+      .uk-map .leaflet-popup-content-wrapper,
+      .uk-map .leaflet-popup-tip {
+        background: var(--panel);
+        color: var(--text);
+      }
+
+      .uk-map .leaflet-container a.leaflet-popup-close-button {
+        color: var(--muted);
       }

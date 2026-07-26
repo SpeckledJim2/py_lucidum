@@ -1,7 +1,12 @@
       import { createColumnProfileTool } from "./column-profile-tool.js";
       import { createLineBarTool } from "./line-bar-tool.js";
       import { createHistogramTool } from "./histogram-tool.js";
-      import { createUkMapTool } from "./uk-map-tool.js";
+      import {
+        combineUkMapPostcodeFilter,
+        createUkMapTool,
+        ukMapPostcodeFilterClause,
+        ukMapPostcodeInFilterClause,
+      } from "./uk-map-tool.js";
       import { createGlmTool } from "./glm-tool.js";
       import { createGbmTool } from "./gbm-tool.js";
       import { createSpecificationsTool } from "./specifications-tool.js";
@@ -171,6 +176,7 @@
         collapsedSavedFilterThemes: new Set(),
         savedFilterThemesInitialised: false,
         activeFilter: "",
+        mapPostcodeFilterState: null,
         activeLineBarFavouriteId: "",
         filterRowCountMeta: null,
         datasetViewerSearch: "",
@@ -458,7 +464,16 @@
         syncActiveFilterLabels,
         columnExists,
         numericColumnExists,
+        getCss,
         refreshUkMap,
+        copyTextToClipboard,
+        showClipboardToast,
+        applyMapPostcodeFilter: (postcode) => applyMapPostcodeSelection(postcode),
+        applyMapAreaGroupFilter: (selection) => applyMapAreaGroupFilter(selection),
+        openMapPostcodeRows: (postcode) => openMapPostcodeRows(postcode),
+        isMapPostcodeSelected: (postcode) => isMapPostcodeSelected(postcode),
+        getMapSelectedAreas: (postcode) => getMapSelectedAreas(postcode),
+        canOpenDatasetViewer: () => toolEnabled("dataset_viewer"),
         clearActiveFavouriteSelection: () => clearActiveFavouriteSelectionForScope("map_view"),
       });
       const glmTool = createGlmTool({
@@ -1738,7 +1753,10 @@
         hideToolButtonTooltip();
         if (!toolEnabled(tool)) return;
         const previousTool = state.tool;
-        if (previousTool === "uk_map" && tool !== "uk_map") ukMapTool.captureView("tool-switch");
+        if (previousTool === "uk_map" && tool !== "uk_map") {
+          ukMapTool.captureView("tool-switch");
+          ukMapTool.closeMenus();
+        }
         if (previousTool === "column_profile" && tool !== "column_profile") columnProfileTool.closeMenus();
         if (previousTool === "specs" && tool !== "specs") specificationsTool.closeMenus();
         state.tool = tool;
@@ -3123,6 +3141,7 @@
       function applyFavouriteFilterState(view) {
         state.filterSelectionMode = String(view.filterSelectionMode || "grouped");
         state.filterOperator = String(view.filterOperator || "and");
+        state.mapPostcodeFilterState = null;
         state.activeFilter = String(view.filter || "").trim();
         el("filterInput").value = state.activeFilter;
         setFilterSelectionMode(state.filterSelectionMode, { apply: false });
@@ -3992,8 +4011,11 @@
       }
 
       function applySavedFilters() {
+        const clearedAreaSelection = activeMapPostcodeFilterState()?.mode === "area-group";
+        state.mapPostcodeFilterState = null;
         el("filterInput").value = combinedSavedFilterExpression();
         applyFilter();
+        if (clearedAreaSelection) showClipboardToast("Postcode area selection cleared");
       }
 
       function currentKpiSnapshot() {
@@ -4243,6 +4265,7 @@
         state.expectedSort = String(view.expectedSort || "alpha");
         state.filterSelectionMode = String(view.filterSelectionMode || "grouped");
         state.filterOperator = String(view.filterOperator || "and");
+        state.mapPostcodeFilterState = null;
         state.activeFilter = String(view.filter || "").trim();
         el("filterInput").value = state.activeFilter;
         setFilterSelectionMode(state.filterSelectionMode, { apply: false });
@@ -4337,6 +4360,151 @@
         setDenominatorSelection({ value: firstKpi.denominator, sourceId: "dataset" });
       }
 
+      function commitGlobalFilter(nextFilter, options = {}) {
+        const filter = String(nextFilter || "").trim();
+        el("filterInput").value = filter;
+        if (!options.preserveSavedFilterSelection) clearSavedFilterSelection();
+        state.activeFilter = filter;
+        clearActiveFavouriteSelectionForScope("filter");
+        clearProfileDetailCache();
+        syncActiveFilterLabels();
+        refreshMetricSummary();
+        refreshFilterRowCountMeta();
+        if (options.viewRows) {
+          setTool("dataset_viewer");
+        } else if (options.refreshActiveTool !== false) {
+          refreshActiveTool();
+        }
+      }
+
+      function activeMapPostcodeFilterState() {
+        const mapFilter = state.mapPostcodeFilterState;
+        if (!mapFilter || mapFilter.combinedFilter !== String(state.activeFilter || "").trim()) return null;
+        return mapFilter;
+      }
+
+      function mapPostcodeBaseFilter() {
+        const activeFilter = String(state.activeFilter || "").trim();
+        return activeMapPostcodeFilterState()?.baseFilter ?? activeFilter;
+      }
+
+      function isMapPostcodeSelected(postcode) {
+        if (postcode?.level !== "area") return false;
+        const selectedAreas = getMapSelectedAreas(postcode);
+        return Boolean(selectedAreas?.includes(String(postcode?.key || "")));
+      }
+
+      function getMapSelectedAreas(postcode) {
+        const mapFilter = activeMapPostcodeFilterState();
+        if (mapFilter?.mode !== "area-group") return null;
+        if (mapFilter.joinColumn !== String(postcode?.joinColumn || "")) return null;
+        return [...mapFilter.selectedAreas];
+      }
+
+      function sameMapAreaSelection(left, right) {
+        return left.length === right.length && left.every((value, index) => value === right[index]);
+      }
+
+      function commitMapAreaSelection(joinColumn, selectedAreas, options = {}) {
+        const column = String(joinColumn || "");
+        if (!column) return false;
+        const previousMapFilter = activeMapPostcodeFilterState();
+        const baseFilter = mapPostcodeBaseFilter();
+        const orderedAreas = Array.from(new Set(
+          (Array.isArray(selectedAreas) ? selectedAreas : [])
+            .map((area) => String(area || ""))
+            .filter(Boolean),
+        )).sort();
+        if (options.allSelected || !orderedAreas.length) {
+          const changed = Boolean(previousMapFilter)
+            || String(state.activeFilter || "").trim() !== baseFilter;
+          state.mapPostcodeFilterState = null;
+          if (changed) {
+            commitGlobalFilter(baseFilter, { viewRows: Boolean(options.viewRows) });
+          }
+          return changed;
+        }
+        const postcodeClause = ukMapPostcodeInFilterClause(column, orderedAreas);
+        const combinedFilter = combineUkMapPostcodeFilter(baseFilter, postcodeClause);
+        const unchanged = previousMapFilter?.mode === "area-group"
+          && previousMapFilter.joinColumn === column
+          && previousMapFilter.baseFilter === baseFilter
+          && previousMapFilter.combinedFilter === combinedFilter
+          && sameMapAreaSelection(previousMapFilter.selectedAreas, orderedAreas);
+        state.mapPostcodeFilterState = {
+          mode: "area-group",
+          level: "area",
+          joinColumn: column,
+          baseFilter,
+          selectedAreas: orderedAreas,
+          combinedFilter,
+        };
+        if (!unchanged) {
+          commitGlobalFilter(combinedFilter, { viewRows: Boolean(options.viewRows) });
+        }
+        return !unchanged;
+      }
+
+      function applyMapAreaSelection(postcode, options = {}) {
+        const key = String(postcode?.key || "");
+        const joinColumn = String(postcode?.joinColumn || "");
+        if (!key || !joinColumn) return;
+        const selectedAreas = new Set(getMapSelectedAreas({ joinColumn }) || []);
+        if (options.forceAdd) {
+          selectedAreas.add(key);
+        } else if (selectedAreas.has(key)) {
+          selectedAreas.delete(key);
+        } else {
+          selectedAreas.add(key);
+        }
+        return commitMapAreaSelection(joinColumn, Array.from(selectedAreas), options);
+      }
+
+      function applyMapAreaGroupFilter(selection, options = {}) {
+        const joinColumn = String(selection?.joinColumn || "");
+        const selectedAreas = Array.isArray(selection?.selectedAreas) ? selection.selectedAreas : [];
+        if (!joinColumn || (!selection?.allSelected && !selectedAreas.length)) return false;
+        return commitMapAreaSelection(joinColumn, selectedAreas, {
+          ...options,
+          allSelected: Boolean(selection.allSelected),
+        });
+      }
+
+      function applySingleMapPostcodeSelection(postcode, options = {}) {
+        const key = String(postcode?.key || "");
+        const joinColumn = String(postcode?.joinColumn || "");
+        if (!key || !joinColumn) return;
+        const baseFilter = mapPostcodeBaseFilter();
+        const postcodeClause = ukMapPostcodeFilterClause(joinColumn, key);
+        const combinedFilter = combineUkMapPostcodeFilter(baseFilter, postcodeClause);
+        state.mapPostcodeFilterState = {
+          mode: "single",
+          level: String(postcode?.level || ""),
+          joinColumn,
+          key,
+          baseFilter,
+          combinedFilter,
+        };
+        commitGlobalFilter(combinedFilter, { viewRows: Boolean(options.viewRows) });
+      }
+
+      function applyMapPostcodeSelection(postcode, options = {}) {
+        if (postcode?.level === "area") {
+          applyMapAreaSelection(postcode, options);
+        } else {
+          applySingleMapPostcodeSelection(postcode, options);
+        }
+      }
+
+      function openMapPostcodeRows(postcode) {
+        const activeMapFilter = activeMapPostcodeFilterState();
+        if (postcode?.level === "area" && activeMapFilter?.mode === "area-group") {
+          commitGlobalFilter(activeMapFilter.combinedFilter, { viewRows: true });
+          return;
+        }
+        applyMapPostcodeSelection(postcode, { viewRows: true, forceAdd: postcode?.level === "area" });
+      }
+
       function applyFilter() {
         const nextFilter = el("filterInput").value.trim();
         const savedFilterExpression = combinedSavedFilterExpression().trim();
@@ -4350,18 +4518,16 @@
           refreshFilterRowCountMeta();
           return;
         }
-        state.activeFilter = nextFilter;
-        clearActiveFavouriteSelectionForScope("filter");
-        clearProfileDetailCache();
-        syncActiveFilterLabels();
-        refreshMetricSummary();
-        refreshActiveTool();
-        refreshFilterRowCountMeta();
+        const clearedAreaSelection = activeMapPostcodeFilterState()?.mode === "area-group";
+        state.mapPostcodeFilterState = null;
+        commitGlobalFilter(nextFilter, { preserveSavedFilterSelection: true });
+        if (clearedAreaSelection) showClipboardToast("Postcode area selection cleared");
       }
 
       function clearFilter() {
         el("filterInput").value = "";
         clearSavedFilterSelection();
+        state.mapPostcodeFilterState = null;
         if (state.activeFilter === "") {
           syncActiveFilterLabels();
           refreshMetricSummary();
@@ -4369,13 +4535,7 @@
           refreshFilterRowCountMeta();
           return;
         }
-        state.activeFilter = "";
-        clearActiveFavouriteSelectionForScope("filter");
-        clearProfileDetailCache();
-        syncActiveFilterLabels();
-        refreshMetricSummary();
-        refreshActiveTool();
-        refreshFilterRowCountMeta();
+        commitGlobalFilter("", { preserveSavedFilterSelection: true });
       }
 
       function confirmStopApp() {
@@ -4833,6 +4993,7 @@
           const previousSavedFilterThemesInitialised = state.savedFilterThemesInitialised;
           const previousSidebarVisible = state.sidebarVisible;
           if (state.tool === "uk_map") ukMapTool.captureView("reload");
+          state.mapPostcodeFilterState = null;
           state.schema = await api("/api/reload", { method: "POST" });
           state.datasetViewerPinnedColumns = [];
           state.datasetViewerColumnCount = null;

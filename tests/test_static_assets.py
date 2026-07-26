@@ -905,8 +905,49 @@ if (preferredStartupSource(schema.data_sources, "") !== "dataset") throw new Err
 
     def test_uk_map_postcode_availability_helper(self) -> None:
         module = Path("src/py_lucidum/static/app/uk-map-tool.js").resolve().as_uri()
+        area_geojson = Path(
+            "src/py_lucidum/tools/uk_map/static/geodata/areas_MappaR.geojson"
+        ).resolve().as_uri()
         script = f"""
-import {{ ukMapPostcodeAvailability }} from "{module}";
+import {{ readFileSync }} from "node:fs";
+import {{
+  UK_MAP_POSTCODE_REGIONS,
+  combineUkMapPostcodeFilter,
+  ukMapPopupContentHtml,
+  ukMapPostcodeAvailability,
+  ukMapPostcodeFilterClause,
+  ukMapPostcodeInFilterClause,
+}} from "{module}";
+const expectedRegionLabels = [
+  "Central London",
+  "East Midlands",
+  "East of England",
+  "North East",
+  "North West",
+  "Northern Ireland",
+  "Outer London",
+  "Scotland",
+  "South East",
+  "South West",
+  "Wales",
+  "West Midlands",
+  "Yorkshire and The Humber",
+];
+if (UK_MAP_POSTCODE_REGIONS.map((region) => region.label).join("|") !== expectedRegionLabels.join("|")) {{
+  throw new Error("postcode regions should retain their requested order");
+}}
+const mappedAreaCodes = UK_MAP_POSTCODE_REGIONS.flatMap((region) => region.areas);
+const geoJsonAreaCodes = JSON.parse(readFileSync(new URL("{area_geojson}"), "utf8"))
+  .features.map((feature) => String(feature.properties.PostcodeArea));
+if (mappedAreaCodes.length !== 124
+    || new Set(mappedAreaCodes).size !== mappedAreaCodes.length
+    || [...mappedAreaCodes].sort().join("|") !== [...geoJsonAreaCodes].sort().join("|")) {{
+  throw new Error("postcode region mapping should cover every bundled area exactly once");
+}}
+if (!Object.isFrozen(UK_MAP_POSTCODE_REGIONS)
+    || UK_MAP_POSTCODE_REGIONS.some((region) => !Object.isFrozen(region) || !Object.isFrozen(region.areas))) {{
+  throw new Error("postcode region mapping should be immutable");
+}}
 const labels = (schema, query = "") => ukMapPostcodeAvailability({{
   schema,
   locationParams: new URLSearchParams(query),
@@ -955,6 +996,196 @@ const customDefaults = {{
 }};
 if (labels(customDefaults) !== "Area/Sector/Unit") throw new Error("custom defaults should resolve");
 if (labels(customDefaults, "postcode_unit=Missing") !== "Area/Sector") throw new Error("invalid explicit unit should hide unit");
+const postcodeClause = ukMapPostcodeFilterClause('Post"codeSector', "CA'10 3");
+if (postcodeClause !== `"Post""codeSector" = 'CA''10 3'`) throw new Error(`unsafe postcode clause: ${{postcodeClause}}`);
+const postcodeGroupClause = ukMapPostcodeInFilterClause('Post"codeArea', ["SE", "CA", "SE", "O'X"]);
+if (postcodeGroupClause !== `"Post""codeArea" IN ('CA', 'O''X', 'SE')`) {{
+  throw new Error(`unsafe or unstable postcode group clause: ${{postcodeGroupClause}}`);
+}}
+if (ukMapPostcodeInFilterClause("PostcodeArea", []) !== "") {{
+  throw new Error("empty postcode group should not emit a clause");
+}}
+const combinedFilter = combineUkMapPostcodeFilter("price >= 100", postcodeClause);
+if (combinedFilter !== `(price >= 100) AND ("Post""codeSector" = 'CA''10 3')`) {{
+  throw new Error(`incorrect combined postcode filter: ${{combinedFilter}}`);
+}}
+const popupOptions = {{
+  title: "CA10 3",
+  escapeHtml: (value) => String(value).replace(/[&<>"]/g, (char) => ({{ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }})[char]),
+  formatNumber: (value) => Number(value).toLocaleString("en-GB"),
+  formatLineValue: (value) => `£${{Number(value).toLocaleString("en-GB")}}`,
+}};
+const popupText = (html) => html.replace(/<[^>]+>/g, "");
+const averagePopup = ukMapPopupContentHtml({{
+  ...popupOptions,
+  row: {{ value: 505, numerator: 361075, denominator: 715, row_count: 715 }},
+  data: {{
+    level: "sector",
+    response: {{ label: "MARKET_PRICE_1_5" }},
+    denominator: {{ column: null, bar_label: "Average row value" }},
+  }},
+}});
+const averagePopupText = popupText(averagePopup);
+const averageLabels = ["Average MARKET_PRICE_1_5: £505", "Rows: 715"];
+if (!averageLabels.every((label) => averagePopupText.includes(label))
+    || averagePopupText.indexOf(averageLabels[0]) > averagePopupText.indexOf(averageLabels[1])
+    || averagePopupText.includes("Records:")
+    || (averagePopup.match(/class="map-popup-quantity"/g) || []).length !== 2
+    || averagePopup.includes("Row count")) {{
+  throw new Error(`incorrect average popup: ${{averagePopup}}`);
+}}
+const selectedAreaPopup = ukMapPopupContentHtml({{
+  ...popupOptions,
+  title: "CA",
+  row: {{ value: 505, row_count: 715 }},
+  data: {{
+    level: "area",
+    response: {{ label: "MARKET_PRICE_1_5" }},
+    denominator: {{ column: null }},
+  }},
+  areaFilterToggle: true,
+  areaFilterSelected: true,
+}});
+if (!selectedAreaPopup.includes('aria-pressed="true"')
+    || !selectedAreaPopup.includes("Remove CA from postcode area filter")
+    || !selectedAreaPopup.includes("map-popup-action--active")) {{
+  throw new Error(`incorrect selected area popup: ${{selectedAreaPopup}}`);
+}}
+const denominatorPopup = ukMapPopupContentHtml({{
+  ...popupOptions,
+  row: {{ value: 505, numerator: 361075, denominator: 715, row_count: 720 }},
+  data: {{
+    level: "sector",
+    response: {{ label: "MARKET_PRICE_1_5" }},
+    denominator: {{ column: "EXPOSURE", bar_label: "EXPOSURE" }},
+  }},
+}});
+const denominatorLabels = [
+  "MARKET_PRICE_1_5 / EXPOSURE: £505",
+  "MARKET_PRICE_1_5 total: 361,075",
+  "EXPOSURE: 715",
+  "Rows: 720",
+];
+const denominatorPopupText = popupText(denominatorPopup);
+if (!denominatorLabels.every((label) => denominatorPopupText.includes(label))
+    || denominatorLabels.some((label, index) => index && denominatorPopupText.indexOf(denominatorLabels[index - 1]) > denominatorPopupText.indexOf(label))
+    || (denominatorPopup.match(/class="map-popup-quantity"/g) || []).length !== 4) {{
+  throw new Error(`incorrect denominator popup: ${{denominatorPopup}}`);
+}}
+const averageSmoothingPopup = ukMapPopupContentHtml({{
+  ...popupOptions,
+  row: {{
+    value: 500,
+    denominator: 1200,
+    row_count: 999,
+    raw_value: 505,
+    raw_row_count: 700,
+    smoothing_contributing_sectors: 4,
+  }},
+  data: {{
+    level: "sector",
+    response: {{ label: "MARKET_PRICE_1_5" }},
+    denominator: {{ column: null }},
+    smoothing: {{ applied: true, level: 2 }},
+  }},
+}});
+const averageSmoothingLabels = [
+  "Smoothed N2",
+  "Smoothed average MARKET_PRICE_1_5: £500",
+  "Pooled valid records: 1,200",
+  "Contributing sectors: 4",
+  "Unsmoothed",
+  "Raw average MARKET_PRICE_1_5: £505",
+  "Rows: 700",
+];
+const averageSmoothingPopupText = popupText(averageSmoothingPopup);
+for (const label of averageSmoothingLabels) {{
+  if (!averageSmoothingPopupText.includes(label)) throw new Error(`missing average smoothing label: ${{label}}`);
+}}
+if (averageSmoothingLabels.some((label, index) => index && averageSmoothingPopupText.indexOf(averageSmoothingLabels[index - 1]) > averageSmoothingPopupText.indexOf(label))
+    || averageSmoothingPopupText.includes("Rows: 999")
+    || (averageSmoothingPopup.match(/class="map-popup-quantity"/g) || []).length !== 5
+    || (averageSmoothingPopup.match(/map-popup-section/g) || []).length < 4) {{
+  throw new Error(`smoothed records should use the raw row count: ${{averageSmoothingPopup}}`);
+}}
+const denominatorSmoothingPopup = ukMapPopupContentHtml({{
+  ...popupOptions,
+  row: {{
+    value: 500,
+    numerator: 600000,
+    denominator: 1200,
+    row_count: 999,
+    raw_value: 505,
+    raw_numerator: 361075,
+    raw_denominator: 715,
+    raw_row_count: 720,
+    smoothing_contributing_sectors: 4,
+  }},
+  data: {{
+    level: "sector",
+    response: {{ label: "MARKET_PRICE_1_5" }},
+    denominator: {{ column: "EXPOSURE", bar_label: "EXPOSURE" }},
+    smoothing: {{ applied: true, level: 2 }},
+  }},
+}});
+const denominatorSmoothingLabels = [
+  "Smoothed N2",
+  "Smoothed MARKET_PRICE_1_5 / EXPOSURE: £500",
+  "MARKET_PRICE_1_5 total: 600,000",
+  "EXPOSURE: 1,200",
+  "Contributing sectors: 4",
+  "Unsmoothed",
+  "Raw MARKET_PRICE_1_5 / EXPOSURE: £505",
+  "Raw MARKET_PRICE_1_5 total: 361,075",
+  "Raw EXPOSURE: 715",
+  "Rows: 720",
+];
+const denominatorSmoothingPopupText = popupText(denominatorSmoothingPopup);
+for (const label of denominatorSmoothingLabels) {{
+  if (!denominatorSmoothingPopupText.includes(label)) throw new Error(`missing denominator smoothing label: ${{label}}`);
+}}
+if (denominatorSmoothingLabels.some((label, index) => index && denominatorSmoothingPopupText.indexOf(denominatorSmoothingLabels[index - 1]) > denominatorSmoothingPopupText.indexOf(label))
+    || (denominatorSmoothingPopup.match(/class="map-popup-quantity"/g) || []).length !== 8) {{
+  throw new Error(`incorrect denominator smoothing order: ${{denominatorSmoothingPopup}}`);
+}}
+const fallbackPopup = ukMapPopupContentHtml({{
+  ...popupOptions,
+  row: {{ value: 505, row_count: 715, raw_value: 505, raw_row_count: 715, smoothing_contributing_sectors: 0 }},
+  data: {{
+    level: "sector",
+    response: {{ label: "MARKET_PRICE_1_5" }},
+    denominator: {{ column: null }},
+    smoothing: {{ applied: true, level: 3 }},
+  }},
+}});
+const fallbackLabels = [
+  "Smoothed N3",
+  "No contributing sectors; unsmoothed value shown.",
+  "Unsmoothed",
+  "Raw average MARKET_PRICE_1_5: £505",
+  "Rows: 715",
+];
+const fallbackPopupText = popupText(fallbackPopup);
+if (!fallbackLabels.every((label) => fallbackPopupText.includes(label))
+    || fallbackLabels.some((label, index) => index && fallbackPopupText.indexOf(fallbackLabels[index - 1]) > fallbackPopupText.indexOf(label))
+    || (fallbackPopup.match(/class="map-popup-quantity"/g) || []).length !== 2
+    || fallbackPopup.includes("Smoothed average")) throw new Error(`incorrect smoothing fallback: ${{fallbackPopup}}`);
+const noDataPopup = ukMapPopupContentHtml({{
+  ...popupOptions,
+  title: "<CA&10>",
+  row: null,
+  showViewRows: false,
+  areaFilterToggle: true,
+}});
+if (!noDataPopup.includes("&lt;CA&amp;10&gt;")
+    || !noDataPopup.includes("No matching data")
+    || noDataPopup.includes("view-rows")
+    || (noDataPopup.match(/map-popup-action-icon/g) || []).length !== 2
+    || !noDataPopup.includes('aria-pressed="false"')
+    || !noDataPopup.includes("Add &lt;CA&amp;10&gt; to postcode area filter")
+    || !noDataPopup.includes('data-map-popup-action="filter"')) {{
+  throw new Error(`incorrect no-data popup or actions: ${{noDataPopup}}`);
+}}
 """
         self.run_node_script(script)
 

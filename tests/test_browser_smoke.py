@@ -1844,6 +1844,975 @@ class BrowserSmokeTests(unittest.TestCase):
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_uk_map_popup_content_actions_and_dataset_viewer_navigation(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            data_path = root / "map_popups.csv"
+            data_path.write_text(
+                "PostcodeArea,PostcodeSector,PostcodeUnit,lat,long,vehicle_age,price,EXPOSURE\n"
+                "CA,CA10 3,CA10 3AA,54.55,-2.70,1,100,1\n"
+                "CA,CA10 3,CA10 3AB,54.60,-2.75,2,200,2\n",
+                encoding="utf-8",
+            )
+            kpis_path = root / "kpis.csv"
+            kpis_path.write_text(
+                "group,name,actual,denominator,decimals,format\n"
+                "PRICE,Average price,price,N,0,currency\n"
+                "PRICE,Price per exposure,price,EXPOSURE,0,currency\n",
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                defaults={
+                    "actual": "price",
+                    "denominator": "__none__",
+                    "postcode_area": "PostcodeArea",
+                    "postcode_sector": "PostcodeSector",
+                    "postcode_unit": "PostcodeUnit",
+                    "latitude": "lat",
+                    "longitude": "long",
+                },
+                kpis_path=kpis_path,
+                use_kpis=True,
+                tools=["dataset_viewer", "uk_map"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    map_requests: list[dict[str, Any]] = []
+                    dataset_viewer_requests: list[dict[str, Any]] = []
+
+                    def record_request(request: Any) -> None:
+                        if request.url.endswith("/api/uk-map/summary"):
+                            map_requests.append(json.loads(request.post_data or "{}"))
+                        elif request.url.endswith("/api/dataset-viewer/table"):
+                            dataset_viewer_requests.append(json.loads(request.post_data or "{}"))
+
+                    def open_polygon(key: str) -> None:
+                        opened = page.evaluate(
+                            """
+                            (key) => {
+                              const map = document.querySelector("#ukMap")?._lucidumMap;
+                              if (!map) return false;
+                              let target = null;
+                              const inspect = (layer) => {
+                                if (target || !layer) return;
+                                if (String(layer._lucidumMapKey || "") === key) {
+                                  target = layer;
+                                  return;
+                                }
+                                layer.eachLayer?.(inspect);
+                              };
+                              Object.values(map._layers || {}).forEach(inspect);
+                              const center = target?.getBounds?.()?.getCenter?.();
+                              if (center) map.panTo(center, { animate: false });
+                              target?.openPopup?.();
+                              return Boolean(target);
+                            }
+                            """,
+                            key,
+                        )
+                        self.assertTrue(opened, f"Could not find map polygon {key}")
+                        page.wait_for_function(
+                            """
+                            (key) => {
+                              const popups = [...document.querySelectorAll("#ukMap .map-popup")];
+                              return popups.length === 1
+                                && popups[0].querySelector("strong")?.textContent.trim() === key;
+                            }
+                            """,
+                            arg=key,
+                            timeout=10_000,
+                        )
+
+                    def close_popup() -> None:
+                        page.evaluate("() => { document.querySelector('#ukMap')._lucidumMap.closePopup(); }")
+                        page.wait_for_function(
+                            "() => !document.querySelector('#ukMap .map-popup')",
+                            timeout=10_000,
+                        )
+
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.on("request", record_request)
+                    page.add_init_script(
+                        """
+                        Object.defineProperty(navigator, "clipboard", {
+                          configurable: true,
+                          value: {
+                            writeText: (text) => {
+                              window.__lucidumCopiedPostcode = text;
+                              return Promise.resolve();
+                            },
+                          },
+                        });
+                        """
+                    )
+                    page.goto(f"{base_url}/?tool=uk_map", wait_until="domcontentloaded")
+                    page.locator("#ukMap:not(.hidden)").wait_for(timeout=10_000)
+                    page.wait_for_function(
+                        '() => document.querySelector("#mapGroupMeta")?.textContent.includes("areas matched")',
+                        timeout=20_000,
+                    )
+
+                    open_polygon("CA")
+                    self.assertEqual(page.locator(".map-popup > strong").inner_text(), "CA")
+                    self.assertEqual(
+                        page.evaluate(
+                            "() => document.querySelector('#ukMap')._lucidumMap._popup.options.maxWidth"
+                        ),
+                        440,
+                    )
+                    self.assertEqual(
+                        page.locator(".map-popup").evaluate(
+                            "popup => getComputedStyle(popup).maxWidth"
+                        ),
+                        "440px",
+                    )
+                    long_metric_layout = page.evaluate(
+                        """
+                        () => {
+                          const map = document.querySelector("#ukMap")._lucidumMap;
+                          const originalContent = map._popup.getContent();
+                          map._popup.setContent(
+                            '<div class="map-popup"><div class="map-popup-metrics">'
+                              + '<div>net_incurred / earned_exposure_in_period: £791</div>'
+                              + '</div></div>'
+                          );
+                          map._popup.update();
+                          const metric = document.querySelector(".map-popup-metrics > div");
+                          const range = document.createRange();
+                          range.selectNodeContents(metric);
+                          const lineCount = range.getClientRects().length;
+                          const popupWidth = document.querySelector(".map-popup")
+                            .getBoundingClientRect().width;
+                          map._popup.setContent(originalContent);
+                          map._popup.update();
+                          return { lineCount, popupWidth };
+                        }
+                        """
+                    )
+                    self.assertEqual(long_metric_layout["lineCount"], 1)
+                    self.assertGreater(long_metric_layout["popupWidth"], 250)
+                    self.assertEqual(
+                        page.locator(".map-popup-metrics").inner_text(),
+                        "Average price: £150\nRows: 2",
+                    )
+                    self.assertEqual(
+                        page.locator(".map-popup-quantity").all_inner_texts(),
+                        ["£150", "2"],
+                    )
+                    self.assertTrue(
+                        page.locator(".map-popup-quantity").evaluate_all(
+                            """
+                            values => values.every(
+                              value => Number.parseInt(getComputedStyle(value).fontWeight, 10) >= 700
+                            )
+                            """
+                        )
+                    )
+                    self.assertEqual(
+                        page.locator(".map-popup-action").all_inner_texts(),
+                        ["", "View rows", "Zoom", ""],
+                    )
+                    self.assertEqual(page.locator(".map-popup-action-icon").count(), 2)
+                    self.assertEqual(
+                        page.locator(".map-popup > strong").evaluate(
+                            "heading => getComputedStyle(heading).fontSize"
+                        ),
+                        "16px",
+                    )
+                    action_theme = page.locator('[data-map-popup-action="copy"]').evaluate(
+                        """
+                        (button) => {
+                          const probe = document.createElement("span");
+                          probe.style.color = "var(--muted)";
+                          document.body.append(probe);
+                          const muted = getComputedStyle(probe).color;
+                          probe.remove();
+                          const style = getComputedStyle(button);
+                          return {
+                            background: style.backgroundColor,
+                            borderWidth: style.borderTopWidth,
+                            color: style.color,
+                            muted,
+                          };
+                        }
+                        """
+                    )
+                    self.assertEqual(action_theme["background"], "rgba(0, 0, 0, 0)")
+                    self.assertEqual(action_theme["borderWidth"], "0px")
+                    self.assertEqual(action_theme["color"], action_theme["muted"])
+                    header_layout = page.locator(".map-popup").evaluate(
+                        """
+                        (popup) => {
+                          const title = popup.querySelector(":scope > strong").getBoundingClientRect();
+                          const copy = popup.querySelector(".map-popup-header-copy").getBoundingClientRect();
+                          return {
+                            copyAfterTitle: copy.left >= title.right,
+                            verticallyAligned: Math.abs(copy.top - title.top) <= 4,
+                          };
+                        }
+                        """
+                    )
+                    self.assertTrue(header_layout["copyAfterTitle"])
+                    self.assertTrue(header_layout["verticallyAligned"])
+                    action_layout = page.locator(".map-popup-actions").evaluate(
+                        """
+                        (row) => {
+                          const buttons = [...row.querySelectorAll("button")];
+                          const zoom = row.querySelector('[data-map-popup-action="zoom"]').getBoundingClientRect();
+                          const filter = row.querySelector('[data-map-popup-action="filter"]').getBoundingClientRect();
+                          return {
+                            fits: row.scrollWidth <= row.clientWidth,
+                            tops: new Set(buttons.map((button) => button.offsetTop)).size,
+                            groupGap: filter.left - zoom.right,
+                          };
+                        }
+                        """
+                    )
+                    self.assertTrue(action_layout["fits"])
+                    self.assertEqual(action_layout["tops"], 1)
+                    self.assertGreater(action_layout["groupGap"], 12)
+                    page.locator('[data-map-popup-action="filter"]').focus()
+                    self.assertEqual(
+                        page.locator('[data-map-popup-action="filter"]').evaluate(
+                            "button => getComputedStyle(button).outlineStyle"
+                        ),
+                        "solid",
+                    )
+                    page.locator('[data-map-popup-action="copy"]').hover()
+                    self.assertNotEqual(
+                        page.locator('[data-map-popup-action="copy"]').evaluate(
+                            "button => getComputedStyle(button).color"
+                        ),
+                        action_theme["muted"],
+                    )
+                    page.locator('[data-map-popup-action="copy"]').click()
+                    page.wait_for_function("() => window.__lucidumCopiedPostcode === 'CA'")
+                    self.assertEqual(page.locator("#clipboardToast").inner_text(), "Copied CA")
+
+                    map_request_count = len(map_requests)
+                    zoom_before = page.evaluate("() => document.querySelector('#ukMap')._lucidumMap.getZoom()")
+                    page.locator('[data-map-popup-action="zoom"]').click()
+                    page.wait_for_function("() => !document.querySelector('#ukMap .map-popup')")
+                    zoom_after = page.evaluate("() => document.querySelector('#ukMap')._lucidumMap.getZoom()")
+                    self.assertGreater(zoom_after, zoom_before)
+                    self.assertEqual(len(map_requests), map_request_count)
+
+                    open_polygon("AL")
+                    self.assertEqual(page.locator(".map-popup-metrics").inner_text(), "No matching data")
+                    self.assertEqual(
+                        page.locator(".map-popup-action").all_inner_texts(),
+                        ["", "View rows", "Zoom", ""],
+                    )
+                    close_popup()
+
+                    open_polygon("CA")
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator("#denominator").select_option("EXPOSURE")
+                    self.assertEqual(page.locator(".map-popup > strong").inner_text(), "CA")
+                    self.assertEqual(
+                        page.locator(".map-popup-metrics").inner_text(),
+                        "price / EXPOSURE: £100\nprice total: 300\nEXPOSURE: 3\nRows: 2",
+                    )
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator("#actualNumerator").select_option("vehicle_age")
+                    self.assertEqual(page.locator(".map-popup > strong").inner_text(), "CA")
+                    self.assertIn(
+                        "vehicle_age / EXPOSURE:",
+                        page.locator(".map-popup-metrics").inner_text(),
+                    )
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator("#actualNumerator").select_option("price")
+                    self.assertEqual(page.locator(".map-popup > strong").inner_text(), "CA")
+                    self.assertEqual(
+                        page.locator(".map-popup-metrics").inner_text(),
+                        "price / EXPOSURE: £100\nprice total: 300\nEXPOSURE: 3\nRows: 2",
+                    )
+                    close_popup()
+
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator("#denominator").select_option("__none__")
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator('#mapLevelTiles input[name="mapLevel"][value="sector"]').evaluate(
+                            """
+                            (input) => {
+                              input.checked = true;
+                              input.dispatchEvent(new Event("change", { bubbles: true }));
+                            }
+                            """
+                        )
+                    page.wait_for_function(
+                        '() => document.querySelector("#mapGroupMeta")?.textContent.includes("sectors matched")',
+                        timeout=20_000,
+                    )
+                    open_polygon("CA10 3")
+                    self.assertEqual(page.locator(".map-popup-section").count(), 0)
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator("#mapSmoothing").evaluate(
+                            """
+                            (input) => {
+                              input.value = "2";
+                              input.dispatchEvent(new Event("input", { bubbles: true }));
+                            }
+                            """
+                        )
+                    self.assertEqual(page.locator(".map-popup > strong").inner_text(), "CA10 3")
+                    self.assertEqual(
+                        page.locator(".map-popup-section").all_inner_texts(),
+                        [
+                            "Smoothed N2\nSmoothed average price: £150\nPooled valid records: 2\nContributing sectors: 1",
+                            "Unsmoothed\nRaw average price: £150\nRows: 2",
+                        ],
+                    )
+                    close_popup()
+
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator('#mapLevelTiles input[name="mapLevel"][value="unit"]').evaluate(
+                            """
+                            (input) => {
+                              input.checked = true;
+                              input.dispatchEvent(new Event("change", { bubbles: true }));
+                            }
+                            """
+                        )
+                    page.wait_for_function(
+                        '() => document.querySelector("#mapGroupMeta")?.textContent.includes("units plotted")',
+                        timeout=10_000,
+                    )
+                    opened_unit = page.evaluate(
+                        """
+                        () => {
+                          const map = document.querySelector("#ukMap")?._lucidumMap;
+                          const layer = Object.values(map?._layers || {})
+                            .find((candidate) => candidate?.data?.level === "unit" && candidate?.rows?.length);
+                          const entry = layer?.rows?.[0];
+                          if (!map || !entry) return false;
+                          map.fire("click", {
+                            containerPoint: map.latLngToContainerPoint(entry.latLng),
+                            latlng: entry.latLng,
+                          });
+                          return true;
+                        }
+                        """
+                    )
+                    self.assertTrue(opened_unit)
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const popups = [...document.querySelectorAll("#ukMap .map-popup")];
+                          return popups.length === 1
+                            && popups[0].querySelector("strong")?.textContent.trim() === "CA10 3AA";
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    self.assertEqual(page.locator(".map-popup > strong").inner_text(), "CA10 3AA")
+                    self.assertEqual(
+                        page.locator(".map-popup-metrics").inner_text(),
+                        "Average price: £100\nRows: 1",
+                    )
+                    self.assertIsNone(
+                        page.locator('[data-map-popup-action="filter"]').get_attribute("aria-pressed")
+                    )
+                    map_request_count = len(map_requests)
+                    page.locator('[data-map-popup-action="zoom"]').click()
+                    page.wait_for_function(
+                        "() => document.querySelector('#ukMap')._lucidumMap.getZoom() >= 13"
+                    )
+                    self.assertEqual(len(map_requests), map_request_count)
+
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator('#mapLevelTiles input[name="mapLevel"][value="area"]').evaluate(
+                            """
+                            (input) => {
+                              input.checked = true;
+                              input.dispatchEvent(new Event("change", { bubbles: true }));
+                            }
+                            """
+                        )
+                    page.wait_for_function(
+                        '() => document.querySelector("#mapGroupMeta")?.textContent.includes("areas matched")',
+                        timeout=10_000,
+                    )
+                    page.locator("#filterInput").evaluate(
+                        "(input) => { input.value = 'price >= 100'; }"
+                    )
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator("#filterApplyBtn").evaluate("(button) => { button.click(); }")
+
+                    open_polygon("CA")
+                    map_request_count = len(map_requests)
+                    filter_button = page.locator('[data-map-popup-action="filter"]')
+                    self.assertEqual(filter_button.get_attribute("aria-pressed"), "false")
+                    self.assertIn("Add CA to postcode area filter", filter_button.get_attribute("aria-label") or "")
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200,
+                        timeout=10_000,
+                    ) as first_filter_response:
+                        filter_button.evaluate("(button) => { button.click(); }")
+                    first_filter = json.loads(first_filter_response.value.request.post_data or "{}")["filter"]
+                    self.assertEqual(first_filter, '(price >= 100) AND ("PostcodeArea" IN (\'CA\'))')
+                    self.assertEqual(len(map_requests), map_request_count + 1)
+                    self.assertEqual(filter_button.get_attribute("aria-pressed"), "true")
+                    self.assertIn("Remove CA from postcode area filter", filter_button.get_attribute("aria-label") or "")
+                    selected_style = page.evaluate(
+                        """
+                        () => {
+                          const map = document.querySelector("#ukMap")?._lucidumMap;
+                          const layer = Object.values(map?._layers || {})
+                            .find((candidate) => candidate?._lucidumMapKey === "CA");
+                          return {
+                            color: layer?.options?.color,
+                            weight: layer?.options?.weight,
+                            accent: getComputedStyle(document.body).getPropertyValue("--accent").trim(),
+                          };
+                        }
+                        """
+                    )
+                    self.assertEqual(selected_style["color"], selected_style["accent"])
+                    self.assertEqual(selected_style["weight"], 0.5)
+
+                    open_polygon("AL")
+                    map_request_count = len(map_requests)
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200,
+                        timeout=10_000,
+                    ) as grouped_filter_response:
+                        page.locator('[data-map-popup-action="filter"]').evaluate("(button) => { button.focus(); }")
+                        page.keyboard.press("Enter")
+                    grouped_filter = json.loads(grouped_filter_response.value.request.post_data or "{}")["filter"]
+                    self.assertEqual(grouped_filter, '(price >= 100) AND ("PostcodeArea" IN (\'AL\', \'CA\'))')
+                    self.assertEqual(len(map_requests), map_request_count + 1)
+                    self.assertEqual(
+                        page.locator('[data-map-popup-action="filter"]').get_attribute("aria-pressed"),
+                        "true",
+                    )
+
+                    map_request_count = len(map_requests)
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200,
+                        timeout=10_000,
+                    ) as removed_area_response:
+                        page.locator('[data-map-popup-action="filter"]').evaluate("(button) => { button.click(); }")
+                    removed_area_filter = json.loads(removed_area_response.value.request.post_data or "{}")["filter"]
+                    self.assertEqual(removed_area_filter, '(price >= 100) AND ("PostcodeArea" IN (\'CA\'))')
+                    self.assertEqual(len(map_requests), map_request_count + 1)
+                    self.assertEqual(page.locator("#clipboardToast").inner_text(), "Removed AL from postcode area filter")
+
+                    open_polygon("CA")
+                    map_request_count = len(map_requests)
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200,
+                        timeout=10_000,
+                    ) as restored_filter_response:
+                        page.locator('[data-map-popup-action="filter"]').evaluate("(button) => { button.click(); }")
+                    restored_filter = json.loads(restored_filter_response.value.request.post_data or "{}")["filter"]
+                    self.assertEqual(restored_filter, "price >= 100")
+                    self.assertEqual(len(map_requests), map_request_count + 1)
+                    self.assertEqual(
+                        page.locator('[data-map-popup-action="filter"]').get_attribute("aria-pressed"),
+                        "false",
+                    )
+
+                    map_request_count = len(map_requests)
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator('[data-map-popup-action="filter"]').evaluate("(button) => { button.click(); }")
+                    self.assertEqual(len(map_requests), map_request_count + 1)
+                    page.locator("#filterInput").evaluate(
+                        "(input) => { input.value = 'price >= 100'; }"
+                    )
+                    map_request_count = len(map_requests)
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200,
+                        timeout=10_000,
+                    ) as manual_filter_response:
+                        page.locator("#filterApplyBtn").evaluate("(button) => { button.click(); }")
+                    self.assertEqual(
+                        json.loads(manual_filter_response.value.request.post_data or "{}")["filter"],
+                        "price >= 100",
+                    )
+                    self.assertEqual(len(map_requests), map_request_count + 1)
+                    self.assertEqual(page.locator("#clipboardToast").inner_text(), "Postcode area selection cleared")
+                    open_polygon("CA")
+                    self.assertEqual(
+                        page.locator('[data-map-popup-action="filter"]').get_attribute("aria-pressed"),
+                        "false",
+                    )
+
+                    map_request_count = len(map_requests)
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator('[data-map-popup-action="filter"]').evaluate("(button) => { button.click(); }")
+                    self.assertEqual(len(map_requests), map_request_count + 1)
+                    map_request_count = len(map_requests)
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200,
+                        timeout=10_000,
+                    ) as level_change_response:
+                        page.locator('#mapLevelTiles input[name="mapLevel"][value="sector"]').evaluate(
+                            """
+                            (input) => {
+                              input.checked = true;
+                              input.dispatchEvent(new Event("change", { bubbles: true }));
+                            }
+                            """
+                        )
+                    persistent_area_filter = '(price >= 100) AND ("PostcodeArea" IN (\'CA\'))'
+                    self.assertEqual(
+                        json.loads(level_change_response.value.request.post_data or "{}")["filter"],
+                        persistent_area_filter,
+                    )
+                    self.assertEqual(len(map_requests), map_request_count + 1)
+                    page.wait_for_function(
+                        '() => document.querySelector("#mapGroupMeta")?.textContent.includes("sectors matched")',
+                        timeout=10_000,
+                    )
+                    open_polygon("CA10 3")
+                    self.assertIsNone(
+                        page.locator('[data-map-popup-action="filter"]').get_attribute("aria-pressed")
+                    )
+                    close_popup()
+
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200,
+                        timeout=10_000,
+                    ) as area_return_response:
+                        page.locator('#mapLevelTiles input[name="mapLevel"][value="area"]').evaluate(
+                            """
+                            (input) => {
+                              input.checked = true;
+                              input.dispatchEvent(new Event("change", { bubbles: true }));
+                            }
+                            """
+                        )
+                    self.assertEqual(
+                        json.loads(area_return_response.value.request.post_data or "{}")["filter"],
+                        persistent_area_filter,
+                    )
+                    page.wait_for_function(
+                        '() => document.querySelector("#mapGroupMeta")?.textContent.includes("areas matched")',
+                        timeout=10_000,
+                    )
+                    open_polygon("CA")
+                    self.assertEqual(
+                        page.locator('[data-map-popup-action="filter"]').get_attribute("aria-pressed"),
+                        "true",
+                    )
+                    open_polygon("AL")
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator('[data-map-popup-action="filter"]').evaluate("(button) => { button.click(); }")
+
+                    open_polygon("CA")
+                    map_request_count = len(map_requests)
+                    with page.expect_request(
+                        lambda request: request.url.endswith("/api/dataset-viewer/table"),
+                        timeout=10_000,
+                    ) as viewer_request:
+                        page.locator('[data-map-popup-action="view-rows"]').evaluate("(button) => { button.click(); }")
+                    viewer_filter = json.loads(viewer_request.value.post_data or "{}")["filter"]
+                    self.assertEqual(viewer_filter, '(price >= 100) AND ("PostcodeArea" IN (\'AL\', \'CA\'))')
+                    page.locator("#datasetViewerWrap:not(.hidden) #datasetViewerGrid .tabulator-row").first.wait_for(timeout=10_000)
+                    self.assertEqual(len(map_requests), map_request_count)
+                    self.assertEqual(len(dataset_viewer_requests), 1)
+                    self.assertEqual(page.locator("#filterInput").input_value(), viewer_filter)
+                    self.assertEqual(page.locator("#datasetViewerFilterText").inner_text(), viewer_filter)
+                    self.assertEqual(
+                        page.locator('#datasetViewerGrid .tabulator-row .tabulator-cell[tabulator-field="c0"]').all_inner_texts(),
+                        ["CA", "CA"],
+                    )
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_uk_map_region_context_filter(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "map_regions.csv"
+            data_path.write_text(
+                "PostcodeArea,PostcodeSector,PostcodeUnit,lat,long,price\n"
+                "CA,CA10 3,CA10 3AA,54.55,-2.70,100\n"
+                "E,E1 1,E1 1AA,51.52,-0.05,200\n"
+                "BT,BT1 1,BT1 1AA,54.60,-5.93,300\n",
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                defaults={
+                    "actual": "price",
+                    "denominator": "__none__",
+                    "postcode_area": "PostcodeArea",
+                    "postcode_sector": "PostcodeSector",
+                    "postcode_unit": "PostcodeUnit",
+                    "latitude": "lat",
+                    "longitude": "long",
+                },
+                tools=["dataset_viewer", "uk_map"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1180, "height": 760})
+                    page_errors: list[str] = []
+                    map_requests: list[dict[str, Any]] = []
+
+                    def record_request(request: Any) -> None:
+                        if request.url.endswith("/api/uk-map/summary"):
+                            map_requests.append(json.loads(request.post_data or "{}"))
+
+                    def open_region_panel() -> Any:
+                        page.locator("#ukMap").click(
+                            button="right",
+                            position={"x": 580, "y": 690},
+                        )
+                        panel = page.locator("#mapRegionFilterPanel:not([hidden])")
+                        panel.wait_for(timeout=5_000)
+                        return panel
+
+                    def set_map_level(level: str) -> dict[str, Any]:
+                        with page.expect_response(
+                            lambda response: response.url.endswith("/api/uk-map/summary")
+                            and response.status == 200,
+                            timeout=10_000,
+                        ) as response_info:
+                            page.locator(
+                                f'#mapLevelTiles input[name="mapLevel"][value="{level}"]'
+                            ).evaluate(
+                                """
+                                (input) => {
+                                  input.checked = true;
+                                  input.dispatchEvent(new Event("change", { bubbles: true }));
+                                }
+                                """
+                            )
+                        return json.loads(response_info.value.request.post_data or "{}")
+
+                    def open_polygon(key: str) -> None:
+                        opened = page.evaluate(
+                            """
+                            (key) => {
+                              const map = document.querySelector("#ukMap")?._lucidumMap;
+                              let target = null;
+                              const inspect = (layer) => {
+                                if (target || !layer) return;
+                                if (String(layer._lucidumMapKey || "") === key) {
+                                  target = layer;
+                                  return;
+                                }
+                                layer.eachLayer?.(inspect);
+                              };
+                              Object.values(map?._layers || {}).forEach(inspect);
+                              target?.openPopup?.();
+                              return Boolean(target);
+                            }
+                            """,
+                            key,
+                        )
+                        self.assertTrue(opened)
+                        page.locator(".map-popup").wait_for(timeout=5_000)
+
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.on("request", record_request)
+                    page.goto(f"{base_url}/?tool=uk_map", wait_until="domcontentloaded")
+                    page.locator("#ukMap:not(.hidden)").wait_for(timeout=10_000)
+                    page.wait_for_function(
+                        '() => document.querySelector("#mapGroupMeta")?.textContent.includes("areas matched")',
+                        timeout=20_000,
+                    )
+
+                    page.locator("#filterInput").evaluate(
+                        "(input) => { input.value = 'price >= 0'; }"
+                    )
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/uk-map/summary")
+                        and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator("#filterApplyBtn").evaluate("(button) => { button.click(); }")
+
+                    panel = open_region_panel()
+                    expected_labels = [
+                        "Central London",
+                        "East Midlands",
+                        "East of England",
+                        "North East",
+                        "North West",
+                        "Northern Ireland",
+                        "Outer London",
+                        "Scotland",
+                        "South East",
+                        "South West",
+                        "Wales",
+                        "West Midlands",
+                        "Yorkshire and The Humber",
+                    ]
+                    self.assertEqual(
+                        panel.locator(".map-region-filter-option span").all_inner_texts(),
+                        expected_labels,
+                    )
+                    self.assertEqual(panel.locator('input[type="checkbox"]:checked').count(), 13)
+                    panel_bounds = panel.evaluate(
+                        """
+                        (element) => {
+                          const rect = element.getBoundingClientRect();
+                          const probe = document.createElement("span");
+                          probe.style.background = "var(--panel)";
+                          document.body.append(probe);
+                          const panelBackground = getComputedStyle(probe).backgroundColor;
+                          probe.remove();
+                          return {
+                            left: rect.left,
+                            top: rect.top,
+                            right: rect.right,
+                            bottom: rect.bottom,
+                            background: getComputedStyle(element).backgroundColor,
+                            panelBackground,
+                          };
+                        }
+                        """
+                    )
+                    self.assertGreaterEqual(panel_bounds["left"], 8)
+                    self.assertGreaterEqual(panel_bounds["top"], 8)
+                    self.assertLessEqual(panel_bounds["right"], 1172)
+                    self.assertLessEqual(panel_bounds["bottom"], 752)
+                    self.assertEqual(panel_bounds["background"], panel_bounds["panelBackground"])
+
+                    dismiss_point = page.evaluate(
+                        """
+                        () => {
+                          const mapElement = document.querySelector("#ukMap");
+                          const map = mapElement?._lucidumMap;
+                          const panel = document.querySelector("#mapRegionFilterPanel");
+                          const mapBounds = mapElement?.getBoundingClientRect();
+                          const panelBounds = panel?.getBoundingClientRect();
+                          const candidates = [];
+                          const inspect = (layer) => {
+                            if (!layer) return;
+                            if (layer._lucidumMapKey && typeof layer.getCenter === "function") {
+                              candidates.push(layer);
+                            }
+                            layer.eachLayer?.(inspect);
+                          };
+                          Object.values(map?._layers || {}).forEach(inspect);
+                          for (const layer of candidates) {
+                            const point = map.latLngToContainerPoint(layer.getCenter());
+                            const x = mapBounds.left + point.x;
+                            const y = mapBounds.top + point.y;
+                            const insideMap = x >= mapBounds.left && x <= mapBounds.right
+                              && y >= mapBounds.top && y <= mapBounds.bottom;
+                            const insidePanel = x >= panelBounds.left && x <= panelBounds.right
+                              && y >= panelBounds.top && y <= panelBounds.bottom;
+                            const hitTarget = document.elementFromPoint(x, y);
+                            const hitsMapCanvas = hitTarget?.tagName === "CANVAS"
+                              && mapElement.contains(hitTarget);
+                            if (insideMap && !insidePanel && hitsMapCanvas) {
+                              return { x, y, key: String(layer._lucidumMapKey) };
+                            }
+                          }
+                          return null;
+                        }
+                        """
+                    )
+                    self.assertIsNotNone(dismiss_point)
+                    page.mouse.click(dismiss_point["x"], dismiss_point["y"])
+                    self.assertTrue(page.locator("#mapRegionFilterPanel").is_hidden())
+                    page.wait_for_timeout(100)
+                    self.assertEqual(page.locator("#ukMap .map-popup").count(), 0)
+                    panel = open_region_panel()
+
+                    panel.get_by_role("button", name="Deselect all").click()
+                    apply_button = panel.get_by_role("button", name="Apply postcode region filter")
+                    self.assertTrue(apply_button.is_disabled())
+                    panel.get_by_label("Central London").click()
+                    self.assertFalse(apply_button.is_disabled())
+                    page.keyboard.press("Escape")
+                    self.assertTrue(page.locator("#mapRegionFilterPanel").is_hidden())
+                    panel = open_region_panel()
+                    self.assertEqual(panel.locator('input[type="checkbox"]:checked').count(), 13)
+
+                    panel.get_by_role("button", name="Deselect all").click()
+                    panel.get_by_label("Central London").click()
+                    panel.get_by_label("North West").click()
+                    selected_areas = sorted(
+                        "E EC N NW SE SW W WC BB BL CA CH CW FY IM L LA M OL PR SK WA WN".split()
+                    )
+                    selected_clause = (
+                        '"PostcodeArea" IN ('
+                        + ", ".join(f"'{area}'" for area in selected_areas)
+                        + ")"
+                    )
+                    selected_filter = f"(price >= 0) AND ({selected_clause})"
+                    request_count = len(map_requests)
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/uk-map/summary")
+                        and response.status == 200,
+                        timeout=10_000,
+                    ) as regional_response:
+                        apply_button.click()
+                    self.assertEqual(
+                        json.loads(regional_response.value.request.post_data or "{}")["filter"],
+                        selected_filter,
+                    )
+                    self.assertEqual(len(map_requests), request_count + 1)
+                    self.assertEqual(page.locator("#filterInput").input_value(), selected_filter)
+                    self.assertEqual(page.locator("#clipboardToast").inner_text(), "Postcode region filter applied")
+                    self.assertTrue(page.locator("#mapRegionFilterPanel").is_hidden())
+
+                    panel = open_region_panel()
+                    self.assertTrue(panel.get_by_label("Central London").is_checked())
+                    self.assertTrue(panel.get_by_label("North West").is_checked())
+                    self.assertFalse(panel.get_by_label("Scotland").is_checked())
+                    request_count = len(map_requests)
+                    panel.get_by_role("button", name="Apply postcode region filter").click()
+                    page.wait_for_timeout(100)
+                    self.assertEqual(len(map_requests), request_count)
+                    self.assertEqual(page.locator("#clipboardToast").inner_text(), "Postcode region filter unchanged")
+
+                    open_polygon("CA")
+                    self.assertEqual(
+                        page.locator('[data-map-popup-action="filter"]').get_attribute("aria-pressed"),
+                        "true",
+                    )
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/uk-map/summary")
+                        and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator('[data-map-popup-action="filter"]').click()
+                    panel = open_region_panel()
+                    north_west = panel.get_by_label("North West")
+                    self.assertFalse(north_west.is_checked())
+                    self.assertTrue(north_west.evaluate("(checkbox) => checkbox.indeterminate"))
+
+                    panel.get_by_role("button", name="Select all", exact=True).click()
+                    request_count = len(map_requests)
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/uk-map/summary")
+                        and response.status == 200,
+                        timeout=10_000,
+                    ) as cleared_response:
+                        panel.get_by_role("button", name="Apply postcode region filter").click()
+                    self.assertEqual(
+                        json.loads(cleared_response.value.request.post_data or "{}")["filter"],
+                        "price >= 0",
+                    )
+                    self.assertEqual(len(map_requests), request_count + 1)
+                    self.assertEqual(page.locator("#clipboardToast").inner_text(), "Postcode region filter cleared")
+
+                    panel = open_region_panel()
+                    panel.get_by_role("button", name="Deselect all").click()
+                    panel.get_by_label("North West").click()
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/uk-map/summary")
+                        and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        panel.get_by_role("button", name="Apply postcode region filter").click()
+                    north_west_filter = (
+                        "(price >= 0) AND "
+                        '("PostcodeArea" IN ('
+                        + ", ".join(
+                            f"'{area}'"
+                            for area in sorted(
+                                "BB BL CA CH CW FY IM L LA M OL PR SK WA WN".split()
+                            )
+                        )
+                        + "))"
+                    )
+                    sector_request = set_map_level("sector")
+                    self.assertEqual(sector_request["filter"], north_west_filter)
+                    page.wait_for_function(
+                        '() => document.querySelector("#mapGroupMeta")?.textContent.includes("sectors matched")',
+                        timeout=10_000,
+                    )
+                    panel = open_region_panel()
+                    self.assertTrue(panel.get_by_label("North West").is_checked())
+                    page.keyboard.press("Escape")
+
+                    panel = open_region_panel()
+                    unit_request = set_map_level("unit")
+                    self.assertEqual(unit_request["filter"], north_west_filter)
+                    self.assertTrue(page.locator("#mapRegionFilterPanel").is_hidden())
+                    page.wait_for_function(
+                        '() => document.querySelector("#mapGroupMeta")?.textContent.includes("units plotted")',
+                        timeout=10_000,
+                    )
+                    panel = open_region_panel()
+                    self.assertTrue(panel.get_by_label("North West").is_checked())
+                    page.keyboard.press("Escape")
+
+                    page.locator(".map-viewport-button").first.click(button="right")
+                    self.assertTrue(page.locator("#mapRegionFilterPanel").is_hidden())
+                    page.locator("#ukMap").focus()
+                    page.keyboard.press("Shift+F10")
+                    panel = page.locator("#mapRegionFilterPanel:not([hidden])")
+                    panel.wait_for(timeout=5_000)
+                    self.assertEqual(
+                        page.locator(":focus").get_attribute("id"),
+                        "mapRegionFilterPanel",
+                    )
+                    self.assertNotEqual(
+                        panel.get_by_role("button", name="Select all", exact=True).evaluate(
+                            "button => getComputedStyle(button).outlineStyle"
+                        ),
+                        "solid",
+                    )
+                    page.keyboard.press("Escape")
+                    self.assertTrue(page.locator("#mapRegionFilterPanel").is_hidden())
+
+                    open_region_panel()
+                    page.locator("#datasetViewerTool").click()
+                    self.assertTrue(page.locator("#mapRegionFilterPanel").is_hidden())
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_mobile_phone_viewport_keeps_default_tools_usable(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "sample.csv"

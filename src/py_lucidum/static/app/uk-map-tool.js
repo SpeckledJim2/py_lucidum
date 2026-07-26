@@ -37,6 +37,32 @@ const POSTCODE_LEVELS = [
   { level: "unit", label: "Unit" },
 ];
 
+export const UK_MAP_POSTCODE_REGIONS = Object.freeze([
+  Object.freeze({ label: "Central London", areas: Object.freeze(["E", "EC", "N", "NW", "SE", "SW", "W", "WC"]) }),
+  Object.freeze({ label: "East Midlands", areas: Object.freeze(["DE", "LE", "LN", "NG", "NN"]) }),
+  Object.freeze({ label: "East of England", areas: Object.freeze(["AL", "CB", "CM", "CO", "IP", "LU", "NR", "PE", "SG", "SS"]) }),
+  Object.freeze({ label: "North East", areas: Object.freeze(["DH", "DL", "NE", "SR", "TS"]) }),
+  Object.freeze({ label: "North West", areas: Object.freeze(["BB", "BL", "CA", "CH", "CW", "FY", "IM", "L", "LA", "M", "OL", "PR", "SK", "WA", "WN"]) }),
+  Object.freeze({ label: "Northern Ireland", areas: Object.freeze(["BT"]) }),
+  Object.freeze({ label: "Outer London", areas: Object.freeze(["BR", "CR", "DA", "EN", "HA", "IG", "KT", "RM", "SM", "TW", "UB", "WD"]) }),
+  Object.freeze({ label: "Scotland", areas: Object.freeze(["AB", "DD", "DG", "EH", "FK", "G", "HS", "IV", "KA", "KW", "KY", "ML", "PA", "PH", "TD", "ZE"]) }),
+  Object.freeze({ label: "South East", areas: Object.freeze(["BN", "CT", "GU", "HP", "ME", "MK", "OX", "PO", "RG", "RH", "SL", "SO", "SP", "TN"]) }),
+  Object.freeze({ label: "South West", areas: Object.freeze(["BA", "BH", "BS", "DT", "EX", "GL", "GY", "JE", "PL", "SN", "TA", "TQ", "TR"]) }),
+  Object.freeze({ label: "Wales", areas: Object.freeze(["CF", "LD", "LL", "NP", "SA", "SY"]) }),
+  Object.freeze({ label: "West Midlands", areas: Object.freeze(["B", "CV", "DY", "HR", "ST", "TF", "WR", "WS", "WV"]) }),
+  Object.freeze({ label: "Yorkshire and The Humber", areas: Object.freeze(["BD", "DN", "HD", "HG", "HU", "HX", "LS", "S", "WF", "YO"]) }),
+]);
+
+const UK_MAP_POSTCODE_AREA_CODES = Object.freeze(
+  UK_MAP_POSTCODE_REGIONS.flatMap((region) => region.areas).sort(),
+);
+const UK_MAP_POSTCODE_AREA_CODE_SET = new Set(UK_MAP_POSTCODE_AREA_CODES);
+const MAP_FILTER_ICON_SVG = `
+  <svg class="map-popup-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M4 5h16l-6.5 7.2v5.3L10.5 20v-7.8z"></path>
+  </svg>
+`;
+
 function locationParamValue(locationParams, key) {
   if (!locationParams) return "";
   if (typeof locationParams.get === "function") return locationParams.get(key) || "";
@@ -111,6 +137,155 @@ export function ukMapPostcodeAvailability({ schema, locationParams } = {}) {
   };
 }
 
+export function ukMapPostcodeFilterClause(column, key) {
+  const quotedColumn = `"${String(column || "").replaceAll('"', '""')}"`;
+  const quotedKey = `'${String(key || "").replaceAll("'", "''")}'`;
+  return `${quotedColumn} = ${quotedKey}`;
+}
+
+export function ukMapPostcodeInFilterClause(column, keys) {
+  const selectedKeys = Array.from(new Set(
+    (Array.isArray(keys) ? keys : [])
+      .map((key) => String(key || ""))
+      .filter(Boolean),
+  )).sort();
+  if (!selectedKeys.length) return "";
+  const quotedColumn = `"${String(column || "").replaceAll('"', '""')}"`;
+  const quotedKeys = selectedKeys
+    .map((key) => `'${key.replaceAll("'", "''")}'`)
+    .join(", ");
+  return `${quotedColumn} IN (${quotedKeys})`;
+}
+
+export function combineUkMapPostcodeFilter(baseFilter, postcodeClause) {
+  const base = String(baseFilter || "").trim();
+  const clause = String(postcodeClause || "").trim();
+  if (!base) return clause ? `(${clause})` : "";
+  if (!clause) return base;
+  return `(${base}) AND (${clause})`;
+}
+
+export function ukMapPopupContentHtml({
+  title,
+  row,
+  data = {},
+  escapeHtml,
+  formatNumber,
+  formatLineValue,
+  showViewRows = true,
+  areaFilterToggle = false,
+  areaFilterSelected = false,
+  postcodeLevel = "",
+  postcodeJoinColumn = "",
+}) {
+  const safeTitle = escapeHtml(title);
+  const responseLabel = data.response?.label || "Actual";
+  const denominatorLabel = data.denominator?.bar_label || "Weight";
+  const averageMode = !data.denominator?.column;
+  const formattedLineValue = (value) => formatLineValue(value) || "No data";
+  const formattedNumber = (value) => formatNumber(value) || "No data";
+  const quantity = (value) => `<strong class="map-popup-quantity">${escapeHtml(value)}</strong>`;
+  const actionIcons = {
+    copy: `
+      <svg class="map-popup-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <rect x="9" y="9" width="11" height="11" rx="2"></rect>
+        <path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3"></path>
+      </svg>
+    `,
+    filter: MAP_FILTER_ICON_SVG,
+  };
+  const filterActionLabel = areaFilterToggle
+    ? `${areaFilterSelected ? "Remove" : "Add"} ${title} ${areaFilterSelected ? "from" : "to"} postcode area filter`
+    : `Filter dataset to ${title}`;
+  const actionLabels = {
+    copy: `Copy ${title} to clipboard`,
+    zoom: `Zoom to ${title}`,
+    filter: filterActionLabel,
+    "view-rows": `View rows for ${title}`,
+  };
+  const action = (name, label, extraClass = "") => {
+    const accessibleLabel = actionLabels[name] || `${label} ${title}`;
+    const icon = actionIcons[name];
+    const iconClass = icon ? " map-popup-action--icon" : "";
+    const activeClass = name === "filter" && areaFilterToggle && areaFilterSelected
+      ? " map-popup-action--active"
+      : "";
+    const customClass = extraClass ? ` ${extraClass}` : "";
+    const pressed = name === "filter" && areaFilterToggle
+      ? ` aria-pressed="${areaFilterSelected ? "true" : "false"}"`
+      : "";
+    return `<button class="map-popup-action app-control-button app-command-button${iconClass}${activeClass}${customClass}" type="button" data-map-popup-action="${name}" title="${escapeHtml(accessibleLabel)}" aria-label="${escapeHtml(accessibleLabel)}"${pressed}>${icon || escapeHtml(label)}</button>`;
+  };
+  const actions = [];
+  if (showViewRows) actions.push(action("view-rows", "View rows"));
+  actions.push(
+    action("zoom", "Zoom"),
+    action("filter", "Filter"),
+  );
+
+  const lines = [
+    `<strong>${safeTitle}</strong>`,
+    action("copy", "Copy", "map-popup-header-copy"),
+  ];
+  if (!row) {
+    lines.push('<div class="map-popup-metrics"><div>No matching data</div></div>');
+  } else {
+    const rowsLabel = row.raw_row_count ?? row.row_count;
+    if (mapPopupSmoothingApplied(data, row)) {
+      const smoothingLevel = `N${Math.max(0, Math.round(Number(data.smoothing.level) || 0))}`;
+      const contributingSectors = Number(row.smoothing_contributing_sectors) || 0;
+      const smoothedLines = [`<div class="map-popup-section-title">Smoothed ${escapeHtml(smoothingLevel)}</div>`];
+      if (contributingSectors <= 0) {
+        smoothedLines.push("<div>No contributing sectors; unsmoothed value shown.</div>");
+      } else if (averageMode) {
+        smoothedLines.push(`<div>Smoothed average ${escapeHtml(responseLabel)}: ${quantity(formattedLineValue(row.value))}</div>`);
+        smoothedLines.push(`<div>Pooled valid records: ${quantity(formattedNumber(row.denominator))}</div>`);
+        smoothedLines.push(`<div>Contributing sectors: ${quantity(formattedNumber(contributingSectors))}</div>`);
+      } else {
+        smoothedLines.push(`<div>Smoothed ${escapeHtml(responseLabel)} / ${escapeHtml(denominatorLabel)}: ${quantity(formattedLineValue(row.value))}</div>`);
+        smoothedLines.push(`<div>${escapeHtml(responseLabel)} total: ${quantity(formattedNumber(row.numerator))}</div>`);
+        smoothedLines.push(`<div>${escapeHtml(denominatorLabel)}: ${quantity(formattedNumber(row.denominator))}</div>`);
+        smoothedLines.push(`<div>Contributing sectors: ${quantity(formattedNumber(contributingSectors))}</div>`);
+      }
+      lines.push(`<div class="map-popup-section map-popup-section--smoothed">${smoothedLines.join("")}</div>`);
+
+      const unsmoothedLines = ['<div class="map-popup-section-title">Unsmoothed</div>'];
+      if (averageMode) {
+        unsmoothedLines.push(`<div>Raw average ${escapeHtml(responseLabel)}: ${quantity(formattedLineValue(row.raw_value))}</div>`);
+      } else {
+        unsmoothedLines.push(`<div>Raw ${escapeHtml(responseLabel)} / ${escapeHtml(denominatorLabel)}: ${quantity(formattedLineValue(row.raw_value))}</div>`);
+        unsmoothedLines.push(`<div>Raw ${escapeHtml(responseLabel)} total: ${quantity(formattedNumber(row.raw_numerator))}</div>`);
+        unsmoothedLines.push(`<div>Raw ${escapeHtml(denominatorLabel)}: ${quantity(formattedNumber(row.raw_denominator))}</div>`);
+      }
+      unsmoothedLines.push(`<div>Rows: ${quantity(formattedNumber(rowsLabel))}</div>`);
+      lines.push(`<div class="map-popup-section map-popup-section--unsmoothed">${unsmoothedLines.join("")}</div>`);
+    } else {
+      const metrics = [];
+      if (averageMode) {
+        metrics.push(`<div>Average ${escapeHtml(responseLabel)}: ${quantity(formattedLineValue(row.value))}</div>`);
+      } else {
+        metrics.push(`<div>${escapeHtml(responseLabel)} / ${escapeHtml(denominatorLabel)}: ${quantity(formattedLineValue(row.value))}</div>`);
+        metrics.push(`<div>${escapeHtml(responseLabel)} total: ${quantity(formattedNumber(row.numerator))}</div>`);
+        metrics.push(`<div>${escapeHtml(denominatorLabel)}: ${quantity(formattedNumber(row.denominator))}</div>`);
+      }
+      metrics.push(`<div>Rows: ${quantity(formattedNumber(rowsLabel))}</div>`);
+      lines.push(`<div class="map-popup-metrics">${metrics.join("")}</div>`);
+    }
+  }
+  lines.push(`<div class="map-popup-actions" role="group" aria-label="${escapeHtml(`${title} postcode actions`)}">${actions.join("")}</div>`);
+  return `<div class="map-popup" data-map-postcode-key="${safeTitle}" data-map-postcode-level="${escapeHtml(postcodeLevel)}" data-map-postcode-column="${escapeHtml(postcodeJoinColumn)}">${lines.join("")}</div>`;
+}
+
+function mapPopupSmoothingApplied(data, row) {
+  return Boolean(
+    data?.level === "sector"
+      && data?.smoothing?.applied
+      && Number(data?.smoothing?.level) > 0
+      && row
+      && Object.prototype.hasOwnProperty.call(row, "raw_value")
+  );
+}
+
 export function createUkMapTool({
   api,
   el,
@@ -135,7 +310,16 @@ export function createUkMapTool({
   syncActiveFilterLabels,
   columnExists,
   numericColumnExists,
+  getCss = () => "",
   refreshUkMap,
+  copyTextToClipboard = () => Promise.resolve(false),
+  showClipboardToast = () => {},
+  applyMapPostcodeFilter = () => {},
+  applyMapAreaGroupFilter = () => false,
+  openMapPostcodeRows = () => {},
+  isMapPostcodeSelected = () => false,
+  getMapSelectedAreas = () => null,
+  canOpenDatasetViewer = () => false,
   clearActiveFavouriteSelection = () => {},
 }) {
   const L = leafletImpl;
@@ -151,6 +335,7 @@ export function createUkMapTool({
   const MAP_POINT_GRID_SIZE = 18;
   const MAP_FIT_PADDING = [8, 8];
   const MAP_UNIT_FIT_PADDING = [18, 18];
+  const MAP_POPUP_MAX_WIDTH = 440;
   const MAP_UNIT_POINT_RADIUS_MULTIPLIER = 0.85;
   const MAP_UNIT_POINT_MIN_RADIUS = 0.5;
   const MAP_UNIT_POINT_MAX_RADIUS_MULTIPLIER = MAP_UNIT_POINT_RADIUS_MULTIPLIER * 4;
@@ -198,6 +383,11 @@ export function createUkMapTool({
   let baseTileLayer = null;
   let mapViewportControl = null;
   let mapResizeObserver = null;
+  let activeMapPopupSelection = null;
+  let mapRegionFilterPanel = null;
+  let stagedMapRegionAreas = null;
+  let mapRegionFilterReturnFocus = null;
+  let mapRegionDismissClickPending = false;
 
   function clearActiveMapFavourite(options = {}) {
     if (state.mapFavouriteRestoreInProgress && !options.force) return;
@@ -424,9 +614,227 @@ export function createUkMapTool({
     ukMap.on("zoomend", () => {
       if (state.lastMapData?.level === "sector") restyleActiveMapPolygonLayer();
     });
+    ukMap.on("popupclose", (event) => {
+      if (!activeMapPopupSelection?.popup || activeMapPopupSelection.popup === event.popup) {
+        activeMapPopupSelection = null;
+      }
+    });
     setBaseMap(state.baseMap);
     addMapViewportControl();
     observeMapResize();
+  }
+
+  function mapRegionFilterIsOpen() {
+    return Boolean(mapRegionFilterPanel && !mapRegionFilterPanel.hidden);
+  }
+
+  function ensureMapRegionFilterPanel() {
+    if (mapRegionFilterPanel) return mapRegionFilterPanel;
+    const regionRows = UK_MAP_POSTCODE_REGIONS.map((region, index) => `
+      <label class="map-region-filter-option" for="mapRegionFilterOption${index}">
+        <input id="mapRegionFilterOption${index}" type="checkbox" data-map-region-index="${index}">
+        <span>${escapeHtml(region.label)}</span>
+      </label>
+    `).join("");
+    mapRegionFilterPanel = document.createElement("div");
+    mapRegionFilterPanel.id = "mapRegionFilterPanel";
+    mapRegionFilterPanel.className = "map-region-filter-panel";
+    mapRegionFilterPanel.hidden = true;
+    mapRegionFilterPanel.setAttribute("role", "dialog");
+    mapRegionFilterPanel.setAttribute("aria-modal", "false");
+    mapRegionFilterPanel.setAttribute("aria-labelledby", "mapRegionFilterTitle");
+    mapRegionFilterPanel.tabIndex = -1;
+    mapRegionFilterPanel.innerHTML = `
+      <div class="map-region-filter-header">
+        <div class="map-region-filter-shortcuts" role="group" aria-label="Postcode region selection shortcuts">
+          <button type="button" data-map-region-action="select-all">Select all</button>
+          <button type="button" data-map-region-action="deselect-all">Deselect all</button>
+        </div>
+        <button class="map-region-filter-apply" type="button" data-map-region-action="apply" title="Apply postcode region filter" aria-label="Apply postcode region filter">
+          ${MAP_FILTER_ICON_SVG}
+        </button>
+      </div>
+      <div id="mapRegionFilterTitle" class="map-region-filter-title">Only show:</div>
+      <div class="map-region-filter-options">${regionRows}</div>
+    `;
+    mapRegionFilterPanel.addEventListener("click", handleMapRegionFilterPanelClick);
+    mapRegionFilterPanel.addEventListener("change", handleMapRegionFilterCheckboxChange);
+    document.body.appendChild(mapRegionFilterPanel);
+    return mapRegionFilterPanel;
+  }
+
+  function syncMapRegionFilterPanel() {
+    if (!mapRegionFilterPanel || !stagedMapRegionAreas) return;
+    mapRegionFilterPanel.querySelectorAll("[data-map-region-index]").forEach((checkbox) => {
+      const region = UK_MAP_POSTCODE_REGIONS[Number(checkbox.dataset.mapRegionIndex)];
+      if (!region) return;
+      const selectedCount = region.areas.reduce(
+        (count, area) => count + (stagedMapRegionAreas.has(area) ? 1 : 0),
+        0,
+      );
+      checkbox.checked = selectedCount === region.areas.length;
+      checkbox.indeterminate = selectedCount > 0 && selectedCount < region.areas.length;
+    });
+    const applyButton = mapRegionFilterPanel.querySelector('[data-map-region-action="apply"]');
+    if (applyButton) applyButton.disabled = stagedMapRegionAreas.size === 0;
+  }
+
+  function positionMapRegionFilterPanel(clientX, clientY) {
+    if (!mapRegionFilterPanel) return;
+    const margin = 8;
+    mapRegionFilterPanel.style.left = `${Math.round(clientX)}px`;
+    mapRegionFilterPanel.style.top = `${Math.round(clientY)}px`;
+    const bounds = mapRegionFilterPanel.getBoundingClientRect();
+    const maxLeft = Math.max(margin, window.innerWidth - bounds.width - margin);
+    const maxTop = Math.max(margin, window.innerHeight - bounds.height - margin);
+    const left = Math.max(margin, Math.min(Math.round(clientX), maxLeft));
+    const top = Math.max(margin, Math.min(Math.round(clientY), maxTop));
+    mapRegionFilterPanel.style.left = `${left}px`;
+    mapRegionFilterPanel.style.top = `${top}px`;
+  }
+
+  function closeMapRegionFilterPanel({ restoreFocus = false } = {}) {
+    if (!mapRegionFilterPanel || mapRegionFilterPanel.hidden) return false;
+    mapRegionFilterPanel.hidden = true;
+    mapRegionFilterPanel.style.left = "";
+    mapRegionFilterPanel.style.top = "";
+    stagedMapRegionAreas = null;
+    const returnFocus = mapRegionFilterReturnFocus;
+    mapRegionFilterReturnFocus = null;
+    if (restoreFocus && returnFocus?.isConnected && typeof returnFocus.focus === "function") {
+      returnFocus.focus({ preventScroll: true });
+    }
+    return true;
+  }
+
+  function openMapRegionFilterPanel({ clientX, clientY, returnFocus } = {}) {
+    if (state.tool !== "uk_map" || !mapContainerVisible()) return false;
+    closeMapRegionFilterPanel();
+    const panel = ensureMapRegionFilterPanel();
+    const joinColumn = postcodeColumn("area");
+    const selectedAreas = getMapSelectedAreas({ joinColumn });
+    stagedMapRegionAreas = new Set(
+      Array.isArray(selectedAreas)
+        ? selectedAreas.filter((area) => UK_MAP_POSTCODE_AREA_CODE_SET.has(String(area)))
+        : UK_MAP_POSTCODE_AREA_CODES,
+    );
+    mapRegionFilterReturnFocus = returnFocus || ukMap?.getContainer?.() || el("ukMap");
+    panel.dataset.mapAreaColumn = joinColumn;
+    panel.hidden = false;
+    syncMapRegionFilterPanel();
+    positionMapRegionFilterPanel(clientX, clientY);
+    panel.focus({ preventScroll: true });
+    return true;
+  }
+
+  function handleMapRegionFilterCheckboxChange(event) {
+    const checkbox = event.target.closest?.("[data-map-region-index]");
+    if (!checkbox || !stagedMapRegionAreas) return;
+    const region = UK_MAP_POSTCODE_REGIONS[Number(checkbox.dataset.mapRegionIndex)];
+    if (!region) return;
+    region.areas.forEach((area) => {
+      if (checkbox.checked) {
+        stagedMapRegionAreas.add(area);
+      } else {
+        stagedMapRegionAreas.delete(area);
+      }
+    });
+    syncMapRegionFilterPanel();
+  }
+
+  function handleMapRegionFilterPanelClick(event) {
+    const button = event.target.closest?.("[data-map-region-action]");
+    if (!button || !mapRegionFilterPanel?.contains(button) || !stagedMapRegionAreas) return;
+    const action = button.dataset.mapRegionAction;
+    if (action === "select-all") {
+      stagedMapRegionAreas = new Set(UK_MAP_POSTCODE_AREA_CODES);
+      syncMapRegionFilterPanel();
+      return;
+    }
+    if (action === "deselect-all") {
+      stagedMapRegionAreas.clear();
+      syncMapRegionFilterPanel();
+      return;
+    }
+    if (action !== "apply" || button.disabled || !stagedMapRegionAreas.size) return;
+    const selectedAreas = Array.from(stagedMapRegionAreas).sort();
+    const allSelected = selectedAreas.length === UK_MAP_POSTCODE_AREA_CODES.length;
+    const joinColumn = String(mapRegionFilterPanel.dataset.mapAreaColumn || postcodeColumn("area"));
+    closeMapRegionFilterPanel();
+    const changed = Boolean(applyMapAreaGroupFilter({ joinColumn, selectedAreas, allSelected }));
+    restyleActiveMapPolygonLayer();
+    if (allSelected) {
+      showClipboardToast(changed ? "Postcode region filter cleared" : "All postcode regions already shown");
+    } else {
+      showClipboardToast(changed ? "Postcode region filter applied" : "Postcode region filter unchanged");
+    }
+  }
+
+  function mapRegionFilterIgnoresTarget(target) {
+    return Boolean(target?.closest?.(
+      "button, input, select, textarea, a, [contenteditable], .leaflet-control, .leaflet-popup, .map-floating-control",
+    ));
+  }
+
+  function handleMapContextMenu(event) {
+    if (state.tool !== "uk_map" || mapRegionFilterIgnoresTarget(event.target)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    ukMap?.closePopup?.();
+    const activeElement = document.activeElement;
+    openMapRegionFilterPanel({
+      clientX: Number(event.clientX) || 0,
+      clientY: Number(event.clientY) || 0,
+      returnFocus: activeElement && el("ukMap").contains(activeElement)
+        ? activeElement
+        : ukMap?.getContainer?.(),
+    });
+  }
+
+  function handleMapContextMenuKeydown(event) {
+    const contextMenuKey = event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey);
+    if (!contextMenuKey || state.tool !== "uk_map" || mapRegionFilterIgnoresTarget(event.target)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    ukMap?.closePopup?.();
+    const bounds = el("ukMap").getBoundingClientRect();
+    openMapRegionFilterPanel({
+      clientX: bounds.left + (bounds.width / 2),
+      clientY: bounds.top + (bounds.height / 2),
+      returnFocus: document.activeElement || ukMap?.getContainer?.(),
+    });
+  }
+
+  function handleMapRegionFilterDocumentPointerDown(event) {
+    if (!mapRegionFilterIsOpen() || mapRegionFilterPanel.contains(event.target)) return;
+    mapRegionDismissClickPending = Boolean(
+      event.button === 0
+        && el("ukMap")?.contains(event.target)
+        && !mapRegionFilterIgnoresTarget(event.target),
+    );
+    closeMapRegionFilterPanel();
+  }
+
+  function handleMapRegionFilterDocumentClick(event) {
+    if (!mapRegionDismissClickPending) return;
+    mapRegionDismissClickPending = false;
+    if (!el("ukMap")?.contains(event.target) || mapRegionFilterIgnoresTarget(event.target)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }
+
+  function handleMapRegionFilterDocumentPointerEnd() {
+    if (!mapRegionDismissClickPending) return;
+    window.setTimeout(() => {
+      mapRegionDismissClickPending = false;
+    }, 0);
+  }
+
+  function handleMapRegionFilterDocumentKeydown(event) {
+    if (!mapRegionFilterIsOpen() || event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    closeMapRegionFilterPanel({ restoreFocus: true });
   }
 
   function mapContainerVisible() {
@@ -589,6 +997,7 @@ export function createUkMapTool({
       return;
     }
     if (target.name === "mapLevel" && target.checked && mapLevelSelectable(target.value) && target.value !== state.mapLevel) {
+      closeMapRegionFilterPanel();
       captureMapView("map-level-change");
       state.mapLevel = target.value;
       clearActiveMapFavourite({ force: true });
@@ -603,6 +1012,7 @@ export function createUkMapTool({
     if (!Object.prototype.hasOwnProperty.call(MAP_LEVELS, nextLevel) || !mapLevelSelectable(nextLevel)) return false;
     const changed = state.mapLevel !== nextLevel;
     if (changed) {
+      closeMapRegionFilterPanel();
       if (state.tool === "uk_map") captureMapView("map-level-change");
       state.mapLevel = nextLevel;
       if (options.clearFavourite !== false) clearActiveMapFavourite();
@@ -958,6 +1368,13 @@ export function createUkMapTool({
 
   function mapPolygonPopupHtml(layer) {
     const { key, row, data } = mapPolygonLayerRow(layer);
+    activeMapPopupSelection = {
+      key: key || "Unknown",
+      level: data?.level || state.mapLevel,
+      joinColumn: data?.join_column || postcodeColumn(data?.level || state.mapLevel),
+      layer,
+      popup: layer.getPopup?.() || null,
+    };
     return mapPopupHtml(key || "Unknown", row, data || {});
   }
 
@@ -966,7 +1383,51 @@ export function createUkMapTool({
     if (!context) return mapFeatureStyle(null, makeQuantileScale([]), null);
     const key = mapPolygonFeatureKey(feature, context.joinProperty);
     const row = context.summaries.get(key);
-    return mapFeatureStyle(row, context.scale, context.hotspotKeys, context.data.level);
+    const style = mapFeatureStyle(row, context.scale, context.hotspotKeys, context.data.level);
+    const selected = context.data.level === "area" && isMapPostcodeSelected({
+      key,
+      level: "area",
+      joinColumn: context.data.join_column || postcodeColumn("area"),
+    });
+    if (!selected) return style;
+    return {
+      ...style,
+      color: getCss("--accent") || "#2276d2",
+      opacity: 1,
+    };
+  }
+
+  function mapPostcodeSelectionForPolygon(level, layer) {
+    const key = mapPolygonLayerKey(layer);
+    return {
+      key,
+      level,
+      joinColumn: activeMapPolygonContext()?.data?.join_column || postcodeColumn(level),
+    };
+  }
+
+  function syncActiveAreaFilterButton(selected, postcode) {
+    const button = el("ukMap").querySelector('.map-popup-action[data-map-popup-action="filter"][aria-pressed]');
+    const key = String(postcode?.key || activeMapPopupSelection?.key || "");
+    if (!button || !key) return;
+    const label = `${selected ? "Remove" : "Add"} ${key} ${selected ? "from" : "to"} postcode area filter`;
+    button.classList.toggle("map-popup-action--active", selected);
+    button.setAttribute("aria-pressed", String(selected));
+    button.setAttribute("aria-label", label);
+    button.title = label;
+  }
+
+  function toggleMapAreaSelection(postcode, options = {}) {
+    if (postcode?.level !== "area" || !postcode.key || !postcode.joinColumn) return false;
+    const wasSelected = Boolean(isMapPostcodeSelected(postcode));
+    applyMapPostcodeFilter(postcode);
+    const selected = !wasSelected;
+    restyleActiveMapPolygonLayer();
+    syncActiveAreaFilterButton(selected, postcode);
+    if (options.feedback !== false) {
+      showClipboardToast(`${selected ? "Added" : "Removed"} ${postcode.key} ${selected ? "to" : "from"} postcode area filter`);
+    }
+    return selected;
   }
 
   function createMapPolygonLayer(level, geoJson) {
@@ -977,7 +1438,8 @@ export function createUkMapTool({
       onEachFeature: (feature, layer) => {
         layer._lucidumMapKey = mapPolygonFeatureKey(feature, levelConfig.property);
         layer.bindTooltip(() => mapPolygonTooltipHtml(layer), { sticky: true });
-        layer.bindPopup(() => mapPolygonPopupHtml(layer));
+        layer._lucidumPopupContent = () => mapPolygonPopupHtml(layer);
+        layer.bindPopup(layer._lucidumPopupContent, { maxWidth: MAP_POPUP_MAX_WIDTH });
       },
     });
   }
@@ -1004,6 +1466,11 @@ export function createUkMapTool({
   function applyMapPolygonStyles() {
     if (!ukMapLayer) return;
     ukMapLayer.setStyle(mapPolygonFeatureStyle);
+    if (activeMapPolygonContext()?.data?.level !== "area") return;
+    ukMapLayer.eachLayer((layer) => {
+      const postcode = mapPostcodeSelectionForPolygon("area", layer);
+      if (isMapPostcodeSelected(postcode)) layer.bringToFront?.();
+    });
   }
 
   function restyleActiveMapPolygonLayer() {
@@ -1262,10 +1729,17 @@ export function createUkMapTool({
       handleClick(event) {
         const nearest = this.findNearest(event.containerPoint);
         if (!nearest) return;
-        L.popup()
+        const popup = L.popup({ maxWidth: MAP_POPUP_MAX_WIDTH })
           .setLatLng(nearest.latLng)
-          .setContent(mapPopupHtml(String(nearest.key || "Unknown"), nearest, this.data))
-          .openOn(this.map);
+          .setContent(mapPopupHtml(String(nearest.key || "Unknown"), nearest, this.data));
+        activeMapPopupSelection = {
+          key: String(nearest.key || "Unknown"),
+          level: "unit",
+          joinColumn: this.data?.join_column || postcodeColumn("unit"),
+          latLng: nearest.latLng,
+          popup,
+        };
+        popup.openOn(this.map);
       },
       closeTooltip() {
         if (this.tooltip && this.map?.hasLayer(this.tooltip)) {
@@ -1277,6 +1751,26 @@ export function createUkMapTool({
 
   function renderMap(data, geoJson) {
     return measureToolRender("uk_map", () => renderMapContents(data, geoJson));
+  }
+
+  function refreshOpenMapPopup(data) {
+    const selection = activeMapPopupSelection;
+    const popup = ukMap?._popup;
+    if (!selection || !popup || !ukMap.hasLayer(popup) || selection.level !== data?.level) return false;
+    let row = null;
+    if (data.level === "unit") {
+      row = ukMapPointLayer?.rows?.find((candidate) => String(candidate.key) === selection.key) || null;
+    } else {
+      row = activeMapPolygonContext()?.summaries?.get(selection.key) || null;
+    }
+    selection.joinColumn = data.join_column || postcodeColumn(data.level);
+    if (data.level !== "unit" && selection.layer?._lucidumPopupContent) {
+      popup.setContent(selection.layer._lucidumPopupContent);
+    } else {
+      popup.setContent(mapPopupHtml(selection.key, row, data));
+    }
+    popup.update?.();
+    return true;
   }
 
   function applyRenderedMapCamera(level, bounds) {
@@ -1357,6 +1851,7 @@ export function createUkMapTool({
     const chartMessage = warnings.filter(Boolean).join(" ");
     setChartMessage(chartMessage);
     saveToolPresentation("uk_map", { groupMeta, chartMessage });
+    refreshOpenMapPopup(data);
     scheduleMapViewportSync({ mode: "preserve" });
   }
 
@@ -1403,6 +1898,7 @@ export function createUkMapTool({
     const chartMessage = warnings.filter(Boolean).join(" ");
     setChartMessage(chartMessage);
     saveToolPresentation("uk_map", { groupMeta, chartMessage });
+    refreshOpenMapPopup(data);
     scheduleMapViewportSync({ mode: "preserve" });
   }
 
@@ -1636,28 +2132,25 @@ export function createUkMapTool({
   }
 
   function mapPopupHtml(title, row, data) {
-    if (!row) {
-      return `<div class="map-popup"><strong>${escapeHtml(title)}</strong><div>No matching data</div></div>`;
-    }
-    const weightLabel = data.denominator?.bar_label || "Weight";
-    const responseLabel = data.response?.label || "Actual";
-    const rowsLabel = row.raw_row_count ?? row.row_count;
-    const lines = [
-      `<strong>${escapeHtml(title)}</strong>`,
-      `<div>${escapeHtml(responseLabel)}: ${escapeHtml(formatLineValue(row.value) || "No data")}</div>`,
-      `<div>${escapeHtml(weightLabel)}: ${escapeHtml(formatNumber(row.denominator))}</div>`,
-    ];
-    if (mapSmoothingApplied(data, row)) {
-      lines.push(`<div>Raw ${escapeHtml(responseLabel)}: ${escapeHtml(formatLineValue(row.raw_value) || "No data")}</div>`);
-      lines.push(`<div>Raw ${escapeHtml(weightLabel)}: ${escapeHtml(formatNumber(row.raw_denominator))}</div>`);
-      lines.push(`<div>Neighbours: ${escapeHtml(formatNumber(row.smoothing_contributing_sectors))}</div>`);
-    }
-    lines.push(`<div>Rows: ${escapeHtml(formatNumber(rowsLabel))}</div>`);
-    return `<div class="map-popup">${lines.join("")}</div>`;
-  }
-
-  function mapSmoothingApplied(data, row) {
-    return Boolean(data?.level === "sector" && data?.smoothing?.applied && Number(data?.smoothing?.level) > 0 && row && Object.prototype.hasOwnProperty.call(row, "raw_value"));
+    const postcode = {
+      key: String(title || ""),
+      level: data?.level || state.mapLevel,
+      joinColumn: data?.join_column || postcodeColumn(data?.level || state.mapLevel),
+    };
+    const areaFilterToggle = postcode.level === "area";
+    return ukMapPopupContentHtml({
+      title,
+      row,
+      data,
+      escapeHtml,
+      formatNumber,
+      formatLineValue,
+      showViewRows: canOpenDatasetViewer(),
+      areaFilterToggle,
+      areaFilterSelected: areaFilterToggle && isMapPostcodeSelected(postcode),
+      postcodeLevel: postcode.level,
+      postcodeJoinColumn: postcode.joinColumn,
+    });
   }
 
   function finiteNumber(value) {
@@ -2036,9 +2529,71 @@ export function createUkMapTool({
     });
   }
 
+  async function handleMapPopupAction(event) {
+    const button = event.target.closest?.("[data-map-popup-action]");
+    if (!button || !el("ukMap").contains(button)) return;
+    const popupContent = button.closest(".map-popup");
+    const postcode = {
+      key: String(popupContent?.dataset.mapPostcodeKey || activeMapPopupSelection?.key || ""),
+      level: String(popupContent?.dataset.mapPostcodeLevel || activeMapPopupSelection?.level || ""),
+      joinColumn: String(popupContent?.dataset.mapPostcodeColumn || activeMapPopupSelection?.joinColumn || ""),
+    };
+    if (!postcode.key || !postcode.joinColumn) return;
+    const selection = activeMapPopupSelection?.key === postcode.key
+      ? activeMapPopupSelection
+      : null;
+    event.preventDefault();
+    event.stopPropagation();
+    const action = button.dataset.mapPopupAction;
+    if (action === "copy") {
+      const copied = await copyTextToClipboard(postcode.key);
+      showClipboardToast(copied ? `Copied ${postcode.key}` : `Could not copy ${postcode.key}`, !copied);
+      return;
+    }
+    if (action === "zoom") {
+      zoomToMapPopupSelection(selection);
+      return;
+    }
+    if (action === "filter") {
+      if (postcode.level === "area") {
+        toggleMapAreaSelection(postcode);
+      } else {
+        applyMapPostcodeFilter(postcode);
+      }
+    } else if (action === "view-rows" && canOpenDatasetViewer()) {
+      openMapPostcodeRows(postcode);
+    }
+  }
+
+  function zoomToMapPopupSelection(selection) {
+    if (!ukMap || !selection) return false;
+    ukMap.closePopup();
+    if (selection.level === "unit" && selection.latLng) {
+      ukMap.setView(selection.latLng, Math.max(Number(ukMap.getZoom()) || 0, 13), { animate: false });
+      state.mapStartupFitDone = true;
+      captureMapView("explicit");
+      return true;
+    }
+    const bounds = selection.layer?.getBounds?.();
+    if (!bounds?.isValid?.()) return false;
+    return fitMapBounds(bounds, selection.level, {
+      padding: [30, 30],
+      maxZoom: selection.level === "sector" ? 13 : 9,
+    });
+  }
+
   function bindControls() {
     setupMapFloatingControlDrag();
     bindMapFloatingControls();
+    el("ukMap").addEventListener("click", handleMapPopupAction, true);
+    el("ukMap").addEventListener("contextmenu", handleMapContextMenu, true);
+    el("ukMap").addEventListener("keydown", handleMapContextMenuKeydown, true);
+    document.addEventListener("pointerdown", handleMapRegionFilterDocumentPointerDown, true);
+    document.addEventListener("click", handleMapRegionFilterDocumentClick, true);
+    document.addEventListener("pointerup", handleMapRegionFilterDocumentPointerEnd, true);
+    document.addEventListener("pointercancel", handleMapRegionFilterDocumentPointerEnd, true);
+    document.addEventListener("keydown", handleMapRegionFilterDocumentKeydown, true);
+    window.addEventListener("resize", closeMapRegionFilterPanel);
   }
 
   function syncViewport(options = {}) {
@@ -2057,9 +2612,11 @@ export function createUkMapTool({
   }
 
   function resetRenderState() {
+    closeMapRegionFilterPanel();
     state.lastMapData = null;
     state.mapStartupFitDone = false;
     state.renderedMapLevel = null;
+    activeMapPopupSelection = null;
   }
 
   return {
@@ -2081,5 +2638,6 @@ export function createUkMapTool({
     resize,
     refreshTheme,
     resetRenderState,
+    closeMenus: closeMapRegionFilterPanel,
   };
 }

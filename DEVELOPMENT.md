@@ -224,6 +224,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 - Unit points group by postcode unit, average coordinates, and plot only units with valid KPI and valid coordinates.
 - Area and sector geometry use Leaflet GeoJSON with hover tooltips and click popups.
 - Unit points render on a canvas-backed Leaflet layer with a hit grid for hover tooltips and click popups. Unit redraws intentionally project rows first and then apply pixel-space culling; a geographic viewport prefilter before projection is not part of the current rendering strategy because it did not improve observed redraw speed during testing.
+- A single delegated right-click panel at every map resolution stages theme-aware postcode-region checkboxes and commits one safely quoted `PostcodeArea IN (...)` global-filter clause only when Apply is used. It shares the transient selected-area state with area popup filtering, preserves the preceding manual filter, and performs no map requests while the panel selection is being edited.
 - If no unit point columns are configured and defaults are absent, the Units layer is disabled. Explicit invalid unit point columns produce validation errors when requested.
 - Regenerate the sector adjacency sidecar with `scripts/build_uk_sector_adjacency.py` after replacing `sectors_MappaR.geojson`.
 
