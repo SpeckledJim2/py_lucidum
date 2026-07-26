@@ -19161,6 +19161,7 @@ COPY (
             browser = playwright.chromium.launch()
             page = browser.new_page(viewport={"width": 1280, "height": 800})
             page_errors: list[str] = []
+            console_warnings: list[str] = []
             dataset_viewer_requests = 0
             profile_requests = 0
             profile_detail_requests = 0
@@ -19169,6 +19170,27 @@ COPY (
             map_requests = 0
 
             page.on("pageerror", lambda error: page_errors.append(str(error)))
+            page.on(
+                "console",
+                lambda message: console_warnings.append(message.text) if message.type == "warning" else None,
+            )
+
+            def assert_dataset_viewer_tabulator_columns_clean() -> None:
+                definitions = page.evaluate(
+                    """
+                    () => (window.Tabulator?.findTable?.("#datasetViewerGrid")?.[0]?.getColumns?.() || [])
+                      .map((column) => {
+                        const definition = column.getDefinition();
+                        return {
+                          field: definition.field,
+                          metadata: ["name", "copyTitle", "sortField", "datasetRowId"]
+                            .filter((key) => Object.prototype.hasOwnProperty.call(definition, key)),
+                        };
+                      })
+                    """
+                )
+                self.assertTrue(definitions)
+                self.assertTrue(all(not definition["metadata"] for definition in definitions), definitions)
 
             def count_request(request: object) -> None:
                 nonlocal dataset_viewer_requests, profile_requests, profile_detail_requests, chart_requests, histogram_requests, map_requests
@@ -20456,6 +20478,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                assert_dataset_viewer_tabulator_columns_clean()
                 dataset_requests_before_clear = dataset_viewer_requests
                 page.locator("#datasetViewerFilterClearBtn").click()
                 page.wait_for_function(
@@ -20891,6 +20914,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                assert_dataset_viewer_tabulator_columns_clean()
                 self.assertNotEqual(
                     page.locator(
                         "#datasetViewerPinnedMovePrevious .dataset-viewer-pinned-move-chevron"
@@ -23077,6 +23101,16 @@ COPY (
                     "map": map_requests,
                 }
                 self.assertEqual(page_errors, [])
+                invalid_dataset_viewer_column_warnings = [
+                    warning
+                    for warning in console_warnings
+                    if "Invalid column definition option" in warning
+                    and any(
+                        f"option: {field}" in warning
+                        for field in ("name", "copyTitle", "sortField", "datasetRowId")
+                    )
+                ]
+                self.assertEqual(invalid_dataset_viewer_column_warnings, [])
                 self.assertEqual(profile_requests, 6, request_counts)
                 self.assertEqual(profile_detail_requests, 7, request_counts)
                 self.assertEqual(chart_requests, 4, request_counts)

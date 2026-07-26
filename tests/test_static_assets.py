@@ -2043,6 +2043,24 @@ if (message !== GBM_PARAMETER_GRID_COPY_ERROR) throw new Error("grid-search copy
 """
         self.run_node_script(script)
 
+    def test_dataset_viewer_sanitizes_tabulator_column_definitions(self) -> None:
+        dataset_viewer = (
+            Path(__file__).resolve().parents[1]
+            / "src/py_lucidum/static/app/dataset-viewer-tool.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("function datasetViewerTabulatorColumns(columns) {", dataset_viewer)
+        for field in ("copyTitle", "datasetRowId", "name", "sortField"):
+            self.assertIn(f"delete definition.{field};", dataset_viewer)
+        self.assertEqual(
+            dataset_viewer.count("columns: datasetViewerTabulatorColumns(currentColumns),"),
+            2,
+        )
+        self.assertIn(
+            "datasetTable.setColumns(datasetViewerTabulatorColumns(search.columns));",
+            dataset_viewer,
+        )
+
     def test_app_control_strips_use_shared_height_tokens(self) -> None:
         static_root = Path(__file__).resolve().parents[1] / "src/py_lucidum/static"
         foundations = (static_root / "styles/foundations.css").read_text(encoding="utf-8")

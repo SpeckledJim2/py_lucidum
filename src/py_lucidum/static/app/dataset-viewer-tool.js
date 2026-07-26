@@ -534,7 +534,7 @@ export function createDatasetViewerTool({
           resizable: true,
           formatter: (cell) => escapeHtml(formatCellValue(cell.getValue())),
         },
-        columns: currentColumns,
+        columns: datasetViewerTabulatorColumns(currentColumns),
       });
       renderedWidthMode = "normal";
       let searchReconciled = false;
@@ -592,7 +592,7 @@ export function createDatasetViewerTool({
           formatter: formatTransposedCell,
         },
         rowFormatter: formatTransposedRow,
-        columns: currentColumns,
+        columns: datasetViewerTabulatorColumns(currentColumns),
       });
       renderedWidthMode = "transposed";
       let searchReconciled = false;
@@ -657,6 +657,17 @@ export function createDatasetViewerTool({
       hozAlign: column.kind === "numeric" || column.kind === "integer" ? "right" : "left",
       headerHozAlign: "left",
     };
+  }
+
+  function datasetViewerTabulatorColumns(columns) {
+    return columns.map((column) => {
+      const definition = { ...column };
+      delete definition.copyTitle;
+      delete definition.datasetRowId;
+      delete definition.name;
+      delete definition.sortField;
+      return definition;
+    });
   }
 
   function datasetViewerColumnWidth(column) {
@@ -1580,7 +1591,7 @@ export function createDatasetViewerTool({
     snapshotDatasetViewerColumnWidths();
     const sorters = normalTableSorters();
     try {
-      datasetTable.setColumns(search.columns);
+      datasetTable.setColumns(datasetViewerTabulatorColumns(search.columns));
       restoreNormalTableSorters(sorters);
       return true;
     } catch (_) {
