@@ -1,6 +1,6 @@
 import { loadTabulator } from "./shared/tabulator.js";
 import { bindSettingsStripOverflowCue } from "./shared/settings-strip.js";
-import { ensureEchartsGl } from "./shared/echarts-gl.js";
+import { ensureEchartsGl, isEchartsTargetReady } from "./shared/echarts-gl.js";
 import {
   fitTwoFeatureHeatmapAxes,
   twoFeatureChartOption,
@@ -123,6 +123,11 @@ export function createLineBarTool({
   let xAxisLabelRefreshFrame = null;
   let chartRenderTransform = "none";
   let lineBarChartDirty = false;
+  let pendingChartRender = null;
+  let chartRenderPending = false;
+  let chartLayoutFrame = null;
+  let chartResizeObserver = null;
+  let lastRenderedPlotType = "";
 
   function isNumericKind(kind) {
     return kind === "numeric" || kind === "integer";
@@ -1731,21 +1736,17 @@ export function createLineBarTool({
     try {
       const data = await api("/api/chart", { method: "POST", body: JSON.stringify(request), clientTiming: true });
       if (requestSeq !== state.chartRequestSeq) return;
-      if (data?.plot_type === "surface" && Array.isArray(data?.groupings) && data.groupings.length === 2) {
-        const previousPlotType = state.lastData?.plot_type || "";
-        await ensureEchartsGl("surface");
-        if (requestSeq !== state.chartRequestSeq) return;
-        if (!chartSupportsSurface || previousPlotType !== "surface") {
-          await recreateChartForSurface();
-          if (requestSeq !== state.chartRequestSeq) return;
-        }
-      }
       const cache = toolCache("line_bar");
       cache.requestKey = requestKey;
       cache.data = data;
       syncDuckDbTimingFromData("line_bar", data);
       syncClientTimingFromData("line_bar", data);
-      measureToolRender("line_bar", () => renderChartData(data, { resetTablePage: true }));
+      if (lineBarChartReady()) {
+        queueChartRender(data, { resetTablePage: true }, requestSeq);
+      } else {
+        prepareChartData(data, { resetTablePage: true });
+        queueChartRender(data, { prepared: true }, requestSeq);
+      }
       return data;
     } catch (error) {
       if (requestSeq !== state.chartRequestSeq) return;
@@ -1759,6 +1760,7 @@ export function createLineBarTool({
   function cancelLineBarRequests() {
     state.chartRequestSeq += 1;
     tableRequestSeq += 1;
+    pendingChartRender = null;
   }
 
   function lineBarExclusionWarnings(data) {
@@ -1796,17 +1798,113 @@ export function createLineBarTool({
     el("chart").style.visibility = hidden ? "hidden" : "";
   }
 
+  function lineBarChartReady(target = el("chart")) {
+    return state.view === "chart" && isEchartsTargetReady(target);
+  }
+
+  function queueChartRender(data, options = {}, requestSeq = state.chartRequestSeq) {
+    pendingChartRender = { data, options, requestSeq };
+    scheduleChartLayout();
+  }
+
+  function retainPendingChartRender(work) {
+    if (!work || work.requestSeq !== state.chartRequestSeq) return;
+    if (!pendingChartRender || pendingChartRender.requestSeq <= work.requestSeq) {
+      pendingChartRender = work;
+    }
+  }
+
+  function scheduleChartLayout() {
+    if (chartLayoutFrame !== null) return;
+    chartLayoutFrame = requestAnimationFrame(() => {
+      chartLayoutFrame = null;
+      if (!lineBarChartReady()) return;
+      if (chartRenderPending) return;
+      if (pendingChartRender) {
+        void flushPendingChartRender();
+        return;
+      }
+      resizeVisibleChart();
+    });
+  }
+
+  async function flushPendingChartRender() {
+    if (chartRenderPending || !pendingChartRender || !lineBarChartReady()) return false;
+    const work = pendingChartRender;
+    const target = el("chart");
+    pendingChartRender = null;
+    chartRenderPending = true;
+    try {
+      const surface = work.data?.plot_type === "surface"
+        && Array.isArray(work.data?.groupings)
+        && work.data.groupings.length === 2;
+      if (surface) {
+        await ensureEchartsGl("surface");
+        if (
+          work.requestSeq !== state.chartRequestSeq
+          || target !== el("chart")
+          || !lineBarChartReady(target)
+        ) {
+          retainPendingChartRender(work);
+          return false;
+        }
+        if (!chartSupportsSurface || lastRenderedPlotType !== "surface") {
+          const recreated = await recreateChartForSurface(target, work.requestSeq);
+          if (!recreated) {
+            retainPendingChartRender(work);
+            return false;
+          }
+        }
+      }
+      if (
+        work.requestSeq !== state.chartRequestSeq
+        || target !== el("chart")
+        || !lineBarChartReady(target)
+      ) {
+        retainPendingChartRender(work);
+        return false;
+      }
+      measureToolRender("line_bar", () => renderChartData(work.data, work.options));
+      lastRenderedPlotType = work.data?.plot_type || "";
+      return true;
+    } catch (error) {
+      if (work.requestSeq === state.chartRequestSeq) {
+        setToolTimingFailed("line_bar");
+        setGroupMeta("line_bar", "Query failed");
+        setChartMessage("");
+        setStatus(error.message, true);
+      }
+      return false;
+    } finally {
+      chartRenderPending = false;
+      if (pendingChartRender && lineBarChartReady()) scheduleChartLayout();
+    }
+  }
+
   function renderChartData(data, options = {}) {
+    if (!options.prepared) prepareChartData(data, options);
+    if (!lineBarChartReady()) {
+      queueChartRender(data, { ...options, prepared: true });
+      return;
+    }
     setChartPendingHidden(false);
+    const labelMessage = renderChart(data);
+    updateChartDataPresentation(data, labelMessage);
+  }
+
+  function prepareChartData(data, options = {}) {
     state.lastData = data;
     if (options.resetTablePage) {
       state.tablePage = 1;
     }
     invalidateLineBarTableCache();
     updateMetricTitles(data);
-    const labelMessage = renderChart(data);
     renderTableShell();
     if (state.view === "table") refreshLineBarTable({ force: true });
+    updateChartDataPresentation(data);
+  }
+
+  function updateChartDataPresentation(data, labelMessage = "") {
     const rowMeta = formatRowMeta(data.row_count, data.filtered_row_count);
     const groupCount = Number.isFinite(Number(data.group_count)) ? Number(data.group_count) : data.rows.length;
     const groupLabel = `${groupCount.toLocaleString()} groups`;
@@ -1819,19 +1917,25 @@ export function createLineBarTool({
     saveToolPresentation("line_bar", { groupMeta, chartMessage });
   }
 
+  function deferChartData(data, options = {}) {
+    prepareChartData(data, options);
+    queueChartRender(data, { ...options, prepared: true });
+  }
+
   function useCachedChartData(cache, options = {}) {
-    state.lastData = cache.data;
-    if (options.renderIfCached) {
-      measureToolRender("line_bar", () => renderChartData(cache.data));
+    if (state.lastData !== cache.data) {
+      prepareChartData(cache.data);
+      queueChartRender(cache.data, { prepared: true });
+      return;
+    }
+    if (pendingChartRender || options.renderIfCached) {
+      queueChartRender(cache.data, { prepared: true });
       return;
     }
     measureToolRender("line_bar", () => {
       updateMetricTitles(cache.data);
       applyToolPresentation("line_bar");
-      requestAnimationFrame(() => {
-        chart.resize();
-        refreshXAxisLabelsForCurrentZoom();
-      });
+      scheduleChartLayout();
     });
   }
 
@@ -2032,6 +2136,7 @@ export function createLineBarTool({
     }), true);
     chartRenderTransform = "none";
     requestAnimationFrame(() => {
+      if (!lineBarChartReady()) return;
       chart.resize();
       refreshXAxisLabelsForCurrentZoom();
     });
@@ -2259,6 +2364,7 @@ export function createLineBarTool({
     );
     chartRenderTransform = renderTransform;
     requestAnimationFrame(() => {
+      if (!lineBarChartReady()) return;
       chart.resize();
       refreshXAxisLabelsForCurrentZoom();
     });
@@ -2302,6 +2408,7 @@ export function createLineBarTool({
   }
 
   function refreshXAxisLabelsForCurrentZoom() {
+    if (!lineBarChartReady()) return;
     if (heatmapAxisContext) {
       refreshHeatmapAxesForCurrentZoom();
       return;
@@ -2338,7 +2445,7 @@ export function createLineBarTool({
   }
 
   function refreshHeatmapAxesForCurrentZoom() {
-    if (!heatmapAxisContext) return;
+    if (!heatmapAxisContext || !lineBarChartReady()) return;
     const range = currentXAxisVisibleRange(heatmapAxisContext.xLabels);
     const layout = fitTwoFeatureHeatmapAxes(
       heatmapAxisContext.xLabels,
@@ -2692,7 +2799,11 @@ export function createLineBarTool({
     }
     state.lastData = data;
     if (options.render !== false) {
-      measureToolRender("line_bar", () => renderChartData(data, { resetTablePage: true }));
+      if (lineBarChartReady()) {
+        measureToolRender("line_bar", () => renderChartData(data, { resetTablePage: true }));
+      } else {
+        queueChartRender(data, { resetTablePage: true });
+      }
       lineBarChartDirty = false;
     } else {
       lineBarChartDirty = true;
@@ -3172,7 +3283,7 @@ export function createLineBarTool({
   }
 
   function updateResponseAxisForLegendSelection() {
-    if (!state.lastData) return;
+    if (!state.lastData || !lineBarChartReady()) return;
     const responseAxis = responseAxisOptions(state.lastData, legendSelectionFromOption(chart.getOption()), chartRenderTransform);
     chart.setOption({
       yAxis: [{
@@ -4135,8 +4246,7 @@ export function createLineBarTool({
     el("chartMessage").classList.toggle("hidden", view !== "chart" || !el("chartMessage").textContent);
     if (view === "chart") {
       if (!shouldRefresh) {
-        chart.resize();
-        refreshXAxisLabelsForCurrentZoom();
+        scheduleChartLayout();
         return;
       }
       if (lineBarChartDirty) {
@@ -4144,8 +4254,7 @@ export function createLineBarTool({
         if (!applyClientLineBarSort()) refreshChart();
         return;
       }
-      chart.resize();
-      refreshXAxisLabelsForCurrentZoom();
+      scheduleChartLayout();
     } else {
       renderTableShell();
       if (shouldRefresh) refreshLineBarTable();
@@ -4200,7 +4309,11 @@ export function createLineBarTool({
       renderTwoFeatureControls();
       if (previous !== state.twoFeaturePlotMetric) clearActiveFavouriteSelection();
       if (state.lastData?.groupings?.length === 2) {
-        measureToolRender("line_bar", () => renderChart(state.lastData));
+        if (lineBarChartReady()) {
+          measureToolRender("line_bar", () => renderChart(state.lastData));
+        } else {
+          queueChartRender(state.lastData, { prepared: true });
+        }
       }
       return;
     }
@@ -4209,7 +4322,11 @@ export function createLineBarTool({
       state.heatmapLabels = normaliseHeatmapLabels(button.dataset.value);
       if (previous !== state.heatmapLabels) clearActiveFavouriteSelection();
       if (state.lastData?.groupings?.length === 2 && state.lastData?.plot_type === "heatmap") {
-        measureToolRender("line_bar", () => renderChart(state.lastData));
+        if (lineBarChartReady()) {
+          measureToolRender("line_bar", () => renderChart(state.lastData));
+        } else {
+          queueChartRender(state.lastData, { prepared: true });
+        }
       } else {
         renderTwoFeatureControls();
       }
@@ -4284,17 +4401,32 @@ export function createLineBarTool({
     chart.on("datazoom", scheduleXAxisLabelRefresh);
   }
 
-  async function recreateChartForSurface() {
-    chart.dispose();
+  async function recreateChartForSurface(target, requestSeq) {
+    if (target !== el("chart") || requestSeq !== state.chartRequestSeq || !lineBarChartReady(target)) {
+      return false;
+    }
     await new Promise((resolve) => requestAnimationFrame(resolve));
-    chart = echartsImpl.init(el("chart"));
+    if (target !== el("chart") || requestSeq !== state.chartRequestSeq || !lineBarChartReady(target)) {
+      return false;
+    }
+    chart.dispose();
+    chart = echartsImpl.init(target);
     bindChartEvents();
     chartSupportsSurface = true;
     await new Promise((resolve) => requestAnimationFrame(resolve));
+    return target === el("chart")
+      && requestSeq === state.chartRequestSeq
+      && lineBarChartReady(target);
   }
 
   function bindControls() {
     bindChartEvents();
+    if (!chartResizeObserver && typeof ResizeObserver === "function") {
+      chartResizeObserver = new ResizeObserver(() => {
+        if (lineBarChartReady()) scheduleChartLayout();
+      });
+      chartResizeObserver.observe(el("chart"));
+    }
     bindSettingsStripOverflowCue(el("lineBarToolbar"));
     el("lineBarTwoFeatureControls")?.addEventListener("click", handleTwoFeatureControlClick);
     const lineBarControls = new Set(["sort", "lowGroup", "labels", "bandWidth", "quantileMode", "dateBucket", "emptyPeriods", "transform", "sigma", "partialDependence", "featureSort", "expectedSort"]);
@@ -4414,6 +4546,11 @@ export function createLineBarTool({
       lineBarTable?.redraw?.(true);
       return;
     }
+    scheduleChartLayout();
+  }
+
+  function resizeVisibleChart() {
+    if (!lineBarChartReady()) return;
     chart.resize();
     if (
       state.lastData?.groupings?.length === 2
@@ -4426,14 +4563,19 @@ export function createLineBarTool({
   }
 
   function refreshTheme() {
-    if (state.lastData) measureToolRender("line_bar", () => renderChart(state.lastData));
+    if (!state.lastData) return;
+    if (lineBarChartReady()) {
+      measureToolRender("line_bar", () => renderChart(state.lastData));
+    } else {
+      queueChartRender(state.lastData, { prepared: true });
+    }
   }
 
   return {
     buildRequest: buildChartRequest,
     fetchData: fetchChartData,
     useCached: useCachedChartData,
-    render: renderChartData,
+    render: deferChartData,
     refreshTable: refreshLineBarTable,
     showPendingRestore,
     cancelRequests: cancelLineBarRequests,

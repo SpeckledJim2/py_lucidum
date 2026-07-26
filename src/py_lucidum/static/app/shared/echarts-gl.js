@@ -1,5 +1,13 @@
 let echartsGlPromise = null;
 
+export function isEchartsTargetReady(target) {
+  return Boolean(
+    target?.isConnected
+    && Number(target.clientWidth) > 0
+    && Number(target.clientHeight) > 0
+  );
+}
+
 export async function ensureEchartsGl(plotType = "surface") {
   if (plotType !== "surface") return false;
   if (window.__lucidumEchartsGlLoaded) return false;

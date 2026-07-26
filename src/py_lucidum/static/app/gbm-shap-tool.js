@@ -1,4 +1,5 @@
 import { emptyOption, ensureShapChartLibraries, shapChartOption } from "./gbm-shap-chart.js";
+import { isEchartsTargetReady } from "./shared/echarts-gl.js";
 import { bindSettingsStripOverflowCue } from "./shared/settings-strip.js";
 
 const BAND_STEPS = makeBandSteps();
@@ -38,6 +39,10 @@ export function createGbmShapTool({ api, escapeHtml, setNotice, showClipboardToa
   let chartResizeFrame = null;
   let chartResizeFlush = false;
   let settledObserverSize = null;
+  let observedChartTarget = null;
+  let pendingChartRender = null;
+  let pendingEmptyMessage = null;
+  let chartRenderPending = false;
   let layoutMediaQuery = null;
   let layoutMediaListener = null;
   let settingsOverflowCleanup = null;
@@ -115,6 +120,7 @@ export function createGbmShapTool({ api, escapeHtml, setNotice, showClipboardToa
     const root = rootNode();
     if (!root) return;
     bindStaticEvents(root);
+    observeChartTarget(document.getElementById("gbmShapChart"));
     syncLayoutVisibility(root, { resize: false });
     if (!modelId) {
       config = null;
@@ -323,62 +329,154 @@ export function createGbmShapTool({ api, escapeHtml, setNotice, showClipboardToa
   async function renderChart(payload, seq) {
     const target = document.getElementById("gbmShapChart");
     if (!target) return;
+    const loadedSurfaceLibrary = await ensureShapChartLibraries(payload.plot_type);
+    if (seq !== plotSeq) return;
+    pendingEmptyMessage = null;
+    pendingChartRender = { payload, seq, loadedSurfaceLibrary };
+    observeChartTarget(target);
+    await flushPendingChartRender();
+  }
+
+  async function flushPendingChartRender() {
+    if (chartRenderPending || !pendingChartRender) return false;
+    const work = pendingChartRender;
+    const target = document.getElementById("gbmShapChart");
+    if (
+      !target
+      || work.seq !== plotSeq
+      || target !== observedChartTarget
+      || !isEchartsTargetReady(target)
+    ) {
+      return false;
+    }
+    pendingChartRender = null;
+    chartRenderPending = true;
+    const { payload, seq, loadedSurfaceLibrary } = work;
     const isSurface = payload.plot_type === "surface";
     const previousPlotType = lastPayload?.plot_type || "";
     const previousOption = chart?.getOption?.();
     const previousLegendEntries = legendEntryNames(previousOption);
     const previousLegendSelection = legendSelection(previousOption, previousLegendEntries);
-    const loadedSurfaceLibrary = await ensureShapChartLibraries(payload.plot_type);
-    if (seq !== plotSeq) return;
-    if (isSurface && (loadedSurfaceLibrary || previousPlotType !== "surface")) {
-      disposeChart();
-      await nextAnimationFrame();
-      if (seq !== plotSeq) return;
-    }
-    ensureChart(target);
-    const option = shapChartOption(payload, chartTheme());
-    const nextLegendEntries = legendEntryNames(option);
-    const pendingLegendSelection = pendingLegendSelectionForPayload(payload, nextLegendEntries);
-    if (previousPlotType === payload.plot_type && sameEntries(previousLegendEntries, nextLegendEntries)) {
-      applyLegendSelection(option, previousLegendSelection, nextLegendEntries);
-      clearPendingLegendState();
-    } else if (pendingLegendSelection) {
-      applyLegendSelection(option, pendingLegendSelection, nextLegendEntries);
-      clearPendingLegendState();
-    } else if (pendingLegendState) {
-      clearPendingLegendState();
-    }
     try {
-      chart.setOption(option, true);
-    } catch (error) {
-      if (!isSurface || !isSurfaceLayoutError(error)) throw error;
-      disposeChart();
-      await nextAnimationFrame();
-      if (seq !== plotSeq) return;
-      ensureChart(target);
-      await nextAnimationFrame();
-      if (seq !== plotSeq) return;
-      chart.setOption(option, true);
+      if (isSurface && (loadedSurfaceLibrary || previousPlotType !== "surface")) {
+        disposeChart();
+        await nextAnimationFrame();
+        if (!chartWorkIsCurrent(target, seq)) {
+          retainPendingChartRender(work);
+          return false;
+        }
+      }
+      if (!ensureChart(target)) {
+        retainPendingChartRender(work);
+        return false;
+      }
+      const option = shapChartOption(payload, chartTheme());
+      const nextLegendEntries = legendEntryNames(option);
+      const pendingLegendSelection = pendingLegendSelectionForPayload(payload, nextLegendEntries);
+      if (previousPlotType === payload.plot_type && sameEntries(previousLegendEntries, nextLegendEntries)) {
+        applyLegendSelection(option, previousLegendSelection, nextLegendEntries);
+        clearPendingLegendState();
+      } else if (pendingLegendSelection) {
+        applyLegendSelection(option, pendingLegendSelection, nextLegendEntries);
+        clearPendingLegendState();
+      } else if (pendingLegendState) {
+        clearPendingLegendState();
+      }
+      try {
+        chart.setOption(option, true);
+      } catch (error) {
+        if (!isSurface || !isSurfaceLayoutError(error)) throw error;
+        disposeChart();
+        await nextAnimationFrame();
+        if (!chartWorkIsCurrent(target, seq) || !ensureChart(target)) {
+          retainPendingChartRender(work);
+          return false;
+        }
+        await nextAnimationFrame();
+        if (!chartWorkIsCurrent(target, seq)) {
+          retainPendingChartRender(work);
+          return false;
+        }
+        chart.setOption(option, true);
+      }
+      lastPayload = payload;
+      scheduleChartResize({ flush: true });
+      return true;
+    } finally {
+      chartRenderPending = false;
+      if ((pendingChartRender || pendingEmptyMessage !== null) && isEchartsTargetReady(observedChartTarget)) {
+        scheduleChartResize({ flush: true });
+      }
     }
-    lastPayload = payload;
-    scheduleChartResize({ flush: true });
+  }
+
+  function chartWorkIsCurrent(target, seq) {
+    return seq === plotSeq
+      && target === document.getElementById("gbmShapChart")
+      && target === observedChartTarget
+      && isEchartsTargetReady(target);
+  }
+
+  function retainPendingChartRender(work) {
+    if (!work || work.seq !== plotSeq) return;
+    if (!pendingChartRender || pendingChartRender.seq <= work.seq) {
+      pendingChartRender = work;
+    }
+  }
+
+  function resumePendingChartRender() {
+    void flushPendingChartRender().catch((error) => {
+      setNotice(error.message);
+      setMessage("");
+      renderEmpty("Choose a valid SHAP plot");
+    });
   }
 
   function ensureChart(target) {
-    if (chart) return;
+    observeChartTarget(target);
+    if (chart) return true;
+    if (!isEchartsTargetReady(target)) return false;
     chart = window.echarts.init(target);
-    if (typeof ResizeObserver === "function") {
-      resizeObserver = new ResizeObserver((entries) => {
-        const nextSize = resizeObserverEntrySize(entries?.[0]);
-        if (sameChartSize(nextSize, settledObserverSize)) {
-          settledObserverSize = null;
-          return;
-        }
+    return true;
+  }
+
+  function observeChartTarget(target) {
+    if (!target || observedChartTarget === target) return;
+    resizeObserver?.disconnect();
+    resizeObserver = null;
+    observedChartTarget = target;
+    if (typeof ResizeObserver !== "function") return;
+    resizeObserver = new ResizeObserver((entries) => {
+      const nextSize = resizeObserverEntrySize(entries?.[0]);
+      if (sameChartSize(nextSize, settledObserverSize)) {
         settledObserverSize = null;
-        scheduleChartResize();
-      });
-      resizeObserver.observe(target);
+        return;
+      }
+      settledObserverSize = null;
+      if (isEchartsTargetReady(observedChartTarget)) scheduleChartResize();
+    });
+    resizeObserver.observe(target);
+  }
+
+  function disconnectChartTargetObserver() {
+    resizeObserver?.disconnect();
+    resizeObserver = null;
+    observedChartTarget = null;
+  }
+
+  function renderPendingEmptyState() {
+    if (pendingEmptyMessage === null) return false;
+    const target = document.getElementById("gbmShapChart");
+    if (!target || target !== observedChartTarget || !isEchartsTargetReady(target)) return false;
+    const message = pendingEmptyMessage;
+    pendingEmptyMessage = null;
+    if (!ensureChart(target)) {
+      pendingEmptyMessage = message;
+      return false;
     }
+    chart.setOption(emptyOption(message, chartTheme()), true);
+    scheduleChartResize({ flush: true });
+    return true;
   }
 
   function renderControlsAndLists() {
@@ -482,13 +580,14 @@ export function createGbmShapTool({ api, escapeHtml, setNotice, showClipboardToa
   }
 
   function renderEmpty(message) {
+    pendingChartRender = null;
     disposeChart();
     const target = document.getElementById("gbmShapChart");
     if (!target) return;
     target.innerHTML = "";
-    ensureChart(target);
-    chart.setOption(emptyOption(message, chartTheme()), true);
-    scheduleChartResize({ flush: true });
+    pendingEmptyMessage = String(message || "");
+    observeChartTarget(target);
+    if (isEchartsTargetReady(target)) renderPendingEmptyState();
     setMessage(config?.warnings?.join(" ") || "");
   }
 
@@ -511,7 +610,10 @@ export function createGbmShapTool({ api, escapeHtml, setNotice, showClipboardToa
     layoutMediaListener = null;
     settingsOverflowCleanup?.();
     settingsOverflowCleanup = null;
+    pendingChartRender = null;
+    pendingEmptyMessage = null;
     disposeChart();
+    disconnectChartTargetObserver();
     config = null;
   }
 
@@ -520,8 +622,6 @@ export function createGbmShapTool({ api, escapeHtml, setNotice, showClipboardToa
     chartResizeFrame = null;
     chartResizeFlush = false;
     settledObserverSize = null;
-    resizeObserver?.disconnect();
-    resizeObserver = null;
     lastPayload = null;
     if (chart) {
       chart.dispose();
@@ -530,17 +630,10 @@ export function createGbmShapTool({ api, escapeHtml, setNotice, showClipboardToa
   }
 
   function refreshTheme() {
-    if (chart && lastPayload) {
-      const previousOption = chart.getOption?.();
-      const previousLegendEntries = legendEntryNames(previousOption);
-      const option = shapChartOption(lastPayload, chartTheme());
-      const nextLegendEntries = legendEntryNames(option);
-      if (sameEntries(previousLegendEntries, nextLegendEntries)) {
-        applyLegendSelection(option, legendSelection(previousOption, previousLegendEntries), nextLegendEntries);
-      }
-      chart.setOption(option, true);
-      resizeChart({ flush: true });
-    }
+    if (!lastPayload) return;
+    pendingEmptyMessage = null;
+    pendingChartRender = { payload: lastPayload, seq: plotSeq, loadedSurfaceLibrary: false };
+    scheduleChartResize({ flush: true });
   }
 
   function featureChooserHtml(index, title, attributes = "") {
@@ -889,7 +982,8 @@ export function createGbmShapTool({ api, escapeHtml, setNotice, showClipboardToa
   }
 
   function resizeChart({ flush = false } = {}) {
-    if (!chart) return;
+    const target = document.getElementById("gbmShapChart");
+    if (!chart || target !== observedChartTarget || !isEchartsTargetReady(target)) return;
     chart.resize();
     if (flush) {
       chart.getZr?.().flush?.();
@@ -921,6 +1015,15 @@ export function createGbmShapTool({ api, escapeHtml, setNotice, showClipboardToa
     if (chartResizeFrame !== null) return;
     chartResizeFrame = requestAnimationFrame(() => {
       chartResizeFrame = null;
+      if (!isEchartsTargetReady(observedChartTarget)) return;
+      if (pendingChartRender) {
+        resumePendingChartRender();
+        return;
+      }
+      if (pendingEmptyMessage !== null) {
+        renderPendingEmptyState();
+        return;
+      }
       const shouldFlush = chartResizeFlush;
       chartResizeFlush = false;
       resizeChart({ flush: shouldFlush });
@@ -935,7 +1038,7 @@ export function createGbmShapTool({ api, escapeHtml, setNotice, showClipboardToa
     if (root && !feature2Collapsed) {
       setChooserFeatureHeight(root, chooserFeatureHeight ?? defaultChooserFeatureHeight(root));
     }
-    resizeChart({ flush: true });
+    scheduleChartResize({ flush: true });
   }
 
   function setupChooserDividerResize(root) {

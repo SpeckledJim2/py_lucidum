@@ -146,6 +146,19 @@ if (formatters.formatLineValue(-0.125) !== "-12.5%") throw new Error("KPI percen
 """
         self.run_node_script(script)
 
+    def test_shared_echarts_target_readiness_helper(self) -> None:
+        module = Path("src/py_lucidum/static/app/shared/echarts-gl.js").resolve().as_uri()
+        script = f"""
+import {{ isEchartsTargetReady }} from "{module}";
+const target = (isConnected, clientWidth, clientHeight) => ({{ isConnected, clientWidth, clientHeight }});
+if (isEchartsTargetReady(null)) throw new Error("missing target should not be ready");
+if (isEchartsTargetReady(target(false, 640, 480))) throw new Error("disconnected target should not be ready");
+if (isEchartsTargetReady(target(true, 0, 480))) throw new Error("zero-width target should not be ready");
+if (isEchartsTargetReady(target(true, 640, 0))) throw new Error("zero-height target should not be ready");
+if (!isEchartsTargetReady(target(true, 640, 480))) throw new Error("positive connected target should be ready");
+"""
+        self.run_node_script(script)
+
     def test_two_feature_line_bar_chart_options_follow_feature_axis_ordering(self) -> None:
         module = Path("src/py_lucidum/static/app/line-bar-two-feature-chart.js").resolve().as_uri()
         script = f"""

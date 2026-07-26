@@ -5839,10 +5839,36 @@ class BrowserSmokeTests(unittest.TestCase):
                     browser = playwright.chromium.launch()
                     page = browser.new_page(viewport={"width": 1440, "height": 900})
                     page_errors: list[str] = []
+                    console_warnings: list[str] = []
                     page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.on(
+                        "console",
+                        lambda message: console_warnings.append(message.text) if message.type == "warning" else None,
+                    )
                     page.add_init_script(
                         """
                         window.__lucidumCopiedText = null;
+                        window.__lucidumDelayNextChartResponse = false;
+                        window.__lucidumDelayedChartResponseWaiting = false;
+                        window.__lucidumDelayedChartResponseDone = false;
+                        window.__lucidumReleaseChartResponse = null;
+                        const originalFetch = window.fetch.bind(window);
+                        window.fetch = async (...args) => {
+                          const request = args[0];
+                          const url = typeof request === "string" ? request : request?.url || "";
+                          const response = await originalFetch(...args);
+                          if (url.includes("/api/chart") && window.__lucidumDelayNextChartResponse) {
+                            window.__lucidumDelayNextChartResponse = false;
+                            window.__lucidumDelayedChartResponseWaiting = true;
+                            await new Promise((resolve) => {
+                              window.__lucidumReleaseChartResponse = resolve;
+                            });
+                            window.__lucidumReleaseChartResponse = null;
+                            window.__lucidumDelayedChartResponseWaiting = false;
+                            window.__lucidumDelayedChartResponseDone = true;
+                          }
+                          return response;
+                        };
                         Object.defineProperty(navigator, "clipboard", {
                           configurable: true,
                           value: {
@@ -6364,15 +6390,114 @@ class BrowserSmokeTests(unittest.TestCase):
                         timeout=10_000,
                     )
 
-                    page.locator(
-                        '#featureList .feature[data-value="duration"][data-source-id="dataset"]'
-                    ).click(modifiers=[row_selection_modifier])
+                    page.wait_for_load_state("networkidle")
+                    deferred_surface_before = page.evaluate(
+                        """
+                        () => {
+                          performance.clearResourceTimings();
+                          window.__lucidumDelayNextChartResponse = true;
+                          window.__lucidumDelayedChartResponseWaiting = false;
+                          window.__lucidumDelayedChartResponseDone = false;
+                          window.__lucidumReleaseChartResponse = null;
+                          const option = echarts.getInstanceByDom(document.querySelector("#chart"))?.getOption();
+                          return {
+                            type: option?.series?.[0]?.type || "",
+                            xAxis: option?.xAxis3D?.[0]?.name || "",
+                            yAxis: option?.yAxis3D?.[0]?.name || "",
+                          };
+                        }
+                        """
+                    )
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator(
+                            '#featureList .feature[data-value="duration"][data-source-id="dataset"]'
+                        ).click(modifiers=[row_selection_modifier])
+                    page.wait_for_function(
+                        "() => window.__lucidumDelayedChartResponseWaiting",
+                        timeout=10_000,
+                    )
+                    page.locator("#tableTab").click()
                     page.wait_for_function(
                         """
-                        () => echarts.getInstanceByDom(document.querySelector("#chart"))
-                          ?.getOption()?.series?.[0]?.type === "surface"
+                        () => document.querySelector("#chart")?.classList.contains("hidden")
+                          && !document.querySelector("#tableWrap")?.classList.contains("hidden")
                         """,
                         timeout=10_000,
+                    )
+                    page.evaluate("() => window.__lucidumReleaseChartResponse?.()")
+                    page.wait_for_function(
+                        "() => window.__lucidumDelayedChartResponseDone",
+                        timeout=10_000,
+                    )
+                    hidden_surface_state = page.evaluate(
+                        """
+                        () => {
+                          const option = echarts.getInstanceByDom(document.querySelector("#chart"))?.getOption();
+                          return {
+                            type: option?.series?.[0]?.type || "",
+                            xAxis: option?.xAxis3D?.[0]?.name || "",
+                            yAxis: option?.yAxis3D?.[0]?.name || "",
+                            chartRequests: performance.getEntriesByType("resource")
+                              .filter((entry) => new URL(entry.name).pathname === "/api/chart").length,
+                          };
+                        }
+                        """
+                    )
+                    self.assertEqual(
+                        {
+                            "type": hidden_surface_state["type"],
+                            "xAxis": hidden_surface_state["xAxis"],
+                            "yAxis": hidden_surface_state["yAxis"],
+                        },
+                        deferred_surface_before,
+                    )
+                    self.assertGreater(hidden_surface_state["chartRequests"], 0)
+                    page.locator("#chartTab").click()
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const option = echarts.getInstanceByDom(document.querySelector("#chart"))?.getOption();
+                          return option?.series?.[0]?.type === "surface"
+                            && option?.xAxis3D?.[0]?.name === "duration"
+                            && option?.yAxis3D?.[0]?.name === "age";
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    deferred_surface_state = page.evaluate(
+                        """
+                        () => {
+                          const target = document.querySelector("#chart");
+                          const chart = echarts.getInstanceByDom(target);
+                          const canvas = target?.querySelector("canvas");
+                          return {
+                            targetWidth: target?.clientWidth || 0,
+                            targetHeight: target?.clientHeight || 0,
+                            chartWidth: chart?.getWidth() || 0,
+                            chartHeight: chart?.getHeight() || 0,
+                            canvasWidth: canvas?.getBoundingClientRect().width || 0,
+                            canvasHeight: canvas?.getBoundingClientRect().height || 0,
+                            chartRequests: performance.getEntriesByType("resource")
+                              .filter((entry) => new URL(entry.name).pathname === "/api/chart").length,
+                          };
+                        }
+                        """
+                    )
+                    for dimension in (
+                        "targetWidth",
+                        "targetHeight",
+                        "chartWidth",
+                        "chartHeight",
+                        "canvasWidth",
+                        "canvasHeight",
+                    ):
+                        self.assertGreater(deferred_surface_state[dimension], 0, deferred_surface_state)
+                    self.assertEqual(
+                        deferred_surface_state["chartRequests"],
+                        hidden_surface_state["chartRequests"],
                     )
                     page.locator('#lineBarTwoFeatureControls [data-two-control="bandWidth"][data-feature-index="1"][data-value="5"]').click()
                     with page.expect_response(
@@ -6784,6 +6909,10 @@ class BrowserSmokeTests(unittest.TestCase):
                         timeout=10_000,
                     )
                     self.assertEqual(page_errors, [])
+                    self.assertEqual(
+                        [warning for warning in console_warnings if "Dom has no width or height" in warning],
+                        [],
+                    )
                     browser.close()
             finally:
                 server.should_exit = True
@@ -22818,6 +22947,27 @@ COPY (
                 """
                 window.__lucidumCopiedShapImage = null;
                 window.__lucidumCopiedParameters = null;
+                window.__lucidumDelayNextShapPlotResponse = false;
+                window.__lucidumDelayedShapPlotResponseWaiting = false;
+                window.__lucidumDelayedShapPlotResponseDone = false;
+                window.__lucidumReleaseShapPlotResponse = null;
+                const originalFetch = window.fetch.bind(window);
+                window.fetch = async (...args) => {
+                  const request = args[0];
+                  const url = typeof request === "string" ? request : request?.url || "";
+                  const response = await originalFetch(...args);
+                  if (url.includes("/shap/plot") && window.__lucidumDelayNextShapPlotResponse) {
+                    window.__lucidumDelayNextShapPlotResponse = false;
+                    window.__lucidumDelayedShapPlotResponseWaiting = true;
+                    await new Promise((resolve) => {
+                      window.__lucidumReleaseShapPlotResponse = resolve;
+                    });
+                    window.__lucidumReleaseShapPlotResponse = null;
+                    window.__lucidumDelayedShapPlotResponseWaiting = false;
+                    window.__lucidumDelayedShapPlotResponseDone = true;
+                  }
+                  return response;
+                };
                 if (typeof window.ClipboardItem !== "function") {
                   window.ClipboardItem = class ClipboardItem {
                     constructor(items) {
@@ -24709,6 +24859,9 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                zero_size_warning_count_before = sum(
+                    "Dom has no width or height" in warning for warning in console_warnings
+                )
                 page.evaluate(
                     """
                     () => {
@@ -24728,8 +24881,48 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                page.evaluate(
+                    """
+                    () => {
+                      window.__lucidumDelayNextShapPlotResponse = true;
+                      window.__lucidumDelayedShapPlotResponseWaiting = false;
+                      window.__lucidumDelayedShapPlotResponseDone = false;
+                      window.__lucidumReleaseShapPlotResponse = null;
+                    }
+                    """
+                )
                 with page.expect_response(lambda response: "/api/gbm/models/" in response.url and "/shap/plot" in response.url and response.request.method == "POST"):
                     page.locator("#gbmShapFeatureList2 .feature", has_text="lat").click()
+                page.wait_for_function(
+                    "() => window.__lucidumDelayedShapPlotResponseWaiting",
+                    timeout=10_000,
+                )
+                page.locator("#modelToolWrap").evaluate(
+                    "(mount) => mount.classList.add('hidden')"
+                )
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#modelToolWrap")?.classList.contains("hidden")
+                      && document.querySelector("#gbmShapChart")?.clientWidth === 0
+                      && document.querySelector("#gbmShapChart")?.clientHeight === 0
+                    """,
+                    timeout=10_000,
+                )
+                page.evaluate("() => window.__lucidumReleaseShapPlotResponse?.()")
+                page.wait_for_function(
+                    "() => window.__lucidumDelayedShapPlotResponseDone",
+                    timeout=10_000,
+                )
+                hidden_shap_surface = page.evaluate(
+                    """
+                    () => window.echarts.getInstanceByDom(document.querySelector("#gbmShapChart"))
+                      ?.getOption()?.series?.some((series) => series.type === "surface") || false
+                    """
+                )
+                self.assertFalse(hidden_shap_surface)
+                page.locator("#modelToolWrap").evaluate(
+                    "(mount) => mount.classList.remove('hidden')"
+                )
                 page.wait_for_function(
                     """
                     () => {
@@ -24740,6 +24933,36 @@ COPY (
                     }
                     """,
                     timeout=10_000,
+                )
+                deferred_shap_surface = page.evaluate(
+                    """
+                    () => {
+                      const target = document.querySelector("#gbmShapChart");
+                      const chart = window.echarts.getInstanceByDom(target);
+                      const canvas = target?.querySelector("canvas");
+                      return {
+                        targetWidth: target?.clientWidth || 0,
+                        targetHeight: target?.clientHeight || 0,
+                        chartWidth: chart?.getWidth() || 0,
+                        chartHeight: chart?.getHeight() || 0,
+                        canvasWidth: canvas?.getBoundingClientRect().width || 0,
+                        canvasHeight: canvas?.getBoundingClientRect().height || 0,
+                      };
+                    }
+                    """
+                )
+                for dimension in (
+                    "targetWidth",
+                    "targetHeight",
+                    "chartWidth",
+                    "chartHeight",
+                    "canvasWidth",
+                    "canvasHeight",
+                ):
+                    self.assertGreater(deferred_shap_surface[dimension], 0, deferred_shap_surface)
+                self.assertEqual(
+                    sum("Dom has no width or height" in warning for warning in console_warnings),
+                    zero_size_warning_count_before,
                 )
                 with page.expect_response(lambda response: "/api/gbm/models/" in response.url and "/shap/plot" in response.url and response.request.method == "POST"):
                     page.locator("#gbmShapFeatureList2 .feature", has_text="None").click()
@@ -25693,7 +25916,27 @@ COPY (
                 page.unroute("**/api/gbm/train", pair_train_route)
                 page.unroute("**/api/gbm/jobs/pair-live-job", pair_job_route)
                 page.get_by_role("tab", name="Model navigator").click()
+                page.wait_for_load_state("networkidle")
+                page.wait_for_function(
+                    """
+                    () => {
+                      const table = window.Tabulator?.findTable?.("#gbmModelGrid")?.[0];
+                      return table?.initialized === true
+                        && table.element?.isConnected
+                        && table.getData?.().length === 4;
+                    }
+                    """,
+                    timeout=10_000,
+                )
                 page.locator("#gbmModelGrid .tabulator-row", has_text="Browser smoke model").click()
+                page.wait_for_function(
+                    """
+                    () => !document.querySelector("#gbmActivateModelBtn")?.disabled
+                      && [...document.querySelectorAll("#gbmModelGrid .tabulator-row.tabulator-selected")]
+                        .some((row) => row.textContent.includes("Browser smoke model"))
+                    """,
+                    timeout=10_000,
+                )
                 page.locator("#gbmActivateModelBtn").click()
                 page.wait_for_function(
                     """
