@@ -2078,10 +2078,16 @@ COPY (
 
         status, body = asgi_get(app, "/api/gbm/config")
         payload = json.loads(body)
-        parameters = {row["name"]: row["value"] for row in payload["parameters"]}
+        parameter_rows = payload["parameters"]
+        parameters = {row["name"]: row["value"] for row in parameter_rows}
         features = {row["name"]: row for row in payload["features"]}
 
         self.assertEqual(status, 200)
+        self.assertEqual(
+            [row["name"] for row in parameter_rows],
+            [row["name"] for row in default_parameters()] + ["custom_penalty"],
+        )
+        self.assertFalse(parameter_rows[-1]["important"])
         self.assertEqual(parameters["objective"], "gamma")
         self.assertEqual(parameters["metric"], "gamma")
         self.assertEqual(parameters["num_iterations"], 88)

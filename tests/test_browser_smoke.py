@@ -22716,11 +22716,48 @@ COPY (
             browser = playwright.chromium.launch()
             page = browser.new_page(viewport={"width": 1280, "height": 800})
             page_errors: list[str] = []
+            console_warnings: list[str] = []
             gbm_layout_api_requests: list[str] = []
             stacked_shap_requests = 0
             shap_plot_requests = 0
             shap_plot_payloads: list[dict[str, object]] = []
             page.on("pageerror", lambda error: page_errors.append(str(error)))
+            page.on(
+                "console",
+                lambda message: console_warnings.append(message.text) if message.type == "warning" else None,
+            )
+
+            core_parameter_names = [
+                "init_score",
+                "objective",
+                "metric",
+                "data_sample_strategy",
+                "num_iterations",
+                "learning_rate",
+                "num_leaves",
+                "max_depth",
+                "min_data_in_leaf",
+                "early_stopping_rounds",
+            ]
+
+            def current_parameter_names() -> list[str]:
+                page.wait_for_function(
+                    """
+                    () => (window.Tabulator?.findTable?.("#gbmParameterGrid")?.[0]?.getData?.() || []).length > 0
+                    """,
+                    timeout=10_000,
+                )
+                return page.evaluate(
+                    """
+                    () => (window.Tabulator?.findTable?.("#gbmParameterGrid")?.[0]?.getData?.() || [])
+                      .map((parameter) => parameter.name)
+                    """
+                )
+
+            def assert_core_parameter_order() -> list[str]:
+                names = current_parameter_names()
+                self.assertEqual(names[:len(core_parameter_names)], core_parameter_names)
+                return names
 
             def track_gbm_request(request: object) -> None:
                 nonlocal shap_plot_requests, stacked_shap_requests
@@ -22882,6 +22919,7 @@ COPY (
                     '() => document.querySelector("#gbmModelCountBadge:not([hidden])")?.textContent.trim() === "4"',
                     timeout=10_000,
                 )
+                initial_parameter_names = assert_core_parameter_order()
                 light_badge_state = gbm_model_badge_state()
                 self.assertEqual(light_badge_state["text"], "4")
                 self.assertFalse(light_badge_state["hidden"])
@@ -23799,6 +23837,7 @@ COPY (
                 learning_rate_cell.click()
                 page.locator("#gbmParameterGrid input.gbm-parameter-input-editor").fill("0.125")
                 page.locator("#gbmParameterGrid input.gbm-parameter-input-editor").press("Enter")
+                self.assertEqual(current_parameter_names(), initial_parameter_names)
                 page.evaluate("window.__lucidumCopiedParameters = null")
                 page.locator("#gbmCopyParametersBtn").click()
                 page.wait_for_function(
@@ -25912,6 +25951,7 @@ COPY (
                     page.locator("#gbmParameterGrid .tabulator-row", has_text="learning_rate").locator(".tabulator-cell[tabulator-field='value']").text_content(),
                     "0.22",
                 )
+                assert_core_parameter_order()
                 self.assertEqual(feature_scenario_state()["value"], "scenario1")
                 self.assertEqual(page.locator("#gbmFeatureInteractionConstraintButton").text_content(), "Constraint groups (1)")
                 assert_feature_heading_matches_checked(2)
@@ -28419,6 +28459,7 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                assert_core_parameter_order()
                 self.assertEqual(
                     page.locator("#gbmParameterGrid .tabulator-row", has_text="num_iterations").locator(".tabulator-cell[tabulator-field='value']").text_content(),
                     "77",
@@ -29295,6 +29336,12 @@ COPY (
                     timeout=10_000,
                 )
                 self.assertEqual(page_errors, [])
+                invalid_parameter_sort_warnings = [
+                    warning
+                    for warning in console_warnings
+                    if "Sort Warning" in warning and "important" in warning
+                ]
+                self.assertEqual(invalid_parameter_sort_warnings, [])
             finally:
                 browser.close()
 

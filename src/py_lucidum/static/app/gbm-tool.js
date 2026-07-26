@@ -2258,7 +2258,6 @@ export function createGbmTool({
         data: parameters,
         height: "100%",
         layout: "fitColumns",
-        initialSort: [{ column: "important", dir: "desc" }],
         columns: [
           { title: "Parameter", field: "name", widthGrow: 1 },
           { title: "Value", field: "value", formatter: parameterValueFormatter, editor: "adaptable", editorParams: parameterValueEditorParams(), widthGrow: 2 },
