@@ -617,7 +617,7 @@ class BrowserSmokeTests(unittest.TestCase):
             data_path.write_text(
                 f"value,earned_exposure_in_period,{very_long_denominator}\n"
                 + "\n".join(
-                    f"{index % 20 + 1},{index % 5 + 1},{index % 7 + 1}"
+                    f"{index % 20 + 1},{(index % 5 + 1) * 10_000_000},{index % 7 + 1}"
                     for index in range(1, 121)
                 )
                 + "\n",
@@ -905,6 +905,81 @@ class BrowserSmokeTests(unittest.TestCase):
                         else:
                             self.assertEqual(layout["renderedTitle"], layout["sourceTitle"])
 
+                    def assert_histogram_y_axis_tick_layout(*, expect_dynamic_gutter: bool) -> None:
+                        layout = page.evaluate(
+                            """
+                            () => {
+                              const chartNode = document.querySelector("#histogramChart");
+                              const chart = echarts.getInstanceByDom(chartNode);
+                              const canvas = chartNode.querySelector("canvas");
+                              const canvasRect = canvas.getBoundingClientRect();
+                              const yAxisModel = chart.getModel().getComponent("yAxis", 0);
+                              const grid = chart.getModel().getComponent("grid")?.coordinateSystem?.getRect?.();
+                              const formatter = chart.getOption().yAxis?.[0]?.axisLabel?.formatter;
+                              const tickLabels = new Set(
+                                yAxisModel.axis.scale.getTicks().map((tick) => String(
+                                  typeof formatter === "function" ? formatter(tick.value) : tick.value
+                                ))
+                              );
+                              const transformedBounds = (item) => {
+                                const bounds = item.getBoundingRect?.();
+                                if (!bounds) return null;
+                                const [a, b, c, d, e, f] = item.transform || [1, 0, 0, 1, 0, 0];
+                                const points = [
+                                  [bounds.x, bounds.y],
+                                  [bounds.x + bounds.width, bounds.y],
+                                  [bounds.x, bounds.y + bounds.height],
+                                  [bounds.x + bounds.width, bounds.y + bounds.height],
+                                ].map(([x, y]) => [a * x + c * y + e, b * x + d * y + f]);
+                                const xValues = points.map(([x]) => x);
+                                const yValues = points.map(([, y]) => y);
+                                return {
+                                  x: Math.min(...xValues),
+                                  y: Math.min(...yValues),
+                                  width: Math.max(...xValues) - Math.min(...xValues),
+                                  height: Math.max(...yValues) - Math.min(...yValues),
+                                };
+                              };
+                              const rendered = chart.getZr().storage.getDisplayList(true)
+                                .map((item) => {
+                                  if (item.type !== "tspan" && item.type !== "text") return null;
+                                  const text = String(item.style?.text ?? "");
+                                  if (!tickLabels.has(text)) return null;
+                                  const bounds = transformedBounds(item);
+                                  if (!bounds || bounds.x + bounds.width > Number(grid?.x || 0) + 1) return null;
+                                  return {
+                                    text,
+                                    left: canvasRect.left + bounds.x,
+                                    right: canvasRect.left + bounds.x + bounds.width,
+                                  };
+                                })
+                                .filter(Boolean);
+                              return {
+                                canvasLeft: canvasRect.left,
+                                gridLeft: canvasRect.left + Number(grid?.x || 0),
+                                optionGridLeft: Number(chart.getOption().grid?.[0]?.left || 0),
+                                tickLabels: [...tickLabels],
+                                rendered,
+                              };
+                            }
+                            """
+                        )
+                        self.assertTrue(layout["tickLabels"])
+                        self.assertTrue(layout["rendered"])
+                        self.assertAlmostEqual(
+                            layout["optionGridLeft"],
+                            layout["gridLeft"] - layout["canvasLeft"],
+                            delta=0.5,
+                        )
+                        if expect_dynamic_gutter:
+                            self.assertGreater(layout["optionGridLeft"], 72)
+                            self.assertTrue(any("," in label for label in layout["tickLabels"]))
+                        else:
+                            self.assertAlmostEqual(layout["optionGridLeft"], 72, delta=0.5)
+                        for label in layout["rendered"]:
+                            self.assertGreaterEqual(label["left"], layout["canvasLeft"] - 0.5)
+                            self.assertLessEqual(label["right"], layout["gridLeft"] + 0.5)
+
                     def assert_histogram_x_axis_title_layout(
                         expected_title: str,
                         *,
@@ -1118,6 +1193,7 @@ class BrowserSmokeTests(unittest.TestCase):
                     self.assertEqual(initial_layout["workspaceShadow"], "none")
                     self.assertEqual(initial_layout["workspacePadding"], ["0px", "0px", "0px", "0px"])
                     assert_histogram_y_axis_title_layout()
+                    assert_histogram_y_axis_tick_layout(expect_dynamic_gutter=True)
                     assert_histogram_x_axis_title_layout("value / earned_exposure_in_period")
 
                     requests_before_toggle = histogram_requests
@@ -1137,6 +1213,7 @@ class BrowserSmokeTests(unittest.TestCase):
                     page.mouse.move(0, 0)
                     before = settings_layout()
                     assert_histogram_y_axis_title_layout()
+                    assert_histogram_y_axis_tick_layout(expect_dynamic_gutter=True)
                     assert_histogram_x_axis_title_layout("value / earned_exposure_in_period")
                     self.assertTrue(before["shared"])
                     self.assertEqual(before["height"], 50)
@@ -1382,6 +1459,7 @@ class BrowserSmokeTests(unittest.TestCase):
                         delta=0.5,
                     )
                     assert_histogram_y_axis_title_layout()
+                    assert_histogram_y_axis_tick_layout(expect_dynamic_gutter=True)
                     assert_histogram_x_axis_title_layout("value / earned_exposure_in_period")
                     requests_before_drag = histogram_requests
                     splitter_box = page.locator("#histogramSplitResizer").bounding_box()
@@ -1420,6 +1498,7 @@ class BrowserSmokeTests(unittest.TestCase):
                     )
                     self.assertEqual(histogram_requests, requests_before_drag)
                     assert_histogram_y_axis_title_layout()
+                    assert_histogram_y_axis_tick_layout(expect_dynamic_gutter=True)
                     assert_histogram_x_axis_title_layout("value / earned_exposure_in_period")
 
                     splitter = page.locator("#histogramSplitResizer")
@@ -1475,6 +1554,7 @@ class BrowserSmokeTests(unittest.TestCase):
                     self.assertLessEqual(mobile_layout["stats"]["bottom"], mobile_layout["chart"]["top"] + 0.5)
                     self.assertGreaterEqual(mobile_status["statsTop"], mobile_status["controlsBottom"] + 4)
                     assert_histogram_y_axis_title_layout()
+                    assert_histogram_y_axis_tick_layout(expect_dynamic_gutter=True)
                     assert_histogram_x_axis_title_layout("value / earned_exposure_in_period")
 
                     with page.expect_response(
@@ -1497,6 +1577,7 @@ class BrowserSmokeTests(unittest.TestCase):
                         """,
                         timeout=10_000,
                     )
+                    assert_histogram_y_axis_tick_layout(expect_dynamic_gutter=False)
                     assert_histogram_x_axis_title_layout("value")
 
                     with page.expect_response(
@@ -1525,6 +1606,7 @@ class BrowserSmokeTests(unittest.TestCase):
                         timeout=10_000,
                     )
                     assert_histogram_y_axis_title_layout(expect_truncated=True)
+                    assert_histogram_y_axis_tick_layout(expect_dynamic_gutter=False)
                     assert_histogram_x_axis_title_layout(
                         f"value / {very_long_denominator}",
                         expect_truncated=True,

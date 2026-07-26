@@ -11,13 +11,16 @@ const HISTOGRAM_X_AXIS_MAX_LABELS = 100;
 const HISTOGRAM_X_AXIS_FONT_SIZE = 10;
 const HISTOGRAM_X_AXIS_LABEL_WIDTH_FACTOR = 0.56;
 const HISTOGRAM_X_AXIS_LABEL_PADDING = 10;
-const HISTOGRAM_GRID_LEFT = 72;
+const HISTOGRAM_GRID_LEFT_MIN = 72;
 const HISTOGRAM_GRID_RIGHT = 30;
 const HISTOGRAM_GRID_TOP = 40;
 const HISTOGRAM_GRID_TOP_WITH_BIN_LABELS = 56;
-const HISTOGRAM_X_AXIS_HORIZONTAL_PADDING = HISTOGRAM_GRID_LEFT + HISTOGRAM_GRID_RIGHT;
 const HISTOGRAM_X_AXIS_ROTATION = 65;
 const HISTOGRAM_Y_AXIS_TARGET_INTERVALS = 6;
+const HISTOGRAM_Y_AXIS_FONT_SIZE = 12;
+const HISTOGRAM_Y_AXIS_LABEL_WIDTH_FACTOR = 0.56;
+const HISTOGRAM_Y_AXIS_LABEL_MARGIN = 8;
+const HISTOGRAM_Y_AXIS_OUTER_PADDING = 8;
 const HISTOGRAM_Y_AXIS_NAME_GAP = 19;
 const HISTOGRAM_AXIS_NAME_MIN_WIDTH = 40;
 const HISTOGRAM_BIN_OUTLINE_LIMIT = 200;
@@ -363,8 +366,17 @@ export function createHistogramTool({
     const xBounds = axisBounds(rows, xLog);
     const chartWidth = Number(chart.getWidth?.()) || el("histogramChart")?.clientWidth || 800;
     histogramAxisChartWidth = chartWidth;
-    const xAxisPolicy = histogramXAxisPolicy(data, rows, xLog, chartWidth, formatAxisValue);
-    const axisNameMaxWidth = Math.max(HISTOGRAM_AXIS_NAME_MIN_WIDTH, chartWidth - HISTOGRAM_X_AXIS_HORIZONTAL_PADDING);
+    const yAxisLayout = histogramYAxisLayout(yValues, yLog, yBaseline, yAxisPolicy, data.y_axis);
+    const horizontalPadding = yAxisLayout.gridLeft + HISTOGRAM_GRID_RIGHT;
+    const xAxisPolicy = histogramXAxisPolicy(
+      data,
+      rows,
+      xLog,
+      chartWidth,
+      horizontalPadding,
+      formatAxisValue,
+    );
+    const axisNameMaxWidth = Math.max(HISTOGRAM_AXIS_NAME_MIN_WIDTH, chartWidth - horizontalPadding);
     const showBinLabels = state.histogramLabels === "bins";
     const barColor = getCss("--bar") || "#5bc0de";
     const binOutlineColor = getCss("--histogram-bin-outline") || "#4b5563";
@@ -392,7 +404,7 @@ export function createHistogramTool({
           formatter: histogramTooltip,
         },
         grid: {
-          left: HISTOGRAM_GRID_LEFT,
+          left: yAxisLayout.gridLeft,
           right: HISTOGRAM_GRID_RIGHT,
           top: showBinLabels ? HISTOGRAM_GRID_TOP_WITH_BIN_LABELS : HISTOGRAM_GRID_TOP,
           bottom: xAxisPolicy.gridBottom,
@@ -450,7 +462,12 @@ export function createHistogramTool({
           },
           min: yLog ? yBaseline : 0,
           ...yAxisPolicy,
-          axisLabel: { color: textColor, formatter: (value) => formatYAxisValue(value, data.y_axis) },
+          axisLabel: {
+            color: textColor,
+            fontSize: HISTOGRAM_Y_AXIS_FONT_SIZE,
+            margin: HISTOGRAM_Y_AXIS_LABEL_MARGIN,
+            formatter: (value) => formatYAxisValue(value, data.y_axis),
+          },
           axisLine: { lineStyle: { color: lineColor } },
           splitLine: { lineStyle: { color: lineColor } },
           nameTextStyle: { color: textColor, fontSize: 12, fontWeight: 700, align: "left" },
@@ -510,11 +527,76 @@ export function createHistogramTool({
     return multiplier * magnitude;
   }
 
-  function histogramXAxisPolicy(data, _rows, xLog, chartWidth, formatContinuousValue) {
+  function histogramYAxisLayout(values, yLog, yBaseline, policy, yAxis) {
+    const labelWidth = histogramYAxisTickCandidates(values, yLog, yBaseline, policy)
+      .map((value) => formatYAxisValue(value, yAxis))
+      .reduce((maximum, label) => Math.max(maximum, measureHistogramYAxisLabel(label)), 0);
+    return {
+      gridLeft: Math.max(
+        HISTOGRAM_GRID_LEFT_MIN,
+        Math.ceil(labelWidth + HISTOGRAM_Y_AXIS_LABEL_MARGIN + HISTOGRAM_Y_AXIS_OUTER_PADDING),
+      ),
+    };
+  }
+
+  function histogramYAxisTickCandidates(values, yLog, yBaseline, policy) {
+    const finiteValues = (Array.isArray(values) ? values : [])
+      .map(Number)
+      .filter((value) => Number.isFinite(value) && value > 0);
+    if (!yLog) {
+      const interval = Number(policy?.interval);
+      const maximum = Number(policy?.max);
+      if (!Number.isFinite(interval) || interval <= 0 || !Number.isFinite(maximum) || maximum <= 0) {
+        return [0, ...finiteValues];
+      }
+      const tickCount = Math.max(1, Math.ceil(maximum / interval));
+      return Array.from({ length: tickCount + 1 }, (_unused, index) => (
+        index === tickCount ? maximum : index * interval
+      ));
+    }
+    const positiveBaseline = Number(yBaseline);
+    const candidates = [
+      ...(Number.isFinite(positiveBaseline) && positiveBaseline > 0 ? [positiveBaseline] : []),
+      ...finiteValues,
+    ];
+    if (!candidates.length) return [1];
+    const minimum = Math.min(...candidates);
+    const maximum = Math.max(...candidates);
+    const minimumExponent = Math.floor(Math.log10(minimum));
+    const maximumExponent = Math.ceil(Math.log10(maximum));
+    for (let exponent = minimumExponent; exponent <= maximumExponent; exponent += 1) {
+      const value = 10 ** exponent;
+      if (Number.isFinite(value) && value > 0) candidates.push(value);
+    }
+    return candidates;
+  }
+
+  function measureHistogramYAxisLabel(label) {
+    const text = String(label || "");
+    const measured = echartsImpl.format?.getTextRect?.(
+      text,
+      `${HISTOGRAM_Y_AXIS_FONT_SIZE}px sans-serif`,
+    )?.width;
+    return Number.isFinite(Number(measured))
+      ? Number(measured)
+      : text.length * HISTOGRAM_Y_AXIS_FONT_SIZE * HISTOGRAM_Y_AXIS_LABEL_WIDTH_FACTOR;
+  }
+
+  function histogramXAxisPolicy(
+    data,
+    _rows,
+    xLog,
+    chartWidth,
+    horizontalPadding,
+    formatContinuousValue,
+  ) {
     const axisLabel = {
       formatter: (value) => formatHistogramXAxisValue(value, data?.binning, formatContinuousValue),
     };
-    const plotWidth = Math.max(120, (Number(chartWidth) || 800) - HISTOGRAM_X_AXIS_HORIZONTAL_PADDING);
+    const plotWidth = Math.max(
+      120,
+      (Number(chartWidth) || 800) - Math.max(0, Number(horizontalPadding) || 0),
+    );
     if (xLog || data?.binning?.mode !== "integer") {
       const samples = [data?.binning?.min, data?.binning?.max]
         .map((value) => formatContinuousValue(value))
