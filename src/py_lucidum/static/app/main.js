@@ -1969,12 +1969,12 @@
         const nextCollapsed = Boolean(collapsed);
         if (state.lineBarSideControlsCollapsed === nextCollapsed) {
           syncLineBarLayoutVisibility();
-          scheduleLineBarLayoutResize();
+          flushLineBarLayoutResize();
           return;
         }
         state.lineBarSideControlsCollapsed = nextCollapsed;
         syncLineBarLayoutVisibility();
-        scheduleLineBarLayoutResize();
+        flushLineBarLayoutResize();
       }
 
       function toggleLineBarToolbar() {
@@ -1985,12 +1985,12 @@
         const nextCollapsed = Boolean(collapsed);
         if (state.lineBarToolbarCollapsed === nextCollapsed) {
           syncLineBarLayoutVisibility();
-          scheduleLineBarLayoutResize();
+          flushLineBarLayoutResize();
           return;
         }
         state.lineBarToolbarCollapsed = nextCollapsed;
         syncLineBarLayoutVisibility();
-        scheduleLineBarLayoutResize();
+        flushLineBarLayoutResize();
       }
 
       function setupLineBarLayoutToggles() {
@@ -2116,11 +2116,9 @@
         button.title = label;
       }
 
-      function scheduleLineBarLayoutResize() {
-        requestAnimationFrame(() => {
-          syncChartControlHeightToAvailableSpace();
-          lineBarTool.resize();
-        });
+      function flushLineBarLayoutResize() {
+        syncChartControlHeightToAvailableSpace();
+        lineBarTool.resize();
       }
 
       function syncSidebarToggleButton() {

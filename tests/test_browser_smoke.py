@@ -6542,16 +6542,29 @@ class BrowserSmokeTests(unittest.TestCase):
                         """,
                         timeout=10_000,
                     )
-                    page.locator('#featureList .feature[data-value="age"][data-source-id="dataset"]').click()
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator(
+                            '#featureList .feature[data-value="age"][data-source-id="dataset"]'
+                        ).click()
                     page.wait_for_function(
                         """
-                        () => document.querySelector('#featureList .feature[data-value="age"]')?.classList.contains("active")
-                          && !document.querySelector('#featureList .feature[data-value="segment"]')?.classList.contains("active")
+                        () => {
+                          const option = echarts.getInstanceByDom(document.querySelector("#chart"))?.getOption();
+                          return document.querySelector(
+                            '#featureList .feature[data-value="age"]'
+                          )?.classList.contains("active")
+                            && !document.querySelector(
+                              '#featureList .feature[data-value="segment"]'
+                            )?.classList.contains("active")
+                            && option?.xAxis?.[0]?.name === "age";
+                        }
                         """,
                         timeout=10_000,
                     )
 
-                    page.wait_for_load_state("networkidle")
                     deferred_surface_before = page.evaluate(
                         """
                         () => {
@@ -8573,6 +8586,151 @@ class BrowserSmokeTests(unittest.TestCase):
                         """,
                         timeout=10_000,
                     )
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_line_bar_control_strip_resize_settles_before_first_paint(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "line_bar_control_strip.csv"
+            data_path.write_text(
+                "group,value\n"
+                "1,10\n"
+                "2,20\n"
+                "3,30\n",
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                defaults={
+                    "x": "group",
+                    "actual": "value",
+                    "denominator": "__none__",
+                },
+                tools=["line_bar"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1440, "height": 900})
+                    page_errors: list[str] = []
+                    chart_requests = 0
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+
+                    def count_chart_request(request: Any) -> None:
+                        nonlocal chart_requests
+                        if request.url.endswith("/api/chart"):
+                            chart_requests += 1
+
+                    page.on("request", count_chart_request)
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const target = document.querySelector("#chart");
+                          const chart = window.echarts?.getInstanceByDom(target);
+                          return target
+                            && !target.classList.contains("hidden")
+                            && chart?.getOption()?.series?.length
+                            && document.querySelector("#lineBarToolbarToggleBtn")
+                              ?.getAttribute("aria-expanded") === "false";
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    page.wait_for_load_state("networkidle")
+                    page.wait_for_timeout(100)
+                    chart_requests_before = chart_requests
+
+                    transitions = page.evaluate(
+                        """
+                        async () => {
+                          const target = document.querySelector("#chart");
+                          const chart = window.echarts.getInstanceByDom(target);
+                          const button = document.querySelector("#lineBarToolbarToggleBtn");
+                          const originalResize = chart.resize;
+                          let resizeCount = 0;
+                          let renderedCount = 0;
+                          chart.resize = function(...args) {
+                            resizeCount += 1;
+                            return originalResize.apply(this, args);
+                          };
+                          const onRendered = () => {
+                            renderedCount += 1;
+                          };
+                          chart.on("rendered", onRendered);
+
+                          const snapshot = () => {
+                            const canvas = target.querySelector("canvas");
+                            const canvasRect = canvas?.getBoundingClientRect();
+                            return {
+                              targetWidth: target.clientWidth,
+                              targetHeight: target.clientHeight,
+                              chartWidth: chart.getWidth(),
+                              chartHeight: chart.getHeight(),
+                              canvasWidth: canvasRect?.width || 0,
+                              canvasHeight: canvasRect?.height || 0,
+                            };
+                          };
+                          const nextFrame = () => new Promise(requestAnimationFrame);
+                          const toggleAndMeasure = async () => {
+                            const resizeStart = resizeCount;
+                            const renderedStart = renderedCount;
+                            button.click();
+                            const synchronous = snapshot();
+                            await nextFrame();
+                            const firstFrame = snapshot();
+                            for (let frame = 0; frame < 5; frame += 1) {
+                              await nextFrame();
+                            }
+                            return {
+                              synchronous,
+                              firstFrame,
+                              settled: snapshot(),
+                              resizeCount: resizeCount - resizeStart,
+                              renderedCount: renderedCount - renderedStart,
+                              expanded: button.getAttribute("aria-expanded"),
+                            };
+                          };
+
+                          const before = snapshot();
+                          const expanded = await toggleAndMeasure();
+                          const collapsed = await toggleAndMeasure();
+                          chart.off("rendered", onRendered);
+                          chart.resize = originalResize;
+                          return { before, expanded, collapsed };
+                        }
+                        """
+                    )
+                    page.wait_for_timeout(50)
+
+                    self.assertLess(
+                        transitions["expanded"]["synchronous"]["targetHeight"],
+                        transitions["before"]["targetHeight"],
+                    )
+                    self.assertAlmostEqual(
+                        transitions["collapsed"]["synchronous"]["targetHeight"],
+                        transitions["before"]["targetHeight"],
+                        delta=0.5,
+                    )
+                    for name, expected_expanded in (("expanded", "true"), ("collapsed", "false")):
+                        transition = transitions[name]
+                        self.assertEqual(transition["expanded"], expected_expanded)
+                        self.assertEqual(transition["resizeCount"], 1, transition)
+                        self.assertEqual(transition["renderedCount"], 1, transition)
+                        for frame_name in ("synchronous", "firstFrame", "settled"):
+                            frame = transition[frame_name]
+                            self.assertAlmostEqual(frame["chartWidth"], frame["targetWidth"], delta=0.5)
+                            self.assertAlmostEqual(frame["chartHeight"], frame["targetHeight"], delta=0.5)
+                            self.assertAlmostEqual(frame["canvasWidth"], frame["targetWidth"], delta=0.5)
+                            self.assertAlmostEqual(frame["canvasHeight"], frame["targetHeight"], delta=0.5)
+
+                    self.assertEqual(chart_requests, chart_requests_before)
                     self.assertEqual(page_errors, [])
                     browser.close()
             finally:
@@ -17192,12 +17350,24 @@ COPY (
                 self.assertEqual(gbm_to_glm_body["responses"][2]["source"], "gbm:browser-smoke-model-2:predictions")
                 page.locator("#featureList .feature.active", has_text="Segment").wait_for(timeout=10_000)
 
-                page.locator('#featureList .feature[data-source-id="dataset"]', has_text="Age").click()
+                with page.expect_response(
+                    lambda response: response.url.endswith("/api/chart")
+                    and response.status == 200
+                    and json.loads(response.request.post_data or "{}").get("x") == "Age",
+                    timeout=10_000,
+                ):
+                    page.locator('#featureList .feature[data-source-id="dataset"]', has_text="Age").click()
                 page.wait_for_function(
-                    '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
+                    """
+                    () => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#chart"));
+                      return document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")
+                        && chart?.getOption()?.xAxis?.[0]?.name === "Age";
+                    }
+                    """,
                     timeout=10_000,
                 )
-                axis_shrink_state = page.evaluate(
+                axis_shrink_target = page.evaluate(
                     """
                     () => {
                       const chart = window.echarts.getInstanceByDom(document.querySelector("#chart"));
@@ -17212,19 +17382,46 @@ COPY (
                         .filter((series) => Number.isFinite(series.max))
                         .sort((left, right) => right.max - left.max);
                       const target = candidates[0]?.name || "";
-                      const beforeMax = Number(option.yAxis?.[0]?.max);
-                      if (target) chart.dispatchAction({ type: "legendUnSelect", name: target });
-                      return { target, beforeMax };
+                      const targetMax = Number(candidates[0]?.max);
+                      if (target) {
+                        chart.dispatchAction({ type: "legendSelect", name: target });
+                        chart.trigger("legendselectchanged");
+                      }
+                      return { target, targetMax };
                     }
                     """
                 )
-                self.assertTrue(axis_shrink_state["target"])
+                self.assertTrue(axis_shrink_target["target"])
+                page.wait_for_function(
+                    """
+                    ({ target, targetMax }) => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#chart"));
+                      const option = chart.getOption();
+                      const selected = Object.assign({}, ...option.legend.map((legend) => legend.selected || {}));
+                      return selected[target] !== false && Number(option.yAxis?.[0]?.max) >= targetMax;
+                    }
+                    """,
+                    arg=axis_shrink_target,
+                    timeout=10_000,
+                )
+                axis_shrink_state = page.evaluate(
+                    """
+                    (target) => {
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#chart"));
+                      const beforeMax = Number(chart.getOption().yAxis?.[0]?.max);
+                      chart.dispatchAction({ type: "legendUnSelect", name: target });
+                      chart.trigger("legendselectchanged");
+                      return { target, beforeMax };
+                    }
+                    """,
+                    arg=axis_shrink_target["target"],
+                )
                 page.wait_for_function(
                     """
                     ({ target, beforeMax }) => {
                       const chart = window.echarts.getInstanceByDom(document.querySelector("#chart"));
                       const option = chart.getOption();
-                      const selected = Object.assign({}, ...chart.getOption().legend.map((legend) => legend.selected || {}));
+                      const selected = Object.assign({}, ...option.legend.map((legend) => legend.selected || {}));
                       return selected[target] === false && Number(option.yAxis?.[0]?.max) < beforeMax;
                     }
                     """,

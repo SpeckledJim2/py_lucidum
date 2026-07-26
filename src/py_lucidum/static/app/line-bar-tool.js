@@ -4470,7 +4470,17 @@ export function createLineBarTool({
     bindChartEvents();
     if (!chartResizeObserver && typeof ResizeObserver === "function") {
       chartResizeObserver = new ResizeObserver(() => {
-        if (lineBarChartReady()) scheduleChartLayout();
+        const target = el("chart");
+        if (
+          lineBarChartReady(target)
+          && (
+            pendingChartRender
+            || chart.getWidth() !== target.clientWidth
+            || chart.getHeight() !== target.clientHeight
+          )
+        ) {
+          scheduleChartLayout();
+        }
       });
       chartResizeObserver.observe(el("chart"));
     }
@@ -4600,7 +4610,15 @@ export function createLineBarTool({
       lineBarTable?.redraw?.(true);
       return;
     }
-    scheduleChartLayout();
+    if (pendingChartRender || chartRenderPending) {
+      scheduleChartLayout();
+      return;
+    }
+    if (chartLayoutFrame !== null) {
+      cancelAnimationFrame(chartLayoutFrame);
+      chartLayoutFrame = null;
+    }
+    resizeVisibleChart();
   }
 
   function resizeVisibleChart() {
