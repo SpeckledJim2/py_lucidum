@@ -44,6 +44,7 @@ DATE_BUCKET_INTERVALS = {
     "year": "INTERVAL '1 year'",
 }
 EMPTY_PERIOD_VALUES = {"show", "skip"}
+MISSING_VALUES = {"show", "hide"}
 
 
 def overlarge_chart_message(max_groups: int, group_label: str = "x-axis groups") -> str:
@@ -67,6 +68,7 @@ def request_with_single_grouping(request: dict[str, Any]) -> dict[str, Any]:
         "bandWidth": grouping.get("bandWidth", 0),
         "quantileMode": grouping.get("quantileMode", "off"),
         "dateBucket": grouping.get("dateBucket", "none"),
+        "missings": grouping.get("missings", request.get("missings", "show")),
     }
 
 
@@ -119,6 +121,7 @@ def chart(dataset: Dataset, request: dict[str, Any], feature_spec: Any | None = 
             "x_group_kind": result["x_group_kind"],
             "date_bucket": result["date_bucket"],
             "empty_periods": result["empty_periods"],
+            "missings": result["missings"],
             "source": result["source_id"],
             "row_count": result["row_count"],
             "filtered_row_count": result["filtered_row_count"],
@@ -186,6 +189,7 @@ def table(dataset: Dataset, request: dict[str, Any], feature_spec: Any | None = 
             "x_group_kind": result["x_group_kind"],
             "date_bucket": result["date_bucket"],
             "empty_periods": result["empty_periods"],
+            "missings": result["missings"],
             "source": result["source_id"],
             "row_count": result["row_count"],
             "filtered_row_count": result["filtered_row_count"],
@@ -317,6 +321,11 @@ def build_grouped_result(
         request.get("denominator", request.get("weight")),
     )
     x_info = columns[x_col]
+    missings = normalise_missings(request.get("missings"))
+    effective_filter_sql = line_bar_analysis_filter(
+        filter_sql,
+        [x_col] if missings == "hide" else [],
+    )
     date_bucket = normalise_date_bucket(request.get("dateBucket")) if x_info.kind in {"date", "datetime"} else "none"
     empty_periods = normalise_empty_periods(request.get("emptyPeriods"))
     quantile_count = (
@@ -334,12 +343,18 @@ def build_grouped_result(
     x_group_kind = "quantile" if quantile_count else x_info.kind
     sigma_multiplier = float(request.get("sigma") or 0)
     include_sigma = sigma_multiplier > 0 and len(responses) >= 2
-    denominator_summary = relation_denominator_summary(dataset, relation, responses, denominator, filter_sql)
+    denominator_summary = relation_denominator_summary(
+        dataset,
+        relation,
+        responses,
+        denominator,
+        effective_filter_sql,
+    )
     partial_dependence = None
     if include_partial_dependence or str(request.get("sort") or "alpha") == "shap":
         partial_dependence = build_partial_dependence_overlay(
             dataset,
-            request,
+            {**request, "filter": effective_filter_sql},
             feature_spec=feature_spec or {},
             columns=columns,
             x_col=x_col,
@@ -355,7 +370,7 @@ def build_grouped_result(
         responses=responses,
         denominator=denominator,
         include_sigma=include_sigma,
-        filter_sql=filter_sql,
+        filter_sql=effective_filter_sql,
         x_group_kind=x_group_kind,
         date_bucket=date_bucket,
         empty_periods=empty_periods,
@@ -363,7 +378,13 @@ def build_grouped_result(
         sort=str(request.get("sort") or "alpha"),
         shap_medians=partial_dependence_medians(partial_dependence),
     )
-    response_summaries = relation_response_summary(dataset, relation, responses, denominator, filter_sql)
+    response_summaries = relation_response_summary(
+        dataset,
+        relation,
+        responses,
+        denominator,
+        effective_filter_sql,
+    )
     return {
         "source_id": context["source_id"],
         "field_sources": context.get("field_sources"),
@@ -372,9 +393,11 @@ def build_grouped_result(
         "x_group_kind": x_group_kind,
         "date_bucket": date_bucket,
         "empty_periods": empty_periods,
+        "missings": missings,
         "row_count": context["row_count"],
-        "filtered_row_count": relation_row_count(dataset, relation, filter_sql),
+        "filtered_row_count": relation_row_count(dataset, relation, effective_filter_sql),
         "filter_sql": filter_sql,
+        "effective_filter_sql": effective_filter_sql,
         "responses": responses,
         "denominator": denominator,
         "denominator_source": denominator_source,
@@ -855,7 +878,7 @@ def final_rows_pipeline_sql(
     if not enabled:
         return no_group_final_rows_sql(responses, include_sigma)
     if x_group_kind in {"integer", "numeric", "date", "datetime", "quantile"}:
-        return ordered_group_final_rows_sql(responses, include_sigma, x_group_kind, threshold_expr)
+        return ordered_group_final_rows_sql(responses, include_sigma, threshold_expr)
     return categorical_group_final_rows_sql(responses, include_sigma, threshold_expr)
 
 
@@ -952,11 +975,9 @@ final_rows AS (
 def ordered_group_final_rows_sql(
     responses: list[dict[str, str]],
     include_sigma: bool,
-    x_group_kind: str,
     threshold_expr: str,
 ) -> str:
-    quantile_missing_filter = "WHERE x_label != 'Missing'" if x_group_kind == "quantile" else ""
-    quantile_missing_union = f"""
+    missing_union = f"""
   UNION ALL
   SELECT
     {group_identity_id('x_key', 'x_label')} AS source_group_id,
@@ -968,19 +989,19 @@ def ordered_group_final_rows_sql(
     original_order AS final_original_order,
     FALSE AS final_is_tail
   FROM initial_values
-  WHERE x_label = 'Missing'""" if x_group_kind == "quantile" else ""
+  WHERE x_key IS NULL"""
     return f""",
 group_totals AS (
   SELECT
     COALESCE(SUM(volume), 0) AS total_volume,
-    COUNT(*) AS group_count
+    COUNT(*) FILTER (WHERE x_key IS NOT NULL) AS candidate_group_count
   FROM initial_values
 ),
 group_threshold AS (
   SELECT
     {threshold_expr} AS threshold_value,
     total_volume,
-    group_count
+    candidate_group_count
   FROM group_totals
 ),
 ordered_candidates AS (
@@ -988,7 +1009,7 @@ ordered_candidates AS (
     initial_values.*,
     SUM(volume) OVER (ORDER BY x_sort ASC NULLS LAST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS low_cume
   FROM initial_values
-  {quantile_missing_filter}
+  WHERE x_key IS NOT NULL
 ),
 low_marked AS (
   SELECT
@@ -1038,29 +1059,29 @@ group_map AS (
     x_key AS source_x_key,
     x_label AS source_x_label,
     CASE
-      WHEN (SELECT group_count FROM group_threshold) >= 3 AND is_low AND (SELECT low_count FROM tail_counts) > 1 THEN 'tail:low'
-      WHEN (SELECT group_count FROM group_threshold) >= 3 AND is_high AND (SELECT high_count FROM tail_counts) > 1 THEN 'tail:high'
+      WHEN (SELECT candidate_group_count FROM group_threshold) >= 3 AND is_low AND (SELECT low_count FROM tail_counts) > 1 THEN 'tail:low'
+      WHEN (SELECT candidate_group_count FROM group_threshold) >= 3 AND is_high AND (SELECT high_count FROM tail_counts) > 1 THEN 'tail:high'
       ELSE {group_identity_id('x_key', 'x_label')}
     END AS final_group_id,
     CASE
-      WHEN (SELECT group_count FROM group_threshold) >= 3 AND is_low AND (SELECT low_count FROM tail_counts) > 1 THEN 'Low tail'
-      WHEN (SELECT group_count FROM group_threshold) >= 3 AND is_high AND (SELECT high_count FROM tail_counts) > 1 THEN 'High tail'
+      WHEN (SELECT candidate_group_count FROM group_threshold) >= 3 AND is_low AND (SELECT low_count FROM tail_counts) > 1 THEN 'Low tail'
+      WHEN (SELECT candidate_group_count FROM group_threshold) >= 3 AND is_high AND (SELECT high_count FROM tail_counts) > 1 THEN 'High tail'
       ELSE x_label
     END AS final_label,
     CASE
-      WHEN (SELECT group_count FROM group_threshold) >= 3 AND is_low AND (SELECT low_count FROM tail_counts) > 1 THEN (SELECT x_sort FROM low_tail_stats)
-      WHEN (SELECT group_count FROM group_threshold) >= 3 AND is_high AND (SELECT high_count FROM tail_counts) > 1 THEN (SELECT x_sort FROM high_tail_stats)
+      WHEN (SELECT candidate_group_count FROM group_threshold) >= 3 AND is_low AND (SELECT low_count FROM tail_counts) > 1 THEN (SELECT x_sort FROM low_tail_stats)
+      WHEN (SELECT candidate_group_count FROM group_threshold) >= 3 AND is_high AND (SELECT high_count FROM tail_counts) > 1 THEN (SELECT x_sort FROM high_tail_stats)
       ELSE x_sort
     END AS final_x_sort,
     CASE
-      WHEN (SELECT group_count FROM group_threshold) >= 3 AND is_low AND (SELECT low_count FROM tail_counts) > 1 THEN (SELECT original_order FROM low_tail_stats)
-      WHEN (SELECT group_count FROM group_threshold) >= 3 AND is_high AND (SELECT high_count FROM tail_counts) > 1 THEN (SELECT original_order FROM high_tail_stats)
+      WHEN (SELECT candidate_group_count FROM group_threshold) >= 3 AND is_low AND (SELECT low_count FROM tail_counts) > 1 THEN (SELECT original_order FROM low_tail_stats)
+      WHEN (SELECT candidate_group_count FROM group_threshold) >= 3 AND is_high AND (SELECT high_count FROM tail_counts) > 1 THEN (SELECT original_order FROM high_tail_stats)
       ELSE original_order
     END AS final_original_order,
-    (SELECT group_count FROM group_threshold) >= 3
+    (SELECT candidate_group_count FROM group_threshold) >= 3
       AND ((is_low AND (SELECT low_count FROM tail_counts) > 1) OR (is_high AND (SELECT high_count FROM tail_counts) > 1)) AS final_is_tail
   FROM high_marked
-  {quantile_missing_union}
+  {missing_union}
 )
 {grouped_final_rows_sql(responses, include_sigma)}"""
 
@@ -1733,6 +1754,17 @@ def normalise_empty_periods(value: Any) -> str:
     return mode if mode in EMPTY_PERIOD_VALUES else "show"
 
 
+def normalise_missings(value: Any) -> str:
+    mode = str(value or "show").strip().lower()
+    return mode if mode in MISSING_VALUES else "show"
+
+
+def line_bar_analysis_filter(filter_sql: str, hidden_features: list[str]) -> str:
+    conditions = [f"({filter_sql})"] if filter_sql else []
+    conditions.extend(f"{quote_ident(feature)} IS NOT NULL" for feature in dict.fromkeys(hidden_features))
+    return " AND ".join(conditions)
+
+
 def normalise_quantile_count(value: Any) -> int:
     parsed = parse_positive_float(value)
     if parsed is None:
@@ -1984,9 +2016,13 @@ def apply_low_weight_grouping(
     threshold_value = parse_group_threshold(threshold, total_volume)
     normalised = [normalise_row(row, responses) for row in rows]
     missing_rows: list[dict[str, Any]] = []
-    if x_kind == "quantile":
-        missing_rows = [row for row in normalised if row["x"] == "Missing"]
-        normalised = [row for row in normalised if row["x"] != "Missing"]
+    if x_kind in {"integer", "numeric", "date", "datetime", "quantile"}:
+        missing_rows = [
+            row
+            for row in normalised
+            if row.get("x_sort") is None or (x_kind == "quantile" and row.get("x") == "Missing")
+        ]
+        normalised = [row for row in normalised if row not in missing_rows]
     if threshold_value <= 0 or len(normalised) < 3:
         return normalised + missing_rows
 
@@ -2562,9 +2598,13 @@ def partial_low_weight_group_mapping(rows: list[dict[str, Any]], x_kind: str, th
     threshold_value = parse_group_threshold(threshold, total_volume)
     normalised = list(rows)
     missing_rows: list[dict[str, Any]] = []
-    if x_kind == "quantile":
-        missing_rows = [row for row in normalised if row["x"] == "Missing"]
-        normalised = [row for row in normalised if row["x"] != "Missing"]
+    if x_kind in {"integer", "numeric", "date", "datetime", "quantile"}:
+        missing_rows = [
+            row
+            for row in normalised
+            if row.get("x_sort") is None or (x_kind == "quantile" and row.get("x") == "Missing")
+        ]
+        normalised = [row for row in normalised if row not in missing_rows]
     if threshold_value <= 0 or len(normalised) < 3:
         return [partial_group_mapping_row(row, row) for row in [*normalised, *missing_rows]]
 

@@ -1411,9 +1411,13 @@ def glm_low_weight_group_mapping(rows: list[dict[str, Any]], x_kind: str, thresh
     threshold_value = parse_group_threshold(threshold, total_volume)
     normalised = list(rows)
     missing_rows: list[dict[str, Any]] = []
-    if x_kind == "quantile":
-        missing_rows = [row for row in normalised if row["x"] == "Missing"]
-        normalised = [row for row in normalised if row["x"] != "Missing"]
+    if x_kind in {"integer", "numeric", "date", "datetime", "quantile"}:
+        missing_rows = [
+            row
+            for row in normalised
+            if row.get("x_sort") is None or (x_kind == "quantile" and row.get("x") == "Missing")
+        ]
+        normalised = [row for row in normalised if row not in missing_rows]
     if threshold_value <= 0 or len(normalised) < 3:
         return [glm_group_mapping_row(row, row) for row in [*normalised, *missing_rows]]
     if x_kind in {"integer", "numeric", "date", "datetime", "quantile"}:

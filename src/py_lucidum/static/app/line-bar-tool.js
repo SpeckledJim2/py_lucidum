@@ -83,6 +83,7 @@ export function createLineBarTool({
   const CATEGORICAL_AXIS_LABEL_PADDING = 8;
   const DATE_BUCKET_VALUES = new Set(["none", "hour", "day", "week", "month", "year"]);
   const EMPTY_PERIOD_VALUES = new Set(["show", "skip"]);
+  const MISSING_VALUES = new Set(["show", "hide"]);
   const RESPONSE_AXIS_PADDING = 0.08;
   const RESPONSE_AXIS_TARGET_INTERVALS = 15;
   const LINE_BAR_MAIN_LEGEND_TOP = 52;
@@ -209,6 +210,14 @@ export function createLineBarTool({
     const name = String(featureName || "");
     const targetSource = lineBarFeatureTargetSource(name);
     if (!targetSource) return false;
+    const existingIndex = isSelectedGrouping(name, targetSource, 0)
+      ? 0
+      : isSelectedGrouping(name, targetSource, 1) ? 1 : -1;
+    const targetMissings = existingIndex === 0
+      ? normaliseMissings(state.missings)
+      : existingIndex === 1
+        ? normaliseMissings(state.missings2)
+        : "show";
     state.source = targetSource;
     state.x = name;
     state.xSource = targetSource;
@@ -218,6 +227,8 @@ export function createLineBarTool({
     state.x2AsFactor = false;
     state.tailPercent = "0";
     state.tailPercent2 = "0";
+    state.missings = targetMissings;
+    state.missings2 = "show";
     state.bandFeature = null;
     state.bandFeature2 = null;
     state.bandSuggestionPendingKey2 = null;
@@ -388,6 +399,11 @@ export function createLineBarTool({
   function normaliseEmptyPeriods(value) {
     const mode = String(value || "show").toLowerCase();
     return EMPTY_PERIOD_VALUES.has(mode) ? mode : "show";
+  }
+
+  function normaliseMissings(value) {
+    const mode = String(value || "show").toLowerCase();
+    return MISSING_VALUES.has(mode) ? mode : "show";
   }
 
   function syncEmptyPeriodsControl() {
@@ -758,6 +774,16 @@ export function createLineBarTool({
       ? state.dateBucketSuggestionPendingKey === currentDateBucketFeatureKey()
       : state.dateBucketSuggestionPendingKey2 === currentSecondDateBucketFeatureKey();
     const controls = [];
+    const missingsKey = twoFeatureStateKey(index, "missings", "missings2");
+    const missings = normaliseMissings(state[missingsKey]);
+    controls.push(`
+      <div class="control two-feature-missings-control" data-feature-index="${index}">
+        <h3>Feature ${index + 1} missings</h3>
+        <div class="segmented">
+          <button type="button" data-two-control="missings" data-feature-index="${index}" data-value="show" class="${missings === "show" ? "active" : ""}">Show</button>
+          <button type="button" data-two-control="missings" data-feature-index="${index}" data-value="hide" class="${missings === "hide" ? "active" : ""}">Hide</button>
+        </div>
+      </div>`);
     if (numeric) {
       const display = bandPending ? "estimating..." : (Number(bandWidth) > 0 ? bandWidth : "auto off");
       controls.push(`
@@ -889,6 +915,8 @@ export function createLineBarTool({
     el("bandControl").classList.toggle("hidden", !isNumeric);
     el("quantileControl").classList.toggle("hidden", !isNumeric);
     syncSegmented("lowGroup", state.lowGroup);
+    state.missings = normaliseMissings(state.missings);
+    syncSegmented("missings", state.missings);
     syncSegmented("labels", state.labels);
     syncSegmented("transform", state.transform);
     syncSegmented("sigma", state.sigma);
@@ -1382,6 +1410,7 @@ export function createLineBarTool({
     state.dateBucketManualKey2 = null;
     state.dateBucketSuggestionPendingKey2 = null;
     state.tailPercent2 = "0";
+    state.missings2 = "show";
   }
 
   function syncFeatureSwapButton() {
@@ -1420,6 +1449,7 @@ export function createLineBarTool({
       ["dateBucket", "dateBucket2"],
       ["xAsFactor", "x2AsFactor"],
       ["tailPercent", "tailPercent2"],
+      ["missings", "missings2"],
       ["bandFeature", "bandFeature2"],
       ["dateBucketFeature", "dateBucketFeature2"],
       ["dateBucketManualKey", "dateBucketManualKey2"],
@@ -1440,6 +1470,7 @@ export function createLineBarTool({
     state.dateBucket = state.dateBucket2;
     state.xAsFactor = Boolean(state.x2AsFactor);
     state.tailPercent = state.tailPercent2;
+    state.missings = normaliseMissings(state.missings2);
     state.bandFeature = state.bandFeature2;
     state.bandSuggestionPendingKey = null;
     state.dateBucketFeature = state.dateBucketFeature2;
@@ -1469,6 +1500,7 @@ export function createLineBarTool({
         state.dateBucket2 = "none";
         state.x2AsFactor = false;
         state.tailPercent2 = "0";
+        state.missings2 = "show";
         state.bandFeature2 = null;
         state.bandSuggestionPendingKey2 = null;
         state.dateBucketFeature2 = null;
@@ -1496,6 +1528,7 @@ export function createLineBarTool({
       state.xSource = sourceId;
       state.xAsFactor = false;
       state.tailPercent = "0";
+      state.missings = "show";
       resetDateBucketSuggestionIfKeyChanged(previousDateBucketKey);
     }
     state.tablePage = 1;
@@ -1587,6 +1620,7 @@ export function createLineBarTool({
       dateBucket: date ? (index === 0 ? state.dateBucket : state.dateBucket2) : "none",
       asFactor: factorOverrideSupported ? Boolean(index === 0 ? state.xAsFactor : state.x2AsFactor) : false,
       tailPercent: Number(state[twoFeatureStateKey(index, "tailPercent", "tailPercent2")]) || 0,
+      missings: normaliseMissings(state[twoFeatureStateKey(index, "missings", "missings2")]),
     };
   }
 
@@ -1700,6 +1734,7 @@ export function createLineBarTool({
       quantileMode: isNumeric ? state.quantileMode : "off",
       dateBucket: isDate ? state.dateBucket : "none",
       emptyPeriods: normaliseEmptyPeriods(state.emptyPeriods),
+      missings: normaliseMissings(state.missings),
       transform: state.transform,
       partialDependence: { mode: selectedPartialDependenceMode() },
       base: selectedFeatureBase(),
@@ -1799,7 +1834,9 @@ export function createLineBarTool({
   }
 
   function lineBarChartReady(target = el("chart")) {
-    return state.view === "chart" && isEchartsTargetReady(target);
+    return state.view === "chart"
+      && !target?.classList.contains("hidden")
+      && isEchartsTargetReady(target);
   }
 
   function queueChartRender(data, options = {}, requestSeq = state.chartRequestSeq) {
@@ -2109,6 +2146,7 @@ export function createLineBarTool({
       formatActual: chartResponseFormatter("none"),
       formatWeight: formatWeightValue,
       formatDateGroupValue: formatTwoFeatureDateCoordinate,
+      missingBarColor: getCss("--missing-bar"),
     };
     if (data.plot_type === "heatmap" && xAxisPresentation) {
       const yAxisLabels = sortedTwoFeatureFactorValues(data, 0).map((item) => item.label);
@@ -3157,8 +3195,14 @@ export function createLineBarTool({
   }
 
   function weightBarColor(data, row) {
+    if (isMissingGroupLabel(row?.x)) return getCss("--missing-bar");
     if (row?.is_tail) return getCss("--tail");
     return isBaseWeightBar(data, row) ? getCss("--base-bar") : getCss("--bar");
+  }
+
+  function isMissingGroupLabel(value) {
+    const label = String(value ?? "").trim().toLowerCase();
+    return label === "missing" || label === "(missing)";
   }
 
   function upliftBaselineSeries(data, transform = state.transform) {
@@ -4335,6 +4379,9 @@ export function createLineBarTool({
     if (control === "tailPercent") {
       const tailKey = twoFeatureStateKey(index, "tailPercent", "tailPercent2");
       state[tailKey] = button.dataset.value || "0";
+    } else if (control === "missings") {
+      const missingsKey = twoFeatureStateKey(index, "missings", "missings2");
+      state[missingsKey] = normaliseMissings(button.dataset.value);
     } else if (action === "as-factor") {
       const key = twoFeatureStateKey(index, "xAsFactor", "x2AsFactor");
       state[key] = !state[key];
@@ -4429,7 +4476,7 @@ export function createLineBarTool({
     }
     bindSettingsStripOverflowCue(el("lineBarToolbar"));
     el("lineBarTwoFeatureControls")?.addEventListener("click", handleTwoFeatureControlClick);
-    const lineBarControls = new Set(["sort", "lowGroup", "labels", "bandWidth", "quantileMode", "dateBucket", "emptyPeriods", "transform", "sigma", "partialDependence", "featureSort", "expectedSort"]);
+    const lineBarControls = new Set(["sort", "lowGroup", "missings", "labels", "bandWidth", "quantileMode", "dateBucket", "emptyPeriods", "transform", "sigma", "partialDependence", "featureSort", "expectedSort"]);
     document.querySelectorAll(".segmented").forEach((group) => {
       if (!lineBarControls.has(group.dataset.control)) return;
       group.addEventListener("click", (event) => {
@@ -4496,6 +4543,13 @@ export function createLineBarTool({
         }
         if (group.dataset.control === "emptyPeriods") {
           syncEmptyPeriodsControl();
+        }
+        if (group.dataset.control === "missings") {
+          state.missings = normaliseMissings(state.missings);
+          state.tablePage = 1;
+          syncSegmented("missings", state.missings);
+          refreshGroupingData({ force: true });
+          return;
         }
         if (group.dataset.control === "partialDependence") {
           updateAxisControls();

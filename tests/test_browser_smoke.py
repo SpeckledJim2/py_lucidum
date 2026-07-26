@@ -5798,6 +5798,155 @@ class BrowserSmokeTests(unittest.TestCase):
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_line_bar_missing_control_filters_chart_and_table_without_changing_sidebar_totals(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "line_bar_missings.csv"
+            data_path.write_text(
+                "numeric,factor,actual,weight\n"
+                ",A,1000,20\n"
+                "0,A,720,72\n"
+                "1,B,20,2\n"
+                "2,B,20,2\n"
+                "3,C,20,2\n"
+                "4,C,20,2\n",
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                use_features=False,
+                defaults={
+                    "x": "numeric",
+                    "actual": "actual",
+                    "denominator": "weight",
+                },
+                tools=["line_bar"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1440, "height": 900})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                    page.locator("#lineBarToolbarToggleBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#lineBarToolbarToggleBtn")
+                          ?.getAttribute("aria-expanded") === "true"
+                          && document.querySelector(
+                            '.segmented[data-control="missings"] [data-value="show"]'
+                          )?.classList.contains("active")
+                          && Boolean(document.querySelector("#actualMetricTitle .metric-value"))
+                          && Boolean(document.querySelector("#weightMetricTitle .metric-value"))
+                        """,
+                        timeout=10_000,
+                    )
+
+                    initial = page.evaluate(
+                        """
+                        () => {
+                          const option = echarts.getInstanceByDom(document.querySelector("#chart"))
+                            ?.getOption();
+                          const labels = option?.xAxis?.[0]?.data || [];
+                          const bar = (option?.series || []).find((series) => series.type === "bar");
+                          const missingIndex = labels.indexOf("(missing)");
+                          return {
+                            labels,
+                            missingColor: bar?.data?.[missingIndex]?.itemStyle?.color || "",
+                            normalColor: bar?.data?.find(
+                              (_item, index) => index !== missingIndex
+                            )?.itemStyle?.color || "",
+                            actualSidebar: document.querySelector(
+                              "#actualMetricTitle .metric-value"
+                            )?.textContent.trim() || "",
+                            weightSidebar: document.querySelector(
+                              "#weightMetricTitle .metric-value"
+                            )?.textContent.trim() || "",
+                          };
+                        }
+                        """
+                    )
+                    self.assertIn("(missing)", initial["labels"])
+                    self.assertEqual(initial["missingColor"].lower(), "#d9dee7")
+                    self.assertNotEqual(initial["missingColor"], initial["normalColor"])
+
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                        timeout=10_000,
+                    ) as hidden_chart_response:
+                        page.locator(
+                            '.segmented[data-control="missings"] [data-value="hide"]'
+                        ).click()
+                    hidden_chart_response.value.finished()
+                    hidden_chart_payload = hidden_chart_response.value.json()
+                    self.assertEqual(hidden_chart_response.value.request.post_data_json["missings"], "hide")
+                    self.assertEqual(hidden_chart_payload["filtered_row_count"], 5)
+                    self.assertNotIn("(missing)", {row["x"] for row in hidden_chart_payload["rows"]})
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const option = echarts.getInstanceByDom(document.querySelector("#chart"))
+                            ?.getOption();
+                          return document.querySelector(
+                              '.segmented[data-control="missings"] [data-value="hide"]'
+                            )?.classList.contains("active")
+                            && !(option?.xAxis?.[0]?.data || []).includes("(missing)")
+                            && (document.querySelector("#lineBarGroupMeta")?.textContent || "")
+                              .includes("5 / 6 rows");
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    hidden_sidebar = page.evaluate(
+                        """
+                        () => ({
+                          actual: document.querySelector(
+                            "#actualMetricTitle .metric-value"
+                          )?.textContent.trim() || "",
+                          weight: document.querySelector(
+                            "#weightMetricTitle .metric-value"
+                          )?.textContent.trim() || "",
+                        })
+                        """
+                    )
+                    self.assertEqual(hidden_sidebar["actual"], initial["actualSidebar"])
+                    self.assertEqual(hidden_sidebar["weight"], initial["weightSidebar"])
+
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/line-bar/table") and response.status == 200,
+                        timeout=10_000,
+                    ) as hidden_table_response:
+                        page.locator("#tableTab").click()
+                    hidden_table_response.value.finished()
+                    hidden_table_payload = hidden_table_response.value.json()
+                    self.assertEqual(hidden_table_response.value.request.post_data_json["missings"], "hide")
+                    self.assertEqual(hidden_table_payload["summary"]["row_count"], 5)
+                    self.assertEqual(hidden_table_payload["summary"]["volume"], 80)
+                    self.assertNotIn("(missing)", {row["x"] for row in hidden_table_payload["rows"]})
+
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/line-bar/table") and response.status == 200,
+                        timeout=10_000,
+                    ) as shown_table_response:
+                        page.locator(
+                            '.segmented[data-control="missings"] [data-value="show"]'
+                        ).click()
+                    shown_table_response.value.finished()
+                    shown_table_payload = shown_table_response.value.json()
+                    self.assertEqual(shown_table_response.value.request.post_data_json["missings"], "show")
+                    self.assertEqual(shown_table_payload["summary"]["row_count"], 6)
+                    self.assertEqual(shown_table_payload["summary"]["volume"], 100)
+                    self.assertIn("(missing)", {row["x"] for row in shown_table_payload["rows"]})
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_line_bar_two_feature_grouping_controls_charts_table_and_favourite(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
@@ -5957,6 +6106,13 @@ class BrowserSmokeTests(unittest.TestCase):
                           tailHeadings: [...document.querySelectorAll(
                             "#lineBarTwoFeatureControls .two-feature-tail-control h3"
                           )].map((heading) => heading.textContent.trim()),
+                          missingValues: [0, 1].map((index) => document.querySelector(
+                            '#lineBarTwoFeatureControls [data-two-control="missings"]'
+                            + `[data-feature-index="${index}"].active`
+                          )?.dataset.value),
+                          missingHeadings: [...document.querySelectorAll(
+                            "#lineBarTwoFeatureControls .two-feature-missings-control h3"
+                          )].map((heading) => heading.textContent.trim()),
                           series: echarts.getInstanceByDom(document.querySelector("#chart"))
                             ?.getOption()?.series?.map((item) => ({
                               name: item.name,
@@ -6018,6 +6174,11 @@ class BrowserSmokeTests(unittest.TestCase):
                     self.assertEqual(
                         picker_state["tailHeadings"],
                         ["Feature 1 tail grouping", "Feature 2 tail grouping"],
+                    )
+                    self.assertEqual(picker_state["missingValues"], ["show", "show"])
+                    self.assertEqual(
+                        picker_state["missingHeadings"],
+                        ["Feature 1 missings", "Feature 2 missings"],
                     )
                     self.assertEqual(
                         [(item["name"], item["type"]) for item in picker_state["series"]],
@@ -6536,6 +6697,22 @@ class BrowserSmokeTests(unittest.TestCase):
                         """,
                         timeout=10_000,
                     )
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                        timeout=10_000,
+                    ) as hide_second_missings_response:
+                        page.locator(
+                            '#lineBarTwoFeatureControls [data-two-control="missings"]'
+                            '[data-feature-index="1"][data-value="hide"]'
+                        ).click()
+                    hide_second_missings_response.value.finished()
+                    self.assertEqual(
+                        [
+                            grouping["missings"]
+                            for grouping in hide_second_missings_response.value.request.post_data_json["groupings"]
+                        ],
+                        ["show", "hide"],
+                    )
                     surface_bands_before_swap = page.evaluate(
                         """
                         () => [0, 1].map((index) => document.querySelector(
@@ -6552,7 +6729,16 @@ class BrowserSmokeTests(unittest.TestCase):
                         )?.dataset.value)
                         """
                     )
+                    surface_missings_before_swap = page.evaluate(
+                        """
+                        () => [0, 1].map((index) => document.querySelector(
+                          `#lineBarTwoFeatureControls [data-two-control="missings"]`
+                          + `[data-feature-index="${index}"].active`
+                        )?.dataset.value)
+                        """
+                    )
                     self.assertEqual(surface_tails_before_swap, ["0", "2"])
+                    self.assertEqual(surface_missings_before_swap, ["show", "hide"])
                     surface_domains = page.evaluate(
                         """
                         () => {
@@ -6676,6 +6862,10 @@ class BrowserSmokeTests(unittest.TestCase):
                             `#lineBarTwoFeatureControls [data-two-control="tailPercent"]`
                             + `[data-feature-index="${index}"].active`
                           )?.dataset.value),
+                          missings: [0, 1].map((index) => document.querySelector(
+                            `#lineBarTwoFeatureControls [data-two-control="missings"]`
+                            + `[data-feature-index="${index}"].active`
+                          )?.dataset.value),
                           chartRequests: performance.getEntriesByType("resource")
                             .filter((entry) => new URL(entry.name).pathname === "/api/chart").length,
                         })
@@ -6688,6 +6878,10 @@ class BrowserSmokeTests(unittest.TestCase):
                     self.assertEqual(
                         surface_swap_state["tails"],
                         list(reversed(surface_tails_before_swap)),
+                    )
+                    self.assertEqual(
+                        surface_swap_state["missings"],
+                        list(reversed(surface_missings_before_swap)),
                     )
                     self.assertEqual(surface_swap_state["chartRequests"], 1)
                     with page.expect_response(
@@ -6727,6 +6921,10 @@ class BrowserSmokeTests(unittest.TestCase):
                         [grouping["tailPercent"] for grouping in saved_view["groupings"]],
                         ["0", "2"],
                     )
+                    self.assertEqual(
+                        [grouping["missings"] for grouping in saved_view["groupings"]],
+                        ["show", "hide"],
+                    )
                     self.assertEqual(saved_view["tailPercent"], "0")
                     self.assertEqual(saved_view["plotMetric"], "volume")
                     self.assertEqual(saved_view["heatmapLabels"], "both")
@@ -6756,6 +6954,11 @@ class BrowserSmokeTests(unittest.TestCase):
                           && document.querySelector(
                             '#lineBarTwoFeatureControls [data-two-control="tailPercent"]'
                             + '[data-feature-index="1"][data-value="2"]'
+                          )
+                            ?.classList.contains("active")
+                          && document.querySelector(
+                            '#lineBarTwoFeatureControls [data-two-control="missings"]'
+                            + '[data-feature-index="1"][data-value="hide"]'
                           )
                             ?.classList.contains("active")
                           && !document.querySelector("#lineBarSwapFeaturesBtn")?.hidden

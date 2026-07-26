@@ -25,6 +25,7 @@ GBM_SOURCE_RE = re.compile(r"^gbm:[A-Za-z0-9_.-]+:predictions$")
 RATIO_SOURCE_RE = re.compile(r"^model_ratio:gbm_to_glm_ratio:[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+$")
 EMPTY_PERIOD_VALUES = {"show", "skip"}
 HEATMAP_LABEL_VALUES = {"none", "actual", "weight", "both"}
+MISSING_VALUES = {"show", "hide"}
 
 
 class LineBarFavouriteError(ValueError):
@@ -464,6 +465,7 @@ def normalise_favourite_view(view: dict[str, Any]) -> dict[str, Any]:
                     "dateBucket": str(payload.get("dateBucket") or "none"),
                     "asFactor": False,
                     "tailPercent": legacy_tail_percent,
+                    "missings": "show",
                 }
             ]
         else:
@@ -480,6 +482,11 @@ def normalise_favourite_view(view: dict[str, Any]) -> dict[str, Any]:
                         if item.get("tailPercent") is not None
                         and str(item.get("tailPercent")).strip()
                         else legacy_tail_percent
+                    ),
+                    "missings": (
+                        str(item.get("missings") or "show").strip().lower()
+                        if str(item.get("missings") or "show").strip().lower() in MISSING_VALUES
+                        else "show"
                     ),
                 }
                 for item in groupings[:2]

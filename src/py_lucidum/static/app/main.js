@@ -129,6 +129,8 @@
         x2AsFactor: false,
         tailPercent: "0",
         tailPercent2: "0",
+        missings: "show",
+        missings2: "show",
         twoFeaturePlotMetric: "resp0",
         heatmapLabels: "none",
         previousBandWidthsByFeature: {},
@@ -1118,7 +1120,10 @@
           }
         }
         const currentFirstGrouping = `${state.xSource || ""}\u0000${state.x || ""}`;
-        if (currentFirstGrouping !== previousFirstGrouping) state.tailPercent = "0";
+        if (currentFirstGrouping !== previousFirstGrouping) {
+          state.tailPercent = "0";
+          state.missings = "show";
+        }
         const secondValid = lineBarColumnExists(state.x2, state.x2Source);
         const duplicate = String(state.x2 || "") === String(state.x || "")
           && String(state.x2Source || "") === String(state.xSource || "");
@@ -1126,6 +1131,7 @@
           state.x2 = null;
           state.x2Source = "";
           state.tailPercent2 = "0";
+          state.missings2 = "show";
         }
       }
 
@@ -4128,6 +4134,7 @@
               dateBucket: state.dateBucket,
               asFactor: Boolean(state.xAsFactor),
               tailPercent: state.tailPercent,
+              missings: state.missings === "hide" ? "hide" : "show",
             },
             ...(state.x2 ? [{
               feature: state.x2,
@@ -4137,6 +4144,7 @@
               dateBucket: state.dateBucket2,
               asFactor: Boolean(state.x2AsFactor),
               tailPercent: state.tailPercent2,
+              missings: state.missings2 === "hide" ? "hide" : "show",
             }] : []),
           ],
           tailPercent: state.tailPercent,
@@ -4253,6 +4261,8 @@
         state.tailPercent2 = state.x2
           ? String(secondGrouping?.tailPercent ?? legacyTailPercent)
           : "0";
+        state.missings = firstGrouping.missings === "hide" ? "hide" : "show";
+        state.missings2 = state.x2 && secondGrouping?.missings === "hide" ? "hide" : "show";
         state.twoFeaturePlotMetric = String(view.plotMetric || "resp0");
         state.heatmapLabels = ["actual", "weight", "both"].includes(String(view.heatmapLabels || "").toLowerCase())
           ? String(view.heatmapLabels).toLowerCase()
@@ -4303,10 +4313,15 @@
         if (options.refresh !== false) {
           beginFavouriteViewRestore();
           lineBarTool.showPendingRestore(state.view);
-          const data = state.view === "table"
-            ? await lineBarTool.refreshTable({ force: true, forceServer: true })
-            : await refreshLineBar({ force: true });
-          syncSidebarSummariesFromToolData(data);
+          if (state.view === "table") {
+            await lineBarTool.refreshTable({ force: true, forceServer: true });
+          } else {
+            await refreshLineBar({ force: true });
+          }
+          await Promise.all([
+            refreshMetricSummary({ force: true }),
+            refreshFilterRowCountMeta(),
+          ]);
         } else {
           lineBarTool.setView(state.view, { refresh: false });
         }
@@ -4328,6 +4343,8 @@
         state.x2Source = "";
         state.tailPercent = "0";
         state.tailPercent2 = "0";
+        state.missings = "show";
+        state.missings2 = "show";
         fillMetricSelect(el("actualNumerator"));
         fillMetricSelect(el("expectedNumerator"), true);
         fillDenominatorSelect(el("denominator"));

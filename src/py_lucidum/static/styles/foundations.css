@@ -20,6 +20,7 @@
         --accent: #2276d2;
         --accent-2: #12a8c7;
         --bar: #bfeefa;
+        --missing-bar: #d9dee7;
         --base-bar: #4fb6d2;
         --tail: #72c7df;
         --danger: #b42318;
@@ -67,6 +68,7 @@
         --accent: #72b7ff;
         --accent-2: #2dd4bf;
         --bar: #245b73;
+        --missing-bar: #667085;
         --base-bar: #58bfdc;
         --tail: #3b91ad;
         --danger: #fca5a5;

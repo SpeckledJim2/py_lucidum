@@ -183,6 +183,14 @@ def build_result(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("Choose two different grouping features")
 
     filter_sql = dataset.normalise_filter_for_relation(request.get("filter"), relation)
+    effective_filter_sql = line_bar_query.line_bar_analysis_filter(
+        filter_sql,
+        [
+            str(grouping["feature"])
+            for grouping in groupings
+            if grouping["missings"] == "hide"
+        ],
+    )
     responses = line_bar_query.normalise_responses(request.get("responses"), columns)
     denominator = normalise_denominator(request.get("denominator", request.get("weight")), columns)
     denominator_source = normalise_denominator_source(
@@ -195,21 +203,21 @@ def build_result(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
         groupings=groupings,
         responses=responses,
         denominator=denominator,
-        filter_sql=filter_sql,
+        filter_sql=effective_filter_sql,
     )
     denominator_summary = line_bar_query.relation_denominator_summary(
         dataset,
         relation,
         responses,
         denominator,
-        filter_sql,
+        effective_filter_sql,
     )
     response_summaries = line_bar_query.relation_response_summary(
         dataset,
         relation,
         responses,
         denominator,
-        filter_sql,
+        effective_filter_sql,
     )
     return {
         "source_id": context["source_id"],
@@ -218,8 +226,9 @@ def build_result(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
         "plot_type": plot_type(groupings),
         "tail_percent": groupings[0]["tail_percent"],
         "row_count": context["row_count"],
-        "filtered_row_count": line_bar_query.relation_row_count(dataset, relation, filter_sql),
+        "filtered_row_count": line_bar_query.relation_row_count(dataset, relation, effective_filter_sql),
         "filter_sql": filter_sql,
+        "effective_filter_sql": effective_filter_sql,
         "responses": responses,
         "denominator": denominator,
         "denominator_source": denominator_source,
@@ -321,6 +330,8 @@ def normalise_grouping(
     index: int,
     legacy_tail_percent: float,
 ) -> dict[str, Any]:
+    from . import query as line_bar_query
+
     item = raw if isinstance(raw, dict) else {}
     feature = str(item.get("feature") or "").strip()
     column = columns.get(feature)
@@ -355,6 +366,7 @@ def normalise_grouping(
         "as_factor": as_factor,
         "continuous": continuous,
         "tail_percent": tail_percent,
+        "missings": line_bar_query.normalise_missings(item.get("missings")),
     }
 
 

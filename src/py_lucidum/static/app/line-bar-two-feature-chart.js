@@ -187,6 +187,9 @@ function linesOption(data, metric, options) {
   const series = [];
   groupEntries.forEach(([name, values], index) => {
     const color = LINE_COLORS[index % LINE_COLORS.length];
+    const barColor = isMissingGroupLabel(name)
+      ? (options.missingBarColor || "#d9dee7")
+      : color;
     series.push({
       name,
       type: "line",
@@ -208,8 +211,8 @@ function linesOption(data, metric, options) {
       data: values.volume,
       animation: false,
       barMaxWidth: 28,
-      itemStyle: { color, opacity: 0.34 },
-      emphasis: { itemStyle: { color, opacity: 0.54 } },
+      itemStyle: { color: barColor, opacity: 0.34 },
+      emphasis: { itemStyle: { color: barColor, opacity: 0.54 } },
     });
   });
   return {
@@ -269,6 +272,11 @@ function linesOption(data, metric, options) {
       : [],
     series,
   };
+}
+
+function isMissingGroupLabel(value) {
+  const label = String(value ?? "").trim().toLowerCase();
+  return label === "missing" || label === "(missing)";
 }
 
 function heatmapOption(data, metric, options) {

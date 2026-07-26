@@ -22,6 +22,7 @@ from py_lucidum.query import Dataset as LegacyDataset
 from py_lucidum.query import build_x_sql
 from py_lucidum.tools.gbm.sources import GbmSourceProvider
 from py_lucidum.tools.gbm.store import GbmModelStore
+from py_lucidum.tools.glm import overlay as glm_overlay
 from py_lucidum.tools.glm.store import GlmModelStore, GlmSourceProvider
 from py_lucidum.tools.glm.training import MissingGlmDependency, glm_dependencies, train_model
 from py_lucidum.tools.line_bar import query as line_bar_query
@@ -719,6 +720,7 @@ COPY (
                     "dateBucket": "none",
                     "asFactor": False,
                     "tailPercent": "0",
+                    "missings": "show",
                 }
             ],
         )
@@ -739,6 +741,7 @@ COPY (
                         "dateBucket": "none",
                         "asFactor": True,
                         "tailPercent": "1",
+                        "missings": "hide",
                     },
                     {
                         "feature": "QuoteDate",
@@ -764,6 +767,8 @@ COPY (
         self.assertFalse(two_feature["view"]["groupings"][1]["asFactor"])
         self.assertEqual(two_feature["view"]["groupings"][0]["tailPercent"], "1")
         self.assertEqual(two_feature["view"]["groupings"][1]["tailPercent"], "2")
+        self.assertEqual(two_feature["view"]["groupings"][0]["missings"], "hide")
+        self.assertEqual(two_feature["view"]["groupings"][1]["missings"], "show")
         self.assertEqual(two_feature["view"]["tailPercent"], "1")
         self.assertEqual(two_feature["view"]["plotMetric"], "volume")
         self.assertEqual(two_feature["view"]["heatmapLabels"], "both")
@@ -1415,6 +1420,176 @@ COPY (
         self.assertTrue(by_x["Other"]["is_tail"])
         self.assertEqual(payload["summary"]["row_count"], 5)
         self.assertEqual(payload["summary"]["volume"], 8)
+
+    def test_line_bar_ordered_tail_grouping_keeps_large_missing_bucket_separate(self) -> None:
+        data_path = self.root / "ordered_tail_with_missing.csv"
+        data_path.write_text(
+            "Numeric,Actual,Weight\n"
+            ",1000,20\n"
+            "0,710,71\n"
+            "1,20,2\n"
+            "2,20,2\n"
+            "3,20,2\n"
+            "4,30,3\n",
+            encoding="utf-8",
+        )
+        dataset = Dataset(data_path)
+        request = {
+            **self.request(),
+            "x": "Numeric",
+            "bandWidth": "1",
+            "lowGroup": "10%",
+            "denominator": "Weight",
+            "responses": [{"label": "Actual", "numerator": "Actual"}],
+            "missings": "invalid",
+        }
+
+        shown = chart(dataset, request)
+        shown_by_x = {row["x"]: row for row in shown["rows"]}
+
+        self.assertEqual(shown["missings"], "show")
+        self.assertEqual(shown["filtered_row_count"], 6)
+        self.assertEqual(shown["group_count"], 3)
+        self.assertIn("(missing)", shown_by_x)
+        self.assertIn("High tail", shown_by_x)
+        self.assertEqual(shown_by_x["(missing)"]["volume"], 20)
+        self.assertEqual(shown_by_x["High tail"]["volume"], 9)
+        self.assertTrue(shown_by_x["High tail"]["is_tail"])
+        self.assertEqual(shown["denominator"]["value"], 100)
+        self.assertEqual(shown["response_summaries"][0]["value"], 18)
+
+        hidden = chart(dataset, {**request, "missings": "hide", "transform": "zero"})
+        hidden_by_x = {row["x"]: row for row in hidden["rows"]}
+
+        self.assertEqual(hidden["missings"], "hide")
+        self.assertEqual(hidden["row_count"], 6)
+        self.assertEqual(hidden["filtered_row_count"], 5)
+        self.assertNotIn("(missing)", hidden_by_x)
+        self.assertIn("High tail", hidden_by_x)
+        self.assertEqual(hidden_by_x["High tail"]["volume"], 7)
+        self.assertEqual(hidden["denominator"]["value"], 80)
+        self.assertEqual(hidden["response_summaries"][0]["value"], 10)
+        self.assertEqual(hidden["transform"]["values"], [10])
+
+        hidden_table = table(
+            dataset,
+            {
+                **request,
+                "missings": "hide",
+                "transform": "none",
+                "tablePage": 1,
+                "tablePageSize": 1,
+            },
+        )
+        self.assertEqual(hidden_table["table"]["group_count"], 3)
+        self.assertEqual(hidden_table["table"]["page_count"], 3)
+        self.assertEqual(hidden_table["summary"]["row_count"], 5)
+        self.assertEqual(hidden_table["summary"]["volume"], 80)
+        self.assertEqual(hidden_table["summary"]["responses"], [10])
+
+        missing_search = table(
+            dataset,
+            {
+                **request,
+                "missings": "hide",
+                "tableSearch": "missing",
+                "tablePage": 1,
+                "tablePageSize": 10,
+            },
+        )
+        self.assertEqual(missing_search["rows"], [])
+        self.assertEqual(missing_search["table"]["match_count"], 0)
+        self.assertEqual(missing_search["table"]["group_count"], 3)
+
+        with patch(
+            "py_lucidum.tools.line_bar.query.build_partial_dependence_overlay",
+            return_value=None,
+        ) as overlay:
+            chart(dataset, {**request, "missings": "hide"})
+        overlay_filter = overlay.call_args.args[1]["filter"]
+        self.assertIn('"Numeric" IS NOT NULL', overlay_filter)
+
+    def test_line_bar_hide_missings_applies_to_numeric_quantile_date_and_categorical_groups(self) -> None:
+        data_path = self.root / "missing_grouping_kinds.parquet"
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"""
+COPY (
+  SELECT *
+  FROM (VALUES
+    (1.0, DATE '2024-01-01', 'A', 10.0),
+    (2.0, DATE '2024-01-02', 'B', 20.0),
+    (NULL, NULL, NULL, 300.0)
+  ) AS rows(Numeric, EventDate, Category, Actual)
+) TO '{data_path.as_posix()}' (FORMAT PARQUET)
+"""
+            )
+        finally:
+            con.close()
+        dataset = Dataset(data_path)
+        cases = [
+            ("numeric", "Numeric", "off", "none", "1"),
+            ("quantile", "Numeric", "quantile", "none", "2"),
+            ("date", "EventDate", "off", "day", "0"),
+            ("categorical", "Category", "off", "none", "0"),
+        ]
+
+        for label, feature, quantile_mode, date_bucket, band_width in cases:
+            with self.subTest(label=label):
+                request = {
+                    **self.request(),
+                    "x": feature,
+                    "bandWidth": band_width,
+                    "quantileMode": quantile_mode,
+                    "dateBucket": date_bucket,
+                    "denominator": "__none__",
+                    "responses": [{"label": "Actual", "numerator": "Actual"}],
+                    "missings": "hide",
+                }
+                payload = chart(dataset, request)
+                self.assertEqual(payload["missings"], "hide")
+                self.assertEqual(payload["row_count"], 3)
+                self.assertEqual(payload["filtered_row_count"], 2)
+                self.assertEqual(sum(row["row_count"] for row in payload["rows"]), 2)
+                self.assertNotIn("(missing)", {row["x"] for row in payload["rows"]})
+                self.assertNotIn("Missing", {row["x"] for row in payload["rows"]})
+                self.assertEqual(payload["denominator"]["value"], 2)
+                self.assertEqual(payload["response_summaries"][0]["value"], 15)
+
+    def test_ordered_overlay_tail_mappings_ignore_missing_groups(self) -> None:
+        for x_kind in ("integer", "numeric", "date", "datetime", "quantile"):
+            with self.subTest(x_kind=x_kind):
+                prefix = "Q" if x_kind == "quantile" else ""
+                rows = [
+                    {
+                        "x": "Missing" if x_kind == "quantile" else "(missing)",
+                        "x_sort": 1_000_001 if x_kind == "quantile" else None,
+                        "original_order": 0,
+                        "volume": 20,
+                    },
+                    *[
+                        {
+                            "x": f"{prefix}{index}",
+                            "x_sort": index,
+                            "original_order": index,
+                            "volume": 72 if index == 0 else 2,
+                        }
+                        for index in range(5)
+                    ],
+                ]
+
+                for mapping in (
+                    line_bar_query.partial_low_weight_group_mapping(rows, x_kind, "10%"),
+                    glm_overlay.glm_low_weight_group_mapping(rows, x_kind, "10%"),
+                ):
+                    by_source = {row["source_x"]: row for row in mapping}
+                    missing_label = "Missing" if x_kind == "quantile" else "(missing)"
+                    self.assertEqual(by_source[missing_label]["final_x"], missing_label)
+                    self.assertFalse(by_source[missing_label]["final_is_tail"])
+                    for index in range(1, 5):
+                        self.assertEqual(by_source[f"{prefix}{index}"]["final_x"], "High tail")
+                        self.assertTrue(by_source[f"{prefix}{index}"]["final_is_tail"])
 
     def test_schema_exposes_feature_bases_from_feature_spec(self) -> None:
         self.features_path.write_text(
@@ -3251,6 +3426,7 @@ COPY (
                     "quantileMode": "off",
                     "dateBucket": "none",
                     "asFactor": True,
+                    "missings": "hide",
                 }
             ],
         }
@@ -3259,6 +3435,7 @@ COPY (
         grouped = chart(dataset, grouping_request)
 
         self.assertEqual(grouped["x"], "UseofVan")
+        self.assertEqual(grouped["missings"], "hide")
         self.assertEqual(grouped["rows"], legacy["rows"])
         self.assertNotIn("groupings", grouped)
 
@@ -3819,16 +3996,18 @@ COPY (
     def test_two_feature_chart_keeps_missing_factor_groups_and_warns_for_missing_continuous_values(self) -> None:
         data_path = self.root / "two_feature_missing.csv"
         data_path.write_text(
-            "Numeric,Factor,Actual\n"
-            "1,A,10\n"
-            ",A,20\n"
-            "2,,30\n",
+            "Numeric,Factor,Actual,Weight\n"
+            "1,A,10,1\n"
+            ",A,20,2\n"
+            "2,,30,3\n"
+            ",,40,4\n",
             encoding="utf-8",
         )
         dataset = Dataset(data_path)
         request = {
             **self.two_feature_request(),
             "responses": [{"label": "Actual", "numerator": "Actual"}],
+            "denominator": "Weight",
             "groupings": [
                 {
                     "feature": "Numeric",
@@ -3855,9 +4034,62 @@ COPY (
         self.assertEqual(chart_payload["plot_type"], "lines")
         self.assertIn("(missing)", {row["group1"] for row in chart_payload["rows"]})
         self.assertTrue(any(row["group0_missing"] for row in chart_payload["rows"]))
-        self.assertIn("omitted 1 rows with missing values", " ".join(chart_payload["warnings"]))
-        self.assertEqual(table_payload["table"]["group_count"], 3)
+        self.assertIn("omitted 2 rows with missing values", " ".join(chart_payload["warnings"]))
+        self.assertEqual(chart_payload["filtered_row_count"], 4)
+        self.assertEqual([grouping["missings"] for grouping in chart_payload["groupings"]], ["show", "show"])
+        self.assertEqual(table_payload["table"]["group_count"], 4)
         self.assertTrue(any(row["group0_missing"] for row in table_payload["rows"]))
+
+        hide_first_request = {
+            **request,
+            "groupings": [
+                {**request["groupings"][0], "missings": "hide"},
+                {**request["groupings"][1], "missings": "show"},
+            ],
+        }
+        hide_first = chart(dataset, hide_first_request)
+        self.assertEqual(hide_first["filtered_row_count"], 2)
+        self.assertEqual(hide_first["denominator"]["value"], 4)
+        self.assertFalse(any(row["group0_missing"] for row in hide_first["rows"]))
+        self.assertIn("(missing)", {row["group1"] for row in hide_first["rows"]})
+        self.assertNotIn("omitted", " ".join(hide_first["warnings"]))
+
+        hide_second_request = {
+            **request,
+            "groupings": [
+                {**request["groupings"][0], "missings": "show"},
+                {**request["groupings"][1], "missings": "hide"},
+            ],
+        }
+        hide_second = chart(dataset, hide_second_request)
+        self.assertEqual(hide_second["filtered_row_count"], 2)
+        self.assertEqual(hide_second["denominator"]["value"], 3)
+        self.assertTrue(any(row["group0_missing"] for row in hide_second["rows"]))
+        self.assertNotIn("(missing)", {row["group1"] for row in hide_second["rows"]})
+        self.assertIn("omitted 1 rows with missing values", " ".join(hide_second["warnings"]))
+
+        hide_both_request = {
+            **request,
+            "groupings": [
+                {**request["groupings"][0], "missings": "hide"},
+                {**request["groupings"][1], "missings": "hide"},
+            ],
+        }
+        hide_both = chart(dataset, hide_both_request)
+        hide_both_table = table(
+            dataset,
+            {
+                **hide_both_request,
+                "tablePage": 1,
+                "tablePageSize": 100,
+            },
+        )
+        self.assertEqual(hide_both["filtered_row_count"], 1)
+        self.assertEqual(hide_both["denominator"]["value"], 1)
+        self.assertNotIn("omitted", " ".join(hide_both["warnings"]))
+        self.assertEqual(hide_both_table["summary"]["row_count"], 1)
+        self.assertEqual(hide_both_table["summary"]["volume"], 1)
+        self.assertEqual(hide_both_table["response_summaries"][0]["value"], 10)
 
     def test_two_feature_chart_enforces_group_series_and_dense_grid_limits(self) -> None:
         dataset = Dataset(self.data_path)
