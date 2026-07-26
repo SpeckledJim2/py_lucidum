@@ -14935,12 +14935,17 @@ COPY (
             browser = playwright.chromium.launch()
             page = browser.new_page(viewport={"width": 1280, "height": 800})
             page_errors: list[str] = []
+            console_warnings: list[str] = []
             dataset_viewer_requests = 0
             profile_requests = 0
             profile_detail_requests = 0
             chart_requests = 0
 
             page.on("pageerror", lambda error: page_errors.append(str(error)))
+            page.on(
+                "console",
+                lambda message: console_warnings.append(message.text) if message.type == "warning" else None,
+            )
 
             def count_request(request: object) -> None:
                 nonlocal profile_requests, profile_detail_requests, chart_requests
@@ -17371,16 +17376,48 @@ COPY (
                 page.locator("#glmTool").click()
                 page.locator(".glm-tool").wait_for(timeout=10_000)
                 page.get_by_role("tab", name="Model navigator").click()
+                page.wait_for_load_state("networkidle", timeout=10_000)
+                page.wait_for_function(
+                    """
+                    () => {
+                      const table = window.Tabulator?.findTable?.("#glmModelGrid")?.[0];
+                      return Boolean(
+                        table?.initialized
+                        && [...document.querySelectorAll("#glmModelGrid .tabulator-row.tabulator-selected")]
+                          .some((row) => row.textContent.includes("Second smoke GLM"))
+                        && !document.querySelector("#glmActivateModelBtn")?.disabled
+                      );
+                    }
+                    """,
+                    timeout=10_000,
+                )
                 page.evaluate(
                     """
                     () => {
                       const table = window.Tabulator?.findTable?.("#glmModelGrid")?.[0];
-                      const row = table?.getRows?.().find((candidate) => candidate.getData()?.model_label === "Browser smoke GLM");
+                      const row = table?.getRows?.()
+                        .find((candidate) => candidate.getData()?.model_label === "Browser smoke GLM");
+                      table?.deselectRow?.();
                       row?.select();
-                      document.querySelector("#glmActivateModelBtn")?.click();
                     }
                     """
                 )
+                page.wait_for_function(
+                    """
+                    () => {
+                      const selected = [...document.querySelectorAll("#glmModelGrid .tabulator-row.tabulator-selected")];
+                      return selected.length === 1
+                        && selected[0].textContent.includes("Browser smoke GLM")
+                        && !document.querySelector("#glmActivateModelBtn")?.disabled;
+                    }
+                    """,
+                    timeout=10_000,
+                )
+                with page.expect_request(
+                    lambda request: "/api/glm/models/" in request.url and request.url.endswith("/activate"),
+                    timeout=10_000,
+                ):
+                    page.locator("#glmActivateModelBtn").click()
                 page.wait_for_function(
                     """
                     () => document.querySelector("#glmModelSelectedMeta")?.textContent.includes("Browser smoke GLM")
@@ -18566,6 +18603,12 @@ COPY (
                 self.assertEqual(shap_request_body["source"], "gbm:browser-smoke-model:shap_long")
                 self.assertEqual(shap_request_body["responses"][0]["numerator"], "SHAP__Age")
                 self.assertEqual(page_errors, [])
+                premature_selection_warnings = [
+                    warning
+                    for warning in console_warnings
+                    if "Table Not Initialized" in warning and "getSelectedData" in warning
+                ]
+                self.assertEqual(premature_selection_warnings, [])
             finally:
                 browser.close()
 
@@ -29342,6 +29385,12 @@ COPY (
                     if "Sort Warning" in warning and "important" in warning
                 ]
                 self.assertEqual(invalid_parameter_sort_warnings, [])
+                premature_selection_warnings = [
+                    warning
+                    for warning in console_warnings
+                    if "Table Not Initialized" in warning and "getSelectedData" in warning
+                ]
+                self.assertEqual(premature_selection_warnings, [])
             finally:
                 browser.close()
 

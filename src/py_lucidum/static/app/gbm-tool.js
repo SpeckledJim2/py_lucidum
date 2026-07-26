@@ -137,6 +137,7 @@ export function createGbmTool({
   let featureTable = null;
   let parameterTable = null;
   let modelTable = null;
+  let modelTableReady = false;
   let ebmGainSummaryTable = null;
   let ebmGainSummaryRows = null;
   let ebmGainSummaryModelId = "";
@@ -2187,6 +2188,7 @@ export function createGbmTool({
     featureTable = null;
     parameterTable = null;
     modelTable = null;
+    modelTableReady = false;
     ebmGainSummaryTable = null;
     const features = applyInteractionLocksToFeatures(data.features || []);
     const parameters = data.parameters || [];
@@ -2196,7 +2198,7 @@ export function createGbmTool({
       const models = modelRows(config.models || data.models || []);
       const modelFallback = el("gbmModelFallback");
       if (modelFallback) modelFallback.innerHTML = "";
-      modelTable = new Tabulator("#gbmModelGrid", {
+      const renderedModelTable = new Tabulator("#gbmModelGrid", {
         data: models,
         height: "100%",
         layout: "fitDataStretch",
@@ -2228,7 +2230,13 @@ export function createGbmTool({
           { title: "Sample", field: "sample_display", sorter: "string", widthGrow: 1.1, headerSort: true },
         ],
       });
-      modelTable.on("rowSelectionChanged", syncModelActionButtons);
+      modelTable = renderedModelTable;
+      renderedModelTable.on("rowSelectionChanged", syncModelActionButtons);
+      renderedModelTable.on("tableBuilt", () => {
+        if (modelTable !== renderedModelTable || config !== data) return;
+        modelTableReady = true;
+        syncModelActionButtons();
+      });
       syncModelActionButtons();
       featureTable = new Tabulator("#gbmFeatureGrid", {
         data: features,
@@ -2265,6 +2273,13 @@ export function createGbmTool({
       });
       parameterTable.on("cellEdited", syncGridSampleControl);
     } catch (_) {
+      const failedModelTable = modelTable;
+      modelTable = null;
+      modelTableReady = false;
+      try {
+        failedModelTable?.destroy?.();
+      } catch (_) {
+      }
       renderModelFallback(modelRows(config?.models || data.models || []));
       renderFeatureFallback(features);
       renderEbmGainSummaryFallback([]);
@@ -3125,7 +3140,7 @@ export function createGbmTool({
   function syncModelActionButtons() {
     syncSharedModelActionButtons({
       selectedCount: selectedModelIds().length,
-      disabled: isTraining,
+      disabled: isTraining || Boolean(modelTable && !modelTableReady),
       rename: el("gbmRenameModelBtn"),
       activate: el("gbmActivateModelBtn"),
       deleteButton: el("gbmDeleteModelBtn"),

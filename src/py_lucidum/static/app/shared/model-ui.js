@@ -180,7 +180,7 @@ export function bindFallbackModelSelection(rows, onChange) {
 }
 
 export function selectedModelIdsFromTableOrFallback({ table, fallbackSelector, rowDataKey }) {
-  const ids = table && typeof table.getSelectedData === "function"
+  const ids = table?.initialized === true && typeof table.getSelectedData === "function"
     ? table.getSelectedData().map((row) => row?.model_id)
     : Array.from(document.querySelectorAll(`${fallbackSelector}[aria-selected="true"]`))
       .map((row) => row.dataset[rowDataKey]);
@@ -189,7 +189,7 @@ export function selectedModelIdsFromTableOrFallback({ table, fallbackSelector, r
 
 export function restoreModelSelection({ table, fallbackSelector, rowDataKey, ids = [] }) {
   const selected = new Set((ids || []).map((id) => String(id || "")).filter(Boolean));
-  if (table && typeof table.getRows === "function") {
+  if (table?.initialized === true && typeof table.getRows === "function") {
     for (const row of table.getRows()) {
       const rowId = String(row.getData()?.model_id || "");
       if (selected.has(rowId)) {

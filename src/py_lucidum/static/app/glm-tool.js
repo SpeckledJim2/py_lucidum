@@ -138,6 +138,7 @@ export function createGlmTool({
   let coefficientRows = [];
   let coefficientSort = { key: "index", direction: "asc" };
   let modelTable = null;
+  let modelTableReady = false;
   let modelTableRenderSeq = 0;
   let modelRows = [];
   let selectedModelIds = new Set();
@@ -287,6 +288,7 @@ export function createGlmTool({
     disposeTabulationSelectorTables();
     tabulationPanelModeSignature = "";
     modelTable = null;
+    modelTableReady = false;
     const mount = el("modelToolWrap");
     if (!mount) return;
     mount.innerHTML = shellHtml(data);
@@ -2717,6 +2719,7 @@ export function createGlmTool({
     modelTableRenderSeq = renderSeq;
     const previousTable = modelTable;
     modelTable = null;
+    modelTableReady = false;
     previousTable?.destroy();
     if (!grid || !fallback) {
       updateModelActionButtons();
@@ -2728,7 +2731,7 @@ export function createGlmTool({
     try {
       const Tabulator = await loadTabulator();
       if (renderSeq !== modelTableRenderSeq || !grid.isConnected) return;
-      modelTable = new Tabulator("#glmModelGrid", {
+      const renderedTable = new Tabulator("#glmModelGrid", {
         data: rows,
         height: "100%",
         layout: "fitDataStretch",
@@ -2755,11 +2758,24 @@ export function createGlmTool({
           { title: "Overall time", field: "elapsed_ms", sorter: "number", formatter: (cell) => escapeHtml(cell.getRow().getData().elapsed_display), hozAlign: "right", headerHozAlign: "right", width: 104, headerSort: true, tooltip: "Full GLM build time, including fitting, scoring, diagnostics, feature importance, and artifact writing" },
         ],
       });
-      modelTable.on("rowSelectionChanged", syncSelectedModelsFromTable);
-      restoreModelSelection(preservedIds);
+      modelTable = renderedTable;
+      renderedTable.on("rowSelectionChanged", syncSelectedModelsFromTable);
+      renderedTable.on("tableBuilt", () => {
+        if (renderSeq !== modelTableRenderSeq || modelTable !== renderedTable) return;
+        modelTableReady = true;
+        restoreModelSelection(preservedIds);
+        syncSelectedModelsFromTable();
+      });
       updateModelActionButtons();
     } catch (_) {
       if (renderSeq !== modelTableRenderSeq) return;
+      const failedTable = modelTable;
+      modelTable = null;
+      modelTableReady = false;
+      try {
+        failedTable?.destroy?.();
+      } catch (_) {
+      }
       renderModelFallback(models, activeModelId);
       restoreModelSelection(preservedIds);
       updateModelActionButtons();
@@ -2796,7 +2812,7 @@ export function createGlmTool({
   function updateModelActionButtons() {
     syncSharedModelActionButtons({
       selectedCount: selectedModelIdList().length,
-      disabled: isBuilding,
+      disabled: isBuilding || Boolean(modelTable && !modelTableReady),
       activate: el("glmActivateModelBtn"),
       rename: el("glmRenameModelBtn"),
       deleteButton: el("glmDeleteModelBtn"),

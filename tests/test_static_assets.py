@@ -1382,13 +1382,54 @@ const fallbackIds = selectedModelIdsFromTableOrFallback({{
 }});
 if (fallbackIds.join(",") !== "m1,m2") throw new Error(`fallback ids failed: ${{fallbackIds.join(",")}}`);
 const tableIds = selectedModelIdsFromTableOrFallback({{
-  table: {{ getSelectedData: () => [{{ model_id: "m3" }}, {{ model_id: "m3" }}, {{ model_id: "" }}] }},
+  table: {{ initialized: true, getSelectedData: () => [{{ model_id: "m3" }}, {{ model_id: "m3" }}, {{ model_id: "" }}] }},
   fallbackSelector: "#gbmModelFallback [data-gbm-model-row]",
   rowDataKey: "gbmModelRow",
 }});
 if (tableIds.join(",") !== "m3") throw new Error(`table ids failed: ${{tableIds.join(",")}}`);
-restoreModelSelection({{ table: null, fallbackSelector: "#gbmModelFallback [data-gbm-model-row]", rowDataKey: "gbmModelRow", ids: ["m2"] }});
+let unreadySelectionReads = 0;
+const unreadyIds = selectedModelIdsFromTableOrFallback({{
+  table: {{
+    initialized: false,
+    getSelectedData: () => {{
+      unreadySelectionReads += 1;
+      return [{{ model_id: "unready" }}];
+    }},
+  }},
+  fallbackSelector: "#gbmModelFallback [data-gbm-model-row]",
+  rowDataKey: "gbmModelRow",
+}});
+if (unreadySelectionReads !== 0 || unreadyIds.join(",") !== "m1,m2") throw new Error("unready selection read failed");
+let unreadyRowReads = 0;
+restoreModelSelection({{
+  table: {{
+    initialized: false,
+    getRows: () => {{
+      unreadyRowReads += 1;
+      return [];
+    }},
+  }},
+  fallbackSelector: "#gbmModelFallback [data-gbm-model-row]",
+  rowDataKey: "gbmModelRow",
+  ids: ["m2"],
+}});
+if (unreadyRowReads !== 0) throw new Error("unready row read failed");
 if (rowA.attributes["aria-selected"] !== "false" || rowB.attributes["aria-selected"] !== "true") throw new Error("restore fallback failed");
+let readySelected = 0;
+let readyDeselected = 0;
+restoreModelSelection({{
+  table: {{
+    initialized: true,
+    getRows: () => [
+      {{ getData: () => ({{ model_id: "m1" }}), select: () => {{ readySelected += 1; }}, deselect: () => {{ readyDeselected += 1; }} }},
+      {{ getData: () => ({{ model_id: "m2" }}), select: () => {{ readySelected += 1; }}, deselect: () => {{ readyDeselected += 1; }} }},
+    ],
+  }},
+  fallbackSelector: "#gbmModelFallback [data-gbm-model-row]",
+  rowDataKey: "gbmModelRow",
+  ids: ["m2"],
+}});
+if (readySelected !== 1 || readyDeselected !== 1) throw new Error("ready table restore failed");
 
 const activate = {{}};
 const rename = {{}};
