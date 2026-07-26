@@ -1843,6 +1843,9 @@ export function createGlmTool({
     }
     try {
       const Tabulator = await loadTabulator();
+      const columnMetadataByField = new Map(
+        columns.map((column) => [String(column.field || ""), column]),
+      );
       tabulationTable = new Tabulator("#glmTabulationTable", {
         data: rows,
         height: "100%",
@@ -1850,15 +1853,19 @@ export function createGlmTool({
         placeholder: "No rows",
         columns: columns.map((column) => tabulationColumnDefinition(column, data)),
       });
-      tabulationTable.on("cellContext", openGlmTabulationContextMenuForTabulatorCell);
+      tabulationTable.on(
+        "cellContext",
+        (event, cell) => openGlmTabulationContextMenuForTabulatorCell(event, cell, columnMetadataByField),
+      );
     } catch (_) {
       renderTabulationFallbackTable(columns, rows, data);
     }
   }
 
-  function openGlmTabulationContextMenuForTabulatorCell(event, cell) {
+  function openGlmTabulationContextMenuForTabulatorCell(event, cell, columnMetadataByField) {
     const row = cell?.getRow?.().getData?.() || {};
-    const column = cell?.getColumn?.().getDefinition?.() || {};
+    const field = String(cell?.getField?.() || "");
+    const column = columnMetadataByField?.get(field) || {};
     openGlmTabulationContextMenu(event, tabulationRebaseContextForCell(row, column));
   }
 
@@ -1868,7 +1875,8 @@ export function createGlmTool({
     const numeric = tabulationValue || tabulationSelectedModelIds().includes(field);
     const statusField = String(column.status_field || `__status__${field}`);
     return {
-      ...column,
+      title: column.title ?? field,
+      field,
       formatter: (cell) => {
         if (!numeric) return escapeHtml(cell.getValue() ?? "");
         const row = cell.getRow().getData();

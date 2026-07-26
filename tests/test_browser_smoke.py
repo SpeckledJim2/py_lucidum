@@ -14164,7 +14164,12 @@ COPY (
             browser = playwright.chromium.launch()
             page = browser.new_page(viewport={"width": 1280, "height": 800})
             page_errors: list[str] = []
+            console_warnings: list[str] = []
             page.on("pageerror", lambda error: page_errors.append(str(error)))
+            page.on(
+                "console",
+                lambda message: console_warnings.append(message.text) if message.type == "warning" else None,
+            )
             try:
                 def right_click_tabulation_cell(script: str, arg: dict[str, object] | None = None) -> None:
                     point = page.wait_for_function(
@@ -14323,6 +14328,21 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                page.locator("#glmTabulationColorBtn").click()
+                page.locator("#glmTabulationTable .glm-tabulation-colour-cell").first.wait_for(timeout=10_000)
+                crosstab_column_definitions = page.evaluate(
+                    """
+                    () => (window.Tabulator?.findTable?.("#glmTabulationTable")?.[0]?.getColumns?.() || [])
+                      .map((column) => column.getDefinition())
+                    """
+                )
+                self.assertTrue(crosstab_column_definitions)
+                self.assertTrue(
+                    all(
+                        "status_field" not in definition and "tabulation_value" not in definition
+                        for definition in crosstab_column_definitions
+                    )
+                )
                 right_click_tabulation_cell(
                     """
                     () => document.querySelector('#glmTabulationTable .tabulator-row .tabulator-cell[tabulator-field="Age"]')
@@ -14431,6 +14451,19 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                one_way_column_definitions = page.evaluate(
+                    """
+                    () => (window.Tabulator?.findTable?.("#glmTabulationTable")?.[0]?.getColumns?.() || [])
+                      .map((column) => column.getDefinition())
+                    """
+                )
+                self.assertTrue(one_way_column_definitions)
+                self.assertTrue(
+                    all(
+                        "status_field" not in definition and "tabulation_value" not in definition
+                        for definition in one_way_column_definitions
+                    )
+                )
                 one_way_before = page.evaluate(
                     """
                     () => {
@@ -14485,6 +14518,13 @@ COPY (
                     timeout=15_000,
                 )
                 self.assertFalse(page_errors)
+                invalid_column_warnings = [
+                    warning
+                    for warning in console_warnings
+                    if "Invalid column definition option" in warning
+                    and ("status_field" in warning or "tabulation_value" in warning)
+                ]
+                self.assertEqual(invalid_column_warnings, [])
             finally:
                 browser.close()
 
