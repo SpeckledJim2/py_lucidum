@@ -91,6 +91,11 @@ def chart(dataset: Dataset, request: dict[str, Any], feature_spec: Any | None = 
         if chart_too_large:
             warnings.append(overlarge_chart_message(max_groups))
         transform_metadata = transform_metadata_for_result(dataset, result, transform, warnings)
+        glm_overlay_context = build_glm_overlay_chart_context(
+            result,
+            chart_rows,
+            transform_metadata=transform_metadata,
+        )
         display_rows, transform_metadata = apply_transform(
             chart_rows,
             result["responses"],
@@ -150,10 +155,211 @@ def chart(dataset: Dataset, request: dict[str, Any], feature_spec: Any | None = 
             "exclusion_warnings": result["exclusion_warnings"],
             "warnings": warnings,
             "transform": transform_metadata,
+            "glm_overlay_context": glm_overlay_context,
         }
         if partial_dependence:
             payload["partial_dependence"] = partial_dependence
         return payload
+
+
+def build_glm_overlay_chart_context(
+    result: dict[str, Any],
+    chart_rows: list[dict[str, Any]],
+    *,
+    transform_metadata: dict[str, Any],
+) -> dict[str, Any]:
+    field_sources = result.get("field_sources") if isinstance(result.get("field_sources"), dict) else {}
+    response_sources = field_sources.get("responses") if isinstance(field_sources.get("responses"), list) else []
+    summaries = result.get("response_summaries") if isinstance(result.get("response_summaries"), list) else []
+    responses: list[dict[str, Any]] = []
+    model_id = ""
+    for index, response in enumerate(result["responses"]):
+        source = (
+            str(response_sources[index])
+            if index < len(response_sources) and response_sources[index]
+            else str(response.get("source") or result.get("source_id") or "dataset")
+        )
+        summary = summaries[index] if index < len(summaries) and isinstance(summaries[index], dict) else {}
+        item = {
+            "label": response["label"],
+            "numerator": response["numerator"],
+            "source": source,
+            "value": json_number(summary.get("value")),
+            "numerator_total": json_number(summary.get("numerator")),
+            "denominator_total": json_number(summary.get("denominator")),
+        }
+        responses.append(item)
+        if response["numerator"] == "glm_prediction" and source.startswith("glm:") and source.endswith(":predictions"):
+            model_id = source[len("glm:") : -len(":predictions")]
+
+    points: list[dict[str, Any]] = []
+    for display_order, row in enumerate(chart_rows):
+        raw_points = row.get("glm_overlay_points")
+        if not isinstance(raw_points, list):
+            continue
+        for raw_point in raw_points:
+            if not isinstance(raw_point, dict):
+                continue
+            points.append(
+                {
+                    **raw_point,
+                    "final_x": row.get("x"),
+                    "final_x_sort": row.get("x_sort"),
+                    "final_original_order": int(row.get("original_order") or raw_point.get("final_original_order") or 0),
+                    "final_is_tail": bool(row.get("is_tail")),
+                    "final_display_order": display_order,
+                }
+            )
+    x_group_kind = str(result.get("x_group_kind") or "")
+    return {
+        "eligible": bool(
+            model_id
+            and points
+            and x_group_kind in {"categorical", "integer", "numeric", "quantile"}
+        ),
+        "model_id": model_id,
+        "feature": result.get("x_col"),
+        "x_kind": result.get("x_kind"),
+        "x_group_kind": x_group_kind,
+        "points": points,
+        "responses": responses,
+        "denominator": {
+            **dict(result.get("denominator") or {}),
+            "source": result.get("denominator_source"),
+        },
+        "missing_response_rows": json_number((result.get("denominator_summary") or {}).get("missing_response_rows")),
+        "transform": transform_metadata,
+        "request": glm_overlay_request_context(result.get("request") or {}),
+    }
+
+
+def glm_overlay_request_context(request: dict[str, Any]) -> dict[str, Any]:
+    return {
+        str(key): value
+        for key, value in request.items()
+        if str(key) != "partialDependence"
+    }
+
+
+def glm_overlay(
+    dataset: Dataset,
+    payload: dict[str, Any],
+    feature_spec: Any | None = None,
+) -> dict[str, Any]:
+    from .two_feature import has_two_groupings
+
+    raw_request = payload.get("request")
+    chart_context_payload = payload.get("chart_context")
+    if not isinstance(raw_request, dict) or not isinstance(chart_context_payload, dict):
+        raise ValueError("The current Line and Bar chart context is required.")
+    if has_two_groupings(raw_request):
+        raise ValueError("GLM overlay is available for one-feature charts.")
+    request = request_with_single_grouping(raw_request)
+    if partial_dependence_mode(request.get("partialDependence")) != "glm":
+        raise ValueError("Choose GLM partial dependence.")
+    if glm_overlay_request_context(request) != chart_context_payload.get("request"):
+        raise ValueError("The Line and Bar chart changed; refresh it before adding the GLM overlay.")
+
+    schema = dataset.valid_schema_columns()
+    columns = {column.name: column for column in schema}
+    x_col = str(request.get("x") or "")
+    if x_col not in columns:
+        raise ValueError("Choose a valid x-axis feature")
+    x_kind = columns[x_col].kind
+    if str(chart_context_payload.get("feature") or "") != x_col:
+        raise ValueError("The Line and Bar chart changed; refresh it before adding the GLM overlay.")
+    if str(chart_context_payload.get("x_kind") or "") != x_kind:
+        raise ValueError("The Line and Bar chart schema changed; refresh it before adding the GLM overlay.")
+
+    quantile_count = (
+        normalise_quantile_count(request.get("bandWidth"))
+        if use_quantiles(request.get("quantileMode")) and is_numeric_kind(x_kind)
+        else None
+    )
+    date_bucket = normalise_date_bucket(request.get("dateBucket")) if x_kind in {"date", "datetime"} else "none"
+    x_sql = build_x_sql(
+        x_col=x_col,
+        kind=x_kind,
+        band_width=request.get("bandWidth"),
+        date_bucket=date_bucket,
+        quantile_count=quantile_count,
+    )
+    x_group_kind = "quantile" if quantile_count else x_kind
+    if str(chart_context_payload.get("x_group_kind") or "") != x_group_kind:
+        raise ValueError("The Line and Bar grouping changed; refresh it before adding the GLM overlay.")
+
+    denominator = dict(chart_context_payload.get("denominator") or {})
+    filter_sql = dataset.normalise_filter(request.get("filter"))
+    effective_filter_sql = line_bar_analysis_filter(
+        filter_sql,
+        [x_col] if normalise_missings(request.get("missings")) == "hide" else [],
+    )
+    overlay_request = {**request, "filter": effective_filter_sql}
+
+    from py_lucidum.tools.glm.overlay import build_glm_partial_dependence_overlay
+    from py_lucidum.tools.glm.store import GlmModelStore
+
+    store = GlmModelStore(dataset.path, dataset=dataset)
+    model_id = store.active_model_id()
+    model_context: dict[str, Any] = {}
+    if model_id:
+        model_context = {
+            "model_id": model_id,
+            "source_id": store.source_id(model_id),
+            "estimator_path": str(store.artifact_path(model_id, "estimator")),
+            "manifest": store.manifest(model_id),
+        }
+    partial_dependence = build_glm_partial_dependence_overlay(
+        dataset,
+        overlay_request,
+        feature_spec=feature_spec or {},
+        x_col=x_col,
+        x_sql=x_sql,
+        x_group_kind=x_group_kind,
+        denominator=denominator,
+        chart_context=chart_context_payload,
+        model_context=model_context,
+        source_columns=[column.name for column in schema],
+        kinds={column.name: column.kind for column in schema},
+    )
+
+    warnings: list[str] = []
+    transform_partial_dependence_overlay(
+        partial_dependence,
+        str(request.get("transform") or "none"),
+        warnings,
+        x_kind=x_group_kind,
+        base=request.get("base"),
+        band_width=request.get("bandWidth"),
+    )
+    final_rows = glm_overlay_context_final_rows(chart_context_payload)
+    order_partial_dependence_rows(partial_dependence, final_rows)
+    warnings.extend(partial_dependence_warnings(partial_dependence))
+    return {
+        "partial_dependence": partial_dependence,
+        "warnings": warnings,
+    }
+
+
+def glm_overlay_context_final_rows(chart_context: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: dict[str, dict[str, Any]] = {}
+    for point in chart_context.get("points") or []:
+        if not isinstance(point, dict):
+            continue
+        label = str(point.get("final_x") or "")
+        rows.setdefault(
+            label,
+            {
+                "x": label,
+                "x_sort": point.get("final_x_sort"),
+                "original_order": int(point.get("final_original_order") or 0),
+                "display_order": int(point.get("final_display_order") or 0),
+                "volume": 0.0,
+                "is_tail": bool(point.get("final_is_tail")),
+            },
+        )
+        rows[label]["volume"] += float(json_number(point.get("volume")) or 0)
+    return sorted(rows.values(), key=lambda row: int(row.get("display_order") or 0))
 
 
 def table(dataset: Dataset, request: dict[str, Any], feature_spec: Any | None = None) -> dict[str, Any]:
@@ -562,6 +768,17 @@ def normalise_grouped_sql_row(row: dict[str, Any], responses: list[dict[str, str
         normalised["x_start"] = x_start
     if x_end is not None:
         normalised["x_end"] = x_end
+    overlay_points = row.get("glm_overlay_points")
+    if isinstance(overlay_points, list):
+        normalised["glm_overlay_points"] = [
+            {
+                "source_x": point.get("source_x"),
+                "x_value": point.get("x_value"),
+                "volume": json_number(point.get("volume")) or 0,
+            }
+            for point in overlay_points
+            if isinstance(point, dict)
+        ]
     for index, _ in enumerate(responses):
         normalised[f"resp{index}_num"] = json_number(row.get(f"resp{index}_num"))
         normalised[f"resp{index}_den"] = json_number(row.get(f"resp{index}_den"))
@@ -642,6 +859,7 @@ def build_grouped_pipeline_sql(
     rownum_expr = "__rownum"
     x_bound_select = ""
     x_bound_agg = ",\n    NULL AS x_start,\n    NULL AS x_end"
+    x_value_agg = "MIN(x_key) AS x_value"
     if x_sql.get("quantile_count"):
         quantile_cte = f""",
 quantiles AS (
@@ -660,6 +878,7 @@ quantiles AS (
         rownum_expr = "base.__rownum"
         x_bound_select = f",\n    {x_sql['raw']} AS __x_raw_value"
         x_bound_agg = ",\n    MIN(__x_raw_value) AS x_start,\n    MAX(__x_raw_value) AS x_end"
+        x_value_agg = "AVG(__x_raw_value) AS x_value"
 
     response_sql = f",\n    {response_selects}" if response_selects else ""
     valid_condition = aliased_valid_condition(len(responses), bool(denominator.get("column")))
@@ -707,6 +926,7 @@ initial_agg AS (
     x_key,
     x_label,
     MIN(x_sort) AS x_sort,
+    {x_value_agg},
     MIN(__rownum) AS original_order,
     COALESCE(SUM(__weight_value), 0) AS volume,
     COUNT(*) AS row_count{x_bound_agg}
@@ -930,7 +1150,8 @@ empty_date_periods AS (
     CAST(0 AS BIGINT) AS row_count,
     CAST(NULL AS DOUBLE) AS x_start,
     CAST(NULL AS DOUBLE) AS x_end,
-    FALSE AS is_tail{response_selects},
+    FALSE AS is_tail,
+    NULL AS glm_overlay_points{response_selects},
     CAST(NULL AS DOUBLE) AS sigma_se,
     CAST(NULL AS BIGINT) AS valid_folds,
     NULL AS sigma_folds
@@ -965,7 +1186,12 @@ final_rows AS (
     initial_values.row_count,
     initial_values.x_start,
     initial_values.x_end,
-    FALSE AS is_tail{response_selects}
+    FALSE AS is_tail,
+    [struct_pack(
+      source_x := initial_values.x_label,
+      x_value := initial_values.x_value,
+      volume := initial_values.volume
+    )] AS glm_overlay_points{response_selects}
     {sigma_select}
   FROM initial_values
   {sigma_join}
@@ -1168,7 +1394,15 @@ grouped_final AS (
     COALESCE(SUM(initial_values.row_count), 0) AS row_count,
     CASE WHEN BOOL_OR(group_map.final_is_tail) THEN NULL ELSE MIN(initial_values.x_start) END AS x_start,
     CASE WHEN BOOL_OR(group_map.final_is_tail) THEN NULL ELSE MAX(initial_values.x_end) END AS x_end,
-    BOOL_OR(group_map.final_is_tail) AS is_tail{response_selects}
+    BOOL_OR(group_map.final_is_tail) AS is_tail,
+    LIST(
+      struct_pack(
+        source_x := initial_values.x_label,
+        x_value := initial_values.x_value,
+        volume := initial_values.volume
+      )
+      ORDER BY initial_values.original_order
+    ) AS glm_overlay_points{response_selects}
   FROM initial_values
   INNER JOIN group_map
     ON initial_values.x_key IS NOT DISTINCT FROM group_map.source_x_key

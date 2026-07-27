@@ -2009,6 +2009,17 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn(".line-bar-feature-swap {", styles)
         self.assertIn("stroke-width: 1;", styles)
 
+    def test_line_bar_glm_overlay_reuses_only_the_current_chart(self) -> None:
+        line_bar = (
+            Path(__file__).resolve().parents[1] / "src/py_lucidum/static/app/line-bar-tool.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('api("/api/line-bar/glm-overlay"', line_bar)
+        self.assertIn("data.glm_overlay_context?.eligible", line_bar)
+        self.assertIn("data._lineBarBaseRequestKey === baseChartRequestKey(request)", line_bar)
+        self.assertIn("delete data.partial_dependence;", line_bar)
+        self.assertNotIn("glmOverlayCache", line_bar)
+
     def test_gbm_parameter_json_is_lightgbm_compatible(self) -> None:
         module = Path("src/py_lucidum/static/app/gbm-feature-parameter-controls.js").resolve().as_uri()
         script = f"""

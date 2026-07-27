@@ -55,7 +55,6 @@ GLM_OVERLAY_NUMERIC_INTERACTION_BINS = 50
 MAX_GLM_OVERLAY_CATEGORICAL_INTERACTION_LEVELS = 200
 MAX_GLM_OVERLAY_COLLAPSED_CONTEXT_ROWS = 2_000
 MAX_GLM_OVERLAY_COLLAPSED_PREDICTION_CELLS = 250_000
-_GLM_OVERLAY_ESTIMATOR_CACHE: dict[str, tuple[int, int, Any]] = {}
 
 
 def empty_glm_partial_dependence_warning(message: str) -> dict[str, Any]:
@@ -73,18 +72,6 @@ def empty_glm_partial_dependence_warning(message: str) -> dict[str, Any]:
     }
 
 
-def load_glm_overlay_estimator(estimator_path: Path) -> Any:
-    stat = estimator_path.stat()
-    cache_key = str(estimator_path)
-    cached = _GLM_OVERLAY_ESTIMATOR_CACHE.get(cache_key)
-    if cached and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
-        return cached[2]
-    with estimator_path.open("rb") as handle:
-        estimator = pickle.load(handle)
-    _GLM_OVERLAY_ESTIMATOR_CACHE[cache_key] = (stat.st_mtime_ns, stat.st_size, estimator)
-    return estimator
-
-
 def build_glm_partial_dependence_overlay(
     dataset: Dataset,
     request: dict[str, Any],
@@ -94,6 +81,10 @@ def build_glm_partial_dependence_overlay(
     x_sql: dict[str, str],
     x_group_kind: str,
     denominator: dict[str, str | None],
+    chart_context: dict[str, Any] | None = None,
+    model_context: dict[str, Any] | None = None,
+    source_columns: list[str] | None = None,
+    kinds: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     started = time.perf_counter()
     if should_isolate_glm_overlay():
@@ -105,17 +96,33 @@ def build_glm_partial_dependence_overlay(
             x_sql=x_sql,
             x_group_kind=x_group_kind,
             denominator=denominator,
+            chart_context=chart_context,
+            model_context=model_context,
+            source_columns=source_columns,
+            kinds=kinds,
         )
     else:
-        result = _build_glm_partial_dependence_overlay_impl(
-            dataset,
+        result = _build_glm_partial_dependence_overlay_from_context_impl(
             request,
             feature_spec=feature_spec,
             x_col=x_col,
-            x_sql=x_sql,
             x_group_kind=x_group_kind,
             denominator=denominator,
+            chart_context=chart_context,
+            model_context=model_context,
+            source_columns=source_columns,
+            kinds=kinds,
         )
+        if result is None:
+            result = _build_glm_partial_dependence_overlay_impl(
+                dataset,
+                request,
+                feature_spec=feature_spec,
+                x_col=x_col,
+                x_sql=x_sql,
+                x_group_kind=x_group_kind,
+                denominator=denominator,
+            )
     result.setdefault("timings", {})["elapsed_ms"] = round((time.perf_counter() - started) * 1000, 1)
     return result
 
@@ -136,6 +143,10 @@ def build_glm_partial_dependence_overlay_in_subprocess(
     x_sql: dict[str, str],
     x_group_kind: str,
     denominator: dict[str, str | None],
+    chart_context: dict[str, Any] | None = None,
+    model_context: dict[str, Any] | None = None,
+    source_columns: list[str] | None = None,
+    kinds: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     if not os.environ.get("PY_LUCIDUM_GLM_OVERLAY_ONE_SHOT"):
         result, started = persistent_glm_overlay_worker().request(
@@ -146,6 +157,10 @@ def build_glm_partial_dependence_overlay_in_subprocess(
             x_sql=x_sql,
             x_group_kind=x_group_kind,
             denominator=denominator,
+            chart_context=chart_context,
+            model_context=model_context,
+            source_columns=source_columns,
+            kinds=kinds,
         )
         result.setdefault("timings", {})["worker_mode"] = "persistent"
         result.setdefault("timings", {})["worker_started"] = bool(started)
@@ -158,6 +173,10 @@ def build_glm_partial_dependence_overlay_in_subprocess(
         x_sql=x_sql,
         x_group_kind=x_group_kind,
         denominator=denominator,
+        chart_context=chart_context,
+        model_context=model_context,
+        source_columns=source_columns,
+        kinds=kinds,
     )
 
 
@@ -170,6 +189,10 @@ def build_glm_partial_dependence_overlay_one_shot(
     x_sql: dict[str, str],
     x_group_kind: str,
     denominator: dict[str, str | None],
+    chart_context: dict[str, Any] | None = None,
+    model_context: dict[str, Any] | None = None,
+    source_columns: list[str] | None = None,
+    kinds: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="lucidum-glm-overlay-") as tmp_dir:
         tmp_path = Path(tmp_dir)
@@ -185,6 +208,10 @@ def build_glm_partial_dependence_overlay_one_shot(
                     "x_sql": x_sql,
                     "x_group_kind": x_group_kind,
                     "denominator": denominator,
+                    "chart_context": chart_context,
+                    "model_context": model_context,
+                    "source_columns": source_columns,
+                    "kinds": kinds,
                 },
                 default=str,
             ),
@@ -234,6 +261,10 @@ class PersistentGlmOverlayWorker:
         x_sql: dict[str, str],
         x_group_kind: str,
         denominator: dict[str, str | None],
+        chart_context: dict[str, Any] | None = None,
+        model_context: dict[str, Any] | None = None,
+        source_columns: list[str] | None = None,
+        kinds: dict[str, str] | None = None,
     ) -> tuple[dict[str, Any], bool]:
         with self._lock:
             try:
@@ -254,6 +285,10 @@ class PersistentGlmOverlayWorker:
                             "x_sql": x_sql,
                             "x_group_kind": x_group_kind,
                             "denominator": denominator,
+                            "chart_context": chart_context,
+                            "model_context": model_context,
+                            "source_columns": source_columns,
+                            "kinds": kinds,
                         },
                         default=str,
                     ),
@@ -283,6 +318,10 @@ class PersistentGlmOverlayWorker:
                     x_sql=x_sql,
                     x_group_kind=x_group_kind,
                     denominator=denominator,
+                    chart_context=chart_context,
+                    model_context=model_context,
+                    source_columns=source_columns,
+                    kinds=kinds,
                 )
                 fallback.setdefault("warnings", []).append(f"Persistent GLM overlay worker restarted after failure: {exc}")
                 fallback.setdefault("timings", {})["worker_mode"] = "one_shot_fallback"
@@ -377,6 +416,226 @@ def stop_persistent_glm_overlay_worker() -> None:
 atexit.register(stop_persistent_glm_overlay_worker)
 
 
+def _build_glm_partial_dependence_overlay_from_context_impl(
+    request: dict[str, Any],
+    *,
+    feature_spec: Any,
+    x_col: str,
+    x_group_kind: str,
+    denominator: dict[str, str | None],
+    chart_context: dict[str, Any] | None,
+    model_context: dict[str, Any] | None,
+    source_columns: list[str] | None,
+    kinds: dict[str, str] | None,
+) -> dict[str, Any] | None:
+    """Build a simple GLM overlay from the chart rows already sent to the browser.
+
+    Returning ``None`` deliberately selects the existing relation-based path. The
+    context path is restricted to cases where it can reproduce that path without
+    inferring any values from the dataset.
+    """
+
+    if not isinstance(chart_context, dict) or not chart_context.get("eligible"):
+        return None
+    if not isinstance(model_context, dict):
+        return None
+    columns = [str(column) for column in (source_columns or []) if str(column)]
+    column_kinds = {str(key): str(value) for key, value in (kinds or {}).items()}
+    if not columns or x_col not in columns:
+        return None
+    model_id = str(model_context.get("model_id") or "")
+    estimator_path = Path(str(model_context.get("estimator_path") or ""))
+    manifest = model_context.get("manifest")
+    source_id = str(model_context.get("source_id") or "")
+    if not model_id or not estimator_path.is_file() or not isinstance(manifest, dict) or not source_id:
+        return None
+    if str(chart_context.get("model_id") or "") != model_id:
+        return None
+    if str(chart_context.get("feature") or "") != x_col:
+        return None
+    if str(chart_context.get("x_group_kind") or "") != x_group_kind:
+        return None
+
+    offset_terms = [str(term) for term in (manifest.get("offset_terms") or manifest.get("formula", {}).get("offset_terms") or [])]
+    if offset_terms:
+        return None
+    try:
+        _glum, _glr, _glrcv, np, pd = glm_dependencies()
+    except MissingGlmDependency as exc:
+        return empty_glm_partial_dependence_warning(str(exc))
+    with estimator_path.open("rb") as handle:
+        estimator = pickle.load(handle)
+
+    groups = _term_groups(estimator, offset_terms, columns)
+    if any(len(features) > 1 for features in groups):
+        return None
+    all_features = sorted({feature for features in groups for feature in features})
+    model_denominator = str(manifest.get("denominator_column") or "").strip()
+    selected_denominator = str(denominator.get("column") or "").strip()
+    if model_denominator != selected_denominator:
+        return None
+    if model_denominator and model_denominator in all_features and model_denominator != x_col:
+        return None
+
+    target_mean = glm_context_target_mean(chart_context, source_id)
+    if target_mean is None:
+        return None
+    x_rows, group_mapping = glm_context_x_rows(chart_context)
+    if not x_rows or not group_mapping:
+        return None
+
+    spec_rows = _feature_spec_map(feature_spec)
+    transform_bounds = _feature_transform_bounds(estimator, columns)
+    required_columns = glm_required_columns(
+        columns,
+        manifest,
+        all_features,
+        offset_terms,
+        x_col,
+        denominator,
+    )
+    base = glm_context_base_row(
+        required_columns,
+        manifest,
+        x_col=x_col,
+        kinds=column_kinds,
+        spec_rows=spec_rows,
+        transform_bounds=transform_bounds,
+    )
+    if base is None:
+        return None
+
+    formula = formula_context(np)
+    source_rows = base_profile_rows(
+        estimator,
+        manifest,
+        base,
+        x_rows,
+        x_col=x_col,
+        denominator=denominator,
+        offset_terms=offset_terms,
+        context=formula,
+        np=np,
+        pd=pd,
+    )
+    rows = aggregate_source_rows(source_rows, group_mapping)
+    scale = scale_glm_overlay_rows(rows, target_mean, manifest=manifest)
+    warnings = [str(scale["warning"])] if scale.get("warning") else []
+    x_value_count = len(x_rows)
+    return {
+        "mode": "glm",
+        "model_id": model_id,
+        "feature": x_col,
+        "method": "base_profile",
+        "percentiles": [50],
+        "rows": rows,
+        "warnings": warnings,
+        "scale": {key: value for key, value in scale.items() if key != "warning"},
+        "sample": {
+            "population_row_count": None,
+            "sample_row_count": 0,
+            "x_value_count": int(x_value_count),
+            "prediction_cell_count": int(x_value_count),
+            "max_sample_rows": MAX_GLM_OVERLAY_SAMPLE_ROWS,
+            "max_prediction_cells": MAX_GLM_OVERLAY_PREDICTION_CELLS,
+        },
+        "transform": {"mode": str(request.get("transform") or "none")},
+        "timings": {"context_path": True},
+    }
+
+
+def glm_context_target_mean(chart_context: dict[str, Any], source_id: str) -> float | int | None:
+    if int(json_number(chart_context.get("missing_response_rows")) or 0) != 0:
+        return None
+    responses = chart_context.get("responses")
+    if not isinstance(responses, list):
+        return None
+    for response in responses:
+        if not isinstance(response, dict):
+            continue
+        if str(response.get("source") or "") != source_id:
+            continue
+        if str(response.get("numerator") or "") != "glm_prediction":
+            continue
+        return json_number(response.get("value"))
+    return None
+
+
+def glm_context_x_rows(
+    chart_context: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    points = chart_context.get("points")
+    if not isinstance(points, list):
+        return [], []
+    x_rows: list[dict[str, Any]] = []
+    group_mapping: list[dict[str, Any]] = []
+    for point in points:
+        if not isinstance(point, dict):
+            continue
+        source_x = str(point.get("source_x") or "")
+        final_x = str(point.get("final_x") or "")
+        source = {
+            "x": source_x,
+            "x_sort": point.get("source_x_sort"),
+            "original_order": int(point.get("source_original_order") or 0),
+            "volume": json_number(point.get("volume")) or 0,
+            "x_value": point.get("x_value"),
+            "is_tail": False,
+        }
+        if usable_x_value(source):
+            x_rows.append(source)
+        group_mapping.append(
+            {
+                "source_x": source_x,
+                "final_x": final_x,
+                "final_x_sort": point.get("final_x_sort"),
+                "final_original_order": int(point.get("final_original_order") or 0),
+                "final_is_tail": bool(point.get("final_is_tail")),
+            }
+        )
+    return x_rows, group_mapping
+
+
+def glm_context_base_row(
+    required_columns: list[str],
+    manifest: dict[str, Any],
+    *,
+    x_col: str,
+    kinds: dict[str, str],
+    spec_rows: dict[str, dict[str, Any]],
+    transform_bounds: dict[str, dict[str, float]],
+) -> dict[str, Any] | None:
+    base: dict[str, Any] = {TARGET_COLUMN: 0.0}
+    model_denominator = str(manifest.get("denominator_column") or "").strip()
+    for feature in required_columns:
+        if feature == x_col:
+            base[feature] = 0.0 if is_numeric_kind(kinds.get(feature, "")) else ""
+            continue
+        if feature == model_denominator:
+            base[feature] = 1.0
+            continue
+        spec_row = spec_rows.get(feature, {})
+        raw_value = spec_row.get("base")
+        raw = str(raw_value).strip() if raw_value is not None else ""
+        if not raw:
+            return None
+        if is_numeric_kind(kinds.get(feature, "")):
+            number = _as_number(raw)
+            if number is None:
+                return None
+            value, _clipped = _clip_numeric_bound(
+                feature,
+                "base",
+                float(number),
+                transform_bounds.get(feature, {}),
+                "feature_spec",
+            )
+            base[feature] = _json_value(value)
+        else:
+            base[feature] = raw
+    return base
+
+
 def _build_glm_partial_dependence_overlay_impl(
     dataset: Dataset,
     request: dict[str, Any],
@@ -387,7 +646,7 @@ def _build_glm_partial_dependence_overlay_impl(
     x_group_kind: str,
     denominator: dict[str, str | None],
 ) -> dict[str, Any]:
-    store = GlmModelStore(dataset.path)
+    store = GlmModelStore(dataset.path, dataset=dataset)
     model_id = store.active_model_id()
     if not model_id:
         return empty_glm_partial_dependence_warning("No active GLM is available for GLM overlay.")

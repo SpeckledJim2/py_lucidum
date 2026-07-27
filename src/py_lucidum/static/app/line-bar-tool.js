@@ -1746,6 +1746,103 @@ export function createLineBarTool({
     };
   }
 
+  function baseChartRequestKey(request) {
+    if (!request) return "";
+    return stableRequestKey({
+      ...request,
+      partialDependence: { mode: "none" },
+    });
+  }
+
+  function currentChartCanAddGlmOverlay(request) {
+    const data = state.lastData;
+    return Boolean(
+      request
+      && state.view === "chart"
+      && !hasTwoFeatures()
+      && data
+      && data.glm_overlay_context?.eligible
+      && data._lineBarBaseRequestKey === baseChartRequestKey(request)
+    );
+  }
+
+  async function addGlmOverlayToCurrentChart(request) {
+    const data = state.lastData;
+    if (!data || !currentChartCanAddGlmOverlay(request)) {
+      return refreshChart({ force: true });
+    }
+    const requestSeq = state.chartRequestSeq + 1;
+    state.chartRequestSeq = requestSeq;
+    setStatus("");
+    setChartMessage("");
+    setGroupMeta("line_bar", "Computing...");
+    startToolTiming("line_bar");
+    try {
+      const overlay = await api("/api/line-bar/glm-overlay", {
+        method: "POST",
+        body: JSON.stringify({
+          request,
+          chart_context: data.glm_overlay_context,
+        }),
+        clientTiming: true,
+      });
+      if (requestSeq !== state.chartRequestSeq) return null;
+      const previousWarnings = new Set(Array.isArray(data._lineBarOverlayWarnings) ? data._lineBarOverlayWarnings : []);
+      const overlayWarnings = Array.isArray(overlay.warnings) ? overlay.warnings.filter(Boolean) : [];
+      data.warnings = [
+        ...(Array.isArray(data.warnings) ? data.warnings.filter((warning) => !previousWarnings.has(warning)) : []),
+        ...overlayWarnings,
+      ];
+      data._lineBarOverlayWarnings = overlayWarnings;
+      data.partial_dependence = overlay.partial_dependence;
+      const cache = toolCache("line_bar");
+      cache.requestKey = stableRequestKey(request);
+      cache.data = data;
+      state.lastData = data;
+      syncDuckDbTimingFromData("line_bar", overlay);
+      syncClientTimingFromData("line_bar", overlay);
+      if (lineBarChartReady()) {
+        measureToolRender("line_bar", () => renderChartData(data, { prepared: true }));
+      } else {
+        queueChartRender(data, { prepared: true }, requestSeq);
+      }
+      lineBarChartDirty = false;
+      return data;
+    } catch (_error) {
+      if (requestSeq !== state.chartRequestSeq) return null;
+      return refreshChart({ force: true });
+    }
+  }
+
+  function removeGlmOverlayFromCurrentChart(request) {
+    const data = state.lastData;
+    if (
+      !data
+      || data.partial_dependence?.mode !== "glm"
+      || !Array.isArray(data._lineBarOverlayWarnings)
+      || data._lineBarBaseRequestKey !== baseChartRequestKey(request)
+    ) {
+      return false;
+    }
+    const overlayWarnings = new Set(data._lineBarOverlayWarnings);
+    data.warnings = Array.isArray(data.warnings)
+      ? data.warnings.filter((warning) => !overlayWarnings.has(warning))
+      : [];
+    data._lineBarOverlayWarnings = [];
+    delete data.partial_dependence;
+    const cache = toolCache("line_bar");
+    cache.requestKey = stableRequestKey(request);
+    cache.data = data;
+    state.lastData = data;
+    if (lineBarChartReady()) {
+      measureToolRender("line_bar", () => renderChartData(data, { prepared: true }));
+    } else {
+      queueChartRender(data, { prepared: true });
+    }
+    lineBarChartDirty = false;
+    return true;
+  }
+
   async function refreshChart(options = {}) {
     return refreshLineBar(options);
   }
@@ -1771,6 +1868,7 @@ export function createLineBarTool({
     try {
       const data = await api("/api/chart", { method: "POST", body: JSON.stringify(request), clientTiming: true });
       if (requestSeq !== state.chartRequestSeq) return;
+      data._lineBarBaseRequestKey = baseChartRequestKey(request);
       const cache = toolCache("line_bar");
       cache.requestKey = requestKey;
       cache.data = data;
@@ -4563,6 +4661,23 @@ export function createLineBarTool({
         }
         if (group.dataset.control === "partialDependence") {
           updateAxisControls();
+          const request = buildChartRequest();
+          if (
+            state.partialDependence !== previousControlValue
+            && state.partialDependence === "glm"
+            && currentChartCanAddGlmOverlay(request)
+          ) {
+            addGlmOverlayToCurrentChart(request);
+            return;
+          }
+          if (
+            state.partialDependence !== previousControlValue
+            && state.partialDependence === "none"
+            && previousControlValue === "glm"
+            && removeGlmOverlayFromCurrentChart(request)
+          ) {
+            return;
+          }
         }
         refreshChart({ renderIfCached: group.dataset.control === "labels" });
       });

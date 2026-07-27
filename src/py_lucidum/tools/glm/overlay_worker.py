@@ -8,7 +8,10 @@ from typing import Any
 
 from py_lucidum.core import Dataset
 
-from .overlay import _build_glm_partial_dependence_overlay_impl
+from .overlay import (
+    _build_glm_partial_dependence_overlay_from_context_impl,
+    _build_glm_partial_dependence_overlay_impl,
+)
 
 
 def dataset_signature(path: Path) -> tuple[int, int]:
@@ -41,16 +44,33 @@ def error_response(exc: Exception) -> dict[str, Any]:
 def run_worker(request_path: Path, response_path: Path, *, dataset_cache: dict[str, tuple[tuple[int, int], Dataset]] | None = None) -> int:
     request = json.loads(request_path.read_text(encoding="utf-8"))
     dataset_path = Path(str(request["dataset_path"]))
-    dataset = cached_dataset(dataset_path, dataset_cache)
-    result = _build_glm_partial_dependence_overlay_impl(
-        dataset,
-        dict(request.get("request") or {}),
-        feature_spec=request.get("feature_spec"),
-        x_col=str(request.get("x_col") or ""),
-        x_sql=dict(request.get("x_sql") or {}),
-        x_group_kind=str(request.get("x_group_kind") or ""),
-        denominator=dict(request.get("denominator") or {}),
+    chart_request = dict(request.get("request") or {})
+    feature_spec = request.get("feature_spec")
+    x_col = str(request.get("x_col") or "")
+    x_group_kind = str(request.get("x_group_kind") or "")
+    denominator = dict(request.get("denominator") or {})
+    result = _build_glm_partial_dependence_overlay_from_context_impl(
+        chart_request,
+        feature_spec=feature_spec,
+        x_col=x_col,
+        x_group_kind=x_group_kind,
+        denominator=denominator,
+        chart_context=request.get("chart_context"),
+        model_context=request.get("model_context"),
+        source_columns=request.get("source_columns"),
+        kinds=request.get("kinds"),
     )
+    if result is None:
+        dataset = cached_dataset(dataset_path, dataset_cache)
+        result = _build_glm_partial_dependence_overlay_impl(
+            dataset,
+            chart_request,
+            feature_spec=feature_spec,
+            x_col=x_col,
+            x_sql=dict(request.get("x_sql") or {}),
+            x_group_kind=x_group_kind,
+            denominator=denominator,
+        )
     response_path.write_text(json.dumps({"ok": True, "result": result}, default=str), encoding="utf-8")
     return 0
 

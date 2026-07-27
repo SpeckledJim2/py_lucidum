@@ -1176,6 +1176,51 @@ COPY (
         self.assertIsInstance(payload["timings"]["duckdb_ms"], int)
         self.assertGreaterEqual(payload["timings"]["duckdb_ms"], 0)
 
+    def test_glm_overlay_endpoint_scores_the_current_chart_context(self) -> None:
+        self.addCleanup(glm_overlay.stop_persistent_glm_overlay_worker)
+        model_dataset = Dataset(self.data_path)
+        store, model_id = self.write_active_fake_glm_for_overlay(
+            model_dataset,
+            term_variables={"UseofVan": {"UseofVan"}},
+        )
+        app = create_app(
+            self.data_path,
+            token="",
+            tools=["line_bar", "glm"],
+            use_saved_filters=False,
+            use_kpis=False,
+        )
+        request = self.request()
+        request["responses"][1] = {
+            "label": "glm_prediction",
+            "numerator": "glm_prediction",
+            "source": store.source_id(model_id),
+        }
+        request["partialDependence"] = {"mode": "none"}
+
+        status, _, body = asgi_post_json(app, "/api/chart", request)
+        current = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertTrue(current["glm_overlay_context"]["eligible"])
+
+        with patch("py_lucidum.tools.glm.overlay.should_isolate_glm_overlay", return_value=False):
+            status, _, body = asgi_post_json(
+                app,
+                "/api/line-bar/glm-overlay",
+                {
+                    "request": {**request, "partialDependence": {"mode": "glm"}},
+                    "chart_context": current["glm_overlay_context"],
+                },
+            )
+        payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["partial_dependence"]["mode"], "glm")
+        self.assertEqual(payload["partial_dependence"]["model_id"], model_id)
+        self.assertTrue(payload["partial_dependence"]["timings"]["context_path"])
+        self.assertEqual([row["x"] for row in payload["partial_dependence"]["rows"]], ["Business", "Social"])
+        self.assertIsInstance(payload["timings"]["duckdb_ns"], int)
+
     def test_line_bar_table_endpoint_searches_beyond_chart_group_cap(self) -> None:
         data_path = self.root / "many_categories.csv"
         lines = ["Category,Actual"]
@@ -2750,6 +2795,186 @@ COPY (
         self.assertEqual(set(by_x), {"Business", "Social"})
         self.assertAlmostEqual(by_x["Social"]["p50"], 0.0)
         self.assertIsNotNone(by_x["Business"]["p50"])
+
+    def test_glm_overlay_from_current_chart_matches_existing_values_without_dataset_scan(self) -> None:
+        dataset = Dataset(self.data_path)
+        store, model_id = self.write_active_fake_glm_for_overlay(
+            dataset,
+            term_variables={
+                "UseofVan": {"UseofVan"},
+                "YoungestDriverAge": {"YoungestDriverAge"},
+            },
+        )
+        request = self.request()
+        request["responses"][1] = {
+            "label": "glm_prediction",
+            "numerator": "glm_prediction",
+            "source": store.source_id(model_id),
+        }
+        feature_spec = {"rows": [{"feature": "YoungestDriverAge", "base": "45"}]}
+        with patch("py_lucidum.tools.glm.overlay.should_isolate_glm_overlay", return_value=False):
+            existing = chart(
+                dataset,
+                {**request, "partialDependence": {"mode": "glm"}},
+                feature_spec=feature_spec,
+            )
+            current = chart(
+                dataset,
+                {**request, "partialDependence": {"mode": "none"}},
+                feature_spec=feature_spec,
+            )
+            with (
+                patch("py_lucidum.tools.glm.overlay.glm_prediction_mean", side_effect=AssertionError("context path must not scan the fitted mean")),
+                patch("py_lucidum.tools.glm.overlay.glm_x_group_rows", side_effect=AssertionError("context path must not scan x groups")),
+                patch("py_lucidum.tools.glm.overlay.glm_base_row_from_relation", side_effect=AssertionError("context path must not scan base values")),
+                patch("py_lucidum.tools.glm.store.Dataset", side_effect=AssertionError("context path must not construct a Dataset")),
+            ):
+                optimized = line_bar_query.glm_overlay(
+                    dataset,
+                    {
+                        "request": {**request, "partialDependence": {"mode": "glm"}},
+                        "chart_context": current["glm_overlay_context"],
+                    },
+                    feature_spec=feature_spec,
+                )
+
+        self.assertTrue(current["glm_overlay_context"]["eligible"])
+        self.assertEqual(current["glm_overlay_context"]["model_id"], model_id)
+        self.assertEqual(optimized["partial_dependence"]["timings"]["context_path"], True)
+        existing_rows = {row["x"]: row for row in existing["partial_dependence"]["rows"]}
+        optimized_rows = {row["x"]: row for row in optimized["partial_dependence"]["rows"]}
+        self.assertEqual(list(row["x"] for row in existing["partial_dependence"]["rows"]), list(row["x"] for row in optimized["partial_dependence"]["rows"]))
+        self.assertEqual(set(existing_rows), set(optimized_rows))
+        for label, existing_row in existing_rows.items():
+            self.assertAlmostEqual(existing_row["p50"], optimized_rows[label]["p50"])
+            self.assertAlmostEqual(existing_row["volume"], optimized_rows[label]["volume"])
+
+    def test_glm_overlay_from_current_chart_matches_numeric_quantile_tail_filter_missing_and_denominator_cases(self) -> None:
+        self.data_path.write_text(
+            "YoungestDriverAge,UseofVan,QuoteDate,Gross.Weight,Actual,Expected,Weight\n"
+            "20,Social,2024-01-01,2000,100,95,1\n"
+            "30,Social,2024-01-02,2400,130,125,1\n"
+            "40,Business,2024-01-03,2800,180,175,1\n"
+            "50,Social,2024-01-04,3200,190,185,1\n"
+            "60,Business,2024-01-05,3600,260,255,1\n"
+            "70,Social,2024-01-06,4000,250,245,1\n"
+            "80,Business,2024-01-07,4400,330,325,1\n"
+            ",Business,2024-01-08,4800,390,385,1\n",
+            encoding="utf-8",
+        )
+        dataset = Dataset(self.data_path)
+        store, model_id = self.write_active_fake_glm_for_overlay(
+            dataset,
+            term_variables={"YoungestDriverAge": {"YoungestDriverAge"}},
+            denominator_column="Weight",
+        )
+        common = self.request()
+        common.update(
+            {
+                "x": "YoungestDriverAge",
+                "denominator": "Weight",
+                "responses": [
+                    {"label": "Actual", "numerator": "Actual"},
+                    {
+                        "label": "glm_prediction",
+                        "numerator": "glm_prediction",
+                        "source": store.source_id(model_id),
+                    },
+                ],
+            }
+        )
+        cases = [
+            {"bandWidth": 10},
+            {"bandWidth": 3, "quantileMode": "quantile"},
+            {"bandWidth": 10, "lowGroup": "2"},
+            {"bandWidth": 10, "filter": "UseofVan = 'Business'"},
+            {"bandWidth": 10, "missings": "hide"},
+            {"bandWidth": 10, "transform": "zero", "base": "40"},
+        ]
+        with patch("py_lucidum.tools.glm.overlay.should_isolate_glm_overlay", return_value=False):
+            for updates in cases:
+                with self.subTest(updates=updates):
+                    request = {**common, **updates}
+                    existing = chart(dataset, {**request, "partialDependence": {"mode": "glm"}})
+                    current = chart(dataset, {**request, "partialDependence": {"mode": "none"}})
+                    optimized = line_bar_query.glm_overlay(
+                        dataset,
+                        {
+                            "request": {**request, "partialDependence": {"mode": "glm"}},
+                            "chart_context": current["glm_overlay_context"],
+                        },
+                    )
+                    existing_rows = existing["partial_dependence"]["rows"]
+                    optimized_rows = optimized["partial_dependence"]["rows"]
+                    self.assertEqual([row["x"] for row in existing_rows], [row["x"] for row in optimized_rows])
+                    for existing_row, optimized_row in zip(existing_rows, optimized_rows):
+                        self.assertAlmostEqual(existing_row["p50"], optimized_row["p50"])
+                        self.assertAlmostEqual(existing_row["volume"], optimized_row["volume"])
+
+    def test_glm_overlay_from_current_chart_falls_back_when_a_configured_base_is_missing(self) -> None:
+        dataset = Dataset(self.data_path)
+        store, model_id = self.write_active_fake_glm_for_overlay(
+            dataset,
+            term_variables={
+                "UseofVan": {"UseofVan"},
+                "YoungestDriverAge": {"YoungestDriverAge"},
+            },
+        )
+        request = self.request()
+        request["responses"][1] = {
+            "label": "glm_prediction",
+            "numerator": "glm_prediction",
+            "source": store.source_id(model_id),
+        }
+        current = chart(dataset, {**request, "partialDependence": {"mode": "none"}})
+        with (
+            patch("py_lucidum.tools.glm.overlay.should_isolate_glm_overlay", return_value=False),
+            patch("py_lucidum.tools.glm.overlay.glm_prediction_mean", wraps=glm_overlay.glm_prediction_mean) as fitted_mean,
+        ):
+            result = line_bar_query.glm_overlay(
+                dataset,
+                {
+                    "request": {**request, "partialDependence": {"mode": "glm"}},
+                    "chart_context": current["glm_overlay_context"],
+                },
+                feature_spec={},
+            )
+
+        self.assertGreater(fitted_mean.call_count, 0)
+        self.assertNotIn("context_path", result["partial_dependence"]["timings"])
+
+    def test_glm_overlay_from_current_chart_retains_interaction_calculation(self) -> None:
+        dataset = Dataset(self.data_path)
+        store, model_id = self.write_active_fake_glm_for_overlay(
+            dataset,
+            term_variables={
+                "UseofVan": {"UseofVan"},
+                "YoungestDriverAge": {"YoungestDriverAge"},
+                "UseofVan:YoungestDriverAge": {"UseofVan", "YoungestDriverAge"},
+            },
+        )
+        request = self.request()
+        request["responses"][1] = {
+            "label": "glm_prediction",
+            "numerator": "glm_prediction",
+            "source": store.source_id(model_id),
+        }
+        current = chart(dataset, {**request, "partialDependence": {"mode": "none"}})
+        with (
+            patch("py_lucidum.tools.glm.overlay.should_isolate_glm_overlay", return_value=False),
+            patch("py_lucidum.tools.glm.overlay.glm_x_group_rows", wraps=glm_overlay.glm_x_group_rows) as x_groups,
+        ):
+            result = line_bar_query.glm_overlay(
+                dataset,
+                {
+                    "request": {**request, "partialDependence": {"mode": "glm"}},
+                    "chart_context": current["glm_overlay_context"],
+                },
+            )
+
+        self.assertGreater(x_groups.call_count, 0)
+        self.assertEqual(result["partial_dependence"]["method"], "collapsed_marginal")
+        self.assertNotIn("context_path", result["partial_dependence"]["timings"])
 
     def test_chart_glm_overlay_infers_base_profile_values_from_filtered_relation(self) -> None:
         dataset = Dataset(self.data_path)

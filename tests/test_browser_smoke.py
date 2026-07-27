@@ -17529,6 +17529,20 @@ COPY (
                 self.assertEqual(base_emphasis_state["axisBaseLabel"], "0%")
                 self.assertLessEqual(base_emphasis_state["axisMin"], 1)
                 self.assertGreaterEqual(base_emphasis_state["axisMax"], 1)
+                chart_request_count = chart_requests
+                with page.expect_response(
+                    lambda response: response.url.endswith("/api/line-bar/glm-overlay"),
+                    timeout=10_000,
+                ) as glm_overlay_response:
+                    page.locator('.segmented[data-control="partialDependence"] button[data-value="glm"]').click()
+                self.assertEqual(glm_overlay_response.value.status, 200)
+                page.locator('.segmented[data-control="partialDependence"] button[data-value="glm"].active').wait_for(timeout=10_000)
+                page.wait_for_timeout(250)
+                self.assertEqual(chart_requests, chart_request_count)
+                page.locator('.segmented[data-control="partialDependence"] button[data-value="none"]').click()
+                page.locator('.segmented[data-control="partialDependence"] button[data-value="none"].active').wait_for(timeout=10_000)
+                page.wait_for_timeout(250)
+                self.assertEqual(chart_requests, chart_request_count)
                 page.locator('.segmented[data-control="partialDependence"] button[data-value="both"]').click()
                 page.wait_for_function(
                     """
