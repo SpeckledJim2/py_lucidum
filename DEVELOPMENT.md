@@ -393,27 +393,35 @@ practical. Exact asset-string checks are still acceptable for stable contracts
 such as asset registration, cache-control behavior, and intentionally documented
 UI text or selectors.
 
-- The full pre-commit gate is deliberately comprehensive and currently takes
-  about three minutes. It checks unstaged and staged diffs, performs dynamic
-  Python and JavaScript syntax checks, runs full unittest discovery including
-  GLM coverage, then runs all browser smoke tests sequentially:
+- The fast pre-commit gate checks unstaged and staged whitespace, performs
+  dynamic Python and JavaScript syntax checks, and runs the existing
+  change-aware unit lane. It normally takes 2–15 seconds:
 
 ```bash
 .venv/bin/python scripts/run_tests.py precommit
 ```
 
-Enable the versioned hook once per clone so normal `git commit` calls cannot
-skip the gate accidentally:
+- The complete pre-push gate repeats whitespace and syntax checks, runs full
+  unittest discovery including GLM coverage, then runs all browser smoke tests
+  sequentially:
+
+```bash
+.venv/bin/python scripts/run_tests.py prepush
+```
+
+Enable the versioned hooks once per clone so normal `git commit` and `git push`
+calls cannot skip their respective gates accidentally:
 
 ```bash
 git config core.hooksPath .githooks
 ```
 
-The hook uses `.venv/bin/python` by default. Set
+Both hooks use `.venv/bin/python` by default. Set
 `PY_LUCIDUM_TEST_PYTHON=/absolute/path/to/python` when the test environment
-lives elsewhere. `git commit --no-verify` remains Git's explicit emergency
-bypass; it is not the normal development workflow. Version bumps remain a
-separate step performed before committing.
+lives elsewhere. Do not manually run `prepush` immediately before a normal
+`git push`; the hook will run it. Git's `--no-verify` remains an explicit
+emergency bypass and is not the normal development workflow. Version bumps
+remain a separate step performed before committing.
 
 The isolated pipx installation test is environment-sensitive and stays outside
 the normal commit gate. Run it for packaging or release changes:
@@ -425,14 +433,14 @@ the normal commit gate. Run it for packaging or release changes:
 Use `PY_LUCIDUM_PIPX_PYTHON=python3.13` when the default pipx interpreter is
 not Python 3.13.
 
-Current timings recorded on macOS arm64 with Python 3.13.13 and Node 26.3.0:
+Current timings recorded on macOS arm64 with Python 3.13.14 and Node 26.5.0:
 
 - Static-frontend changed lane equivalent: 23 tests plus syntax in about 2.1 seconds.
-- GBM changed lane equivalent: 118 tests plus syntax in about 6.3 seconds.
-- Broad development lane: 437 tests, one expected skip, and syntax in about 14.3 seconds.
-- Full unittest discovery: 525 tests, 39 expected skips, in about 75.4 seconds.
-- Browser smoke: 38 tests in about 80.2 seconds.
-- Complete pre-commit gate: about 2 minutes 37 seconds.
+- GBM changed lane equivalent: 126 tests plus syntax in about 6 seconds.
+- Broad development lane: 512 tests, one expected skip, and syntax in about 16 seconds.
+- Full unittest discovery: 642 tests, 64 expected skips, in about 87 seconds.
+- Browser smoke: 63 tests in about 2 minutes 14 seconds.
+- Complete pre-push gate: about 3 minutes 42 seconds.
 
 Browser smoke coverage should include cross-tool focus and listener regressions
 after visiting tools that install global listeners, especially document/window
@@ -477,7 +485,7 @@ The current test suite should cover:
   - Check `git status --short` and make sure new files, deletions, and generated artifacts are intentional.
   - Update `README.md` if the change affects public setup, launch commands, user workflows, CLI options, Python usage, demo data, or visible behavior.
   - Update this file if the change affects architecture, behavior contracts, testing policy, packaging, data handling, or tool-extension guidance.
-  - Run the standard checks in the Testing section, plus the browser smoke check for frontend or app-launch behavior changes.
+  - Use the smallest relevant focused checks while editing, then rely on the fast pre-commit hook and complete pre-push hook; run a focused browser scenario before committing frontend interaction changes.
   - Scan staged changes for secrets, real customer data, local-only paths, and stale references to removed files or old demo datasets.
 - Update `README.md` for public user-facing behavior changes.
 - Update this file when architecture, behavior contracts, testing policy, packaging, or tool-extension guidance changes.

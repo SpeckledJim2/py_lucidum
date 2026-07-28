@@ -68,17 +68,25 @@ contracts, and excludes slow modelling process integration cases:
 ```
 
 Use `focus` or `browser` with a specific target when you need to override the
-automatic selection. Before every commit, run the complete gate; it includes full
-unittest discovery, all browser smoke tests, dynamic syntax checks, and staged
-and unstaged whitespace checks:
+automatic selection. The fast commit gate runs staged and unstaged whitespace
+checks, dynamic syntax checks, and the change-aware unit lane:
 
 ```bash
 .venv/bin/python scripts/run_tests.py precommit
 ```
 
-The versioned `.githooks/pre-commit` hook runs that command automatically after
-one-time setup with `git config core.hooksPath .githooks`. Do not weaken or
-bypass the full gate merely to save time.
+The complete push gate runs full unittest discovery and all browser smoke tests
+after the same whitespace and syntax checks:
+
+```bash
+.venv/bin/python scripts/run_tests.py prepush
+```
+
+The versioned `.githooks/pre-commit` and `.githooks/pre-push` hooks run those
+commands automatically after one-time setup with
+`git config core.hooksPath .githooks`. Do not manually run `prepush`
+immediately before a normal `git push`, and do not weaken or bypass either hook
+merely to save time.
 
 - Before every commit, unless the user explicitly says not to, run `.venv/bin/python scripts/bump_version.py patch`. Include `pyproject.toml` in the same commit and report the final version number.
 

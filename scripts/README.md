@@ -30,18 +30,21 @@ Use focused aliases or exact unittest targets while editing one area:
 .venv/bin/python scripts/run_tests.py focus tests.test_glm.GlmToolTests.test_glm_formula_drop_first_policy_tracks_regularization
 ```
 
-Before committing, run the complete gate. Enable the repository hook once per
-clone to run it automatically:
+The fast commit gate adds whitespace checks to the change-aware syntax and unit
+lane. The complete push gate runs full unittest discovery and all browser smoke
+tests. Enable the repository hooks once per clone to run both automatically:
 
 ```bash
 .venv/bin/python scripts/run_tests.py precommit
+.venv/bin/python scripts/run_tests.py prepush
 git config core.hooksPath .githooks
 ```
 
-The hook defaults to `.venv/bin/python`; set `PY_LUCIDUM_TEST_PYTHON` to an
-absolute interpreter path when the test environment lives elsewhere. The
-environment-sensitive pipx install check remains an explicit packaging/release
-command:
+Do not manually run `prepush` immediately before a normal `git push`; the hook
+will run it. Both hooks default to `.venv/bin/python`; set
+`PY_LUCIDUM_TEST_PYTHON` to an absolute interpreter path when the test
+environment lives elsewhere. The environment-sensitive pipx install check
+remains an explicit packaging/release command:
 
 ```bash
 .venv/bin/python scripts/run_tests.py pipx

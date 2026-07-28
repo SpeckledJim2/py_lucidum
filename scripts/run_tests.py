@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run Lucidum's focused, development, browser, and pre-commit test tiers."""
+"""Run Lucidum's focused, development, browser, and Git-hook test tiers."""
 
 from __future__ import annotations
 
@@ -319,7 +319,7 @@ def run_pipx(root: Path) -> int:
     return run_command_phase("Pipx installation tests", command, root=root, env=env)
 
 
-def run_precommit(root: Path) -> int:
+def run_whitespace_checks(root: Path) -> int:
     phases = (
         ("Unstaged whitespace", ["git", "diff", "--check"]),
         ("Staged whitespace", ["git", "diff", "--cached", "--check"]),
@@ -328,7 +328,20 @@ def run_precommit(root: Path) -> int:
         code = run_command_phase(label, command, root=root)
         if code:
             return code
+    return 0
 
+
+def run_precommit(root: Path) -> int:
+    code = run_whitespace_checks(root)
+    if code:
+        return code
+    return run_changed(root)
+
+
+def run_prepush(root: Path) -> int:
+    code = run_whitespace_checks(root)
+    if code:
+        return code
     code = run_syntax(root)
     if code:
         return code
@@ -347,7 +360,8 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("dev", help="run syntax and broad development tests")
     subparsers.add_parser("changed", help="run syntax and tests selected from working-tree changes")
     subparsers.add_parser("syntax", help="check Python and non-vendored JavaScript syntax")
-    subparsers.add_parser("precommit", help="run the complete deterministic local commit gate")
+    subparsers.add_parser("precommit", help="run the fast change-aware local commit gate")
+    subparsers.add_parser("prepush", help="run the complete deterministic local push gate")
     subparsers.add_parser("pipx", help="run the release-only pipx installation tests")
 
     focus_parser = subparsers.add_parser("focus", help="run focused unittest areas or targets")
@@ -385,6 +399,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             code = run_browser(root, args.pytest_args)
         elif args.command == "precommit":
             code = run_precommit(root)
+        elif args.command == "prepush":
+            code = run_prepush(root)
         elif args.command == "pipx":
             code = run_pipx(root)
         else:  # pragma: no cover - argparse enforces the command choices.

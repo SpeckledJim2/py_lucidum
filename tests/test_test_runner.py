@@ -78,7 +78,31 @@ class TestRunnerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown focused test area"):
             run_tests.resolve_focus_targets(["not-a-real-area"], self.root)
 
-    def test_precommit_runs_checks_in_order(self) -> None:
+    def test_precommit_runs_whitespace_then_changed_lane_without_full_gate(self) -> None:
+        commands: list[list[str]] = []
+
+        def fake_run(command: list[str], **_: object) -> int:
+            commands.append(list(command))
+            return 0
+
+        with patch.object(run_tests, "run_process", side_effect=fake_run):
+            with patch.object(run_tests, "run_changed", return_value=0) as run_changed:
+                with redirect_stdout(io.StringIO()):
+                    code = run_tests.run_precommit(self.root)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            commands,
+            [
+                ["git", "diff", "--check"],
+                ["git", "diff", "--cached", "--check"],
+            ],
+        )
+        run_changed.assert_called_once_with(self.root)
+        self.assertFalse(any("unittest" in command for command in commands))
+        self.assertFalse(any("scripts/run_browser_smoke.py" in command for command in commands))
+
+    def test_prepush_runs_complete_checks_in_order(self) -> None:
         commands: list[list[str]] = []
 
         def fake_run(command: list[str], **_: object) -> int:
@@ -87,7 +111,7 @@ class TestRunnerTests(unittest.TestCase):
 
         with patch.object(run_tests, "run_process", side_effect=fake_run):
             with redirect_stdout(io.StringIO()):
-                code = run_tests.run_precommit(self.root)
+                code = run_tests.run_prepush(self.root)
 
         self.assertEqual(code, 0)
         self.assertEqual(commands[0], ["git", "diff", "--check"])
@@ -149,11 +173,28 @@ class TestRunnerTests(unittest.TestCase):
 
     def test_precommit_stops_after_first_failure(self) -> None:
         with patch.object(run_tests, "run_process", return_value=7) as run_process:
-            with redirect_stdout(io.StringIO()):
-                code = run_tests.run_precommit(self.root)
+            with patch.object(run_tests, "run_changed") as run_changed:
+                with redirect_stdout(io.StringIO()):
+                    code = run_tests.run_precommit(self.root)
 
         self.assertEqual(code, 7)
         run_process.assert_called_once_with(["git", "diff", "--check"], cwd=self.root, env=None)
+        run_changed.assert_not_called()
+
+    def test_prepush_stops_before_browser_after_unit_failure(self) -> None:
+        commands: list[list[str]] = []
+
+        def fake_run(command: list[str], **_: object) -> int:
+            commands.append(list(command))
+            return 9 if "unittest" in command else 0
+
+        with patch.object(run_tests, "run_process", side_effect=fake_run):
+            with redirect_stdout(io.StringIO()):
+                code = run_tests.run_prepush(self.root)
+
+        self.assertEqual(code, 9)
+        self.assertTrue(any("unittest" in command for command in commands))
+        self.assertFalse(any("scripts/run_browser_smoke.py" in command for command in commands))
 
     def test_browser_arguments_are_forwarded(self) -> None:
         target = "tests/test_browser_smoke.py::BrowserSmokeTests::test_missing_token_boot_error_is_visible"
@@ -188,23 +229,57 @@ class TestRunnerTests(unittest.TestCase):
         self.assertEqual(env["PY_LUCIDUM_RUN_PIPX_INSTALL_TESTS"], "1")
         self.assertEqual(env["PY_LUCIDUM_PIPX_PYTHON"], "python3.13")
 
-    def test_hook_reports_an_unusable_python_without_running_tests(self) -> None:
+    def test_hooks_route_to_matching_runner_lanes(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            temp_root = Path(tmp_dir)
+            fake_python = temp_root / "python"
+            args_path = temp_root / "args.txt"
+            fake_python.write_text(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$PY_LUCIDUM_HOOK_ARGS\"\n",
+                encoding="utf-8",
+            )
+            fake_python.chmod(0o755)
+            env = os.environ.copy()
+            env["PY_LUCIDUM_TEST_PYTHON"] = str(fake_python)
+            env["PY_LUCIDUM_HOOK_ARGS"] = str(args_path)
+
+            for hook, lane in (("pre-commit", "precommit"), ("pre-push", "prepush")):
+                with self.subTest(hook=hook):
+                    completed = subprocess.run(
+                        ["sh", f".githooks/{hook}"],
+                        cwd=self.root,
+                        env=env,
+                        text=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        check=False,
+                    )
+
+                    self.assertEqual(completed.returncode, 0, completed.stderr)
+                    self.assertEqual(
+                        args_path.read_text(encoding="utf-8").splitlines(),
+                        [str(self.root / "scripts/run_tests.py"), lane],
+                    )
+
+    def test_hooks_report_an_unusable_python_without_running_tests(self) -> None:
         env = os.environ.copy()
         env["PY_LUCIDUM_TEST_PYTHON"] = str(self.root / "missing-python")
 
-        completed = subprocess.run(
-            ["sh", ".githooks/pre-commit"],
-            cwd=self.root,
-            env=env,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-        )
+        for hook in ("pre-commit", "pre-push"):
+            with self.subTest(hook=hook):
+                completed = subprocess.run(
+                    ["sh", f".githooks/{hook}"],
+                    cwd=self.root,
+                    env=env,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                )
 
-        self.assertEqual(completed.returncode, 1)
-        self.assertIn("Python is not executable", completed.stderr)
-        self.assertIn("PY_LUCIDUM_TEST_PYTHON", completed.stderr)
+                self.assertEqual(completed.returncode, 1)
+                self.assertIn("Python is not executable", completed.stderr)
+                self.assertIn("PY_LUCIDUM_TEST_PYTHON", completed.stderr)
 
 
 if __name__ == "__main__":
