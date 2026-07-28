@@ -1,4 +1,11 @@
 const boundSettingsStrips = new WeakSet();
+const SETTINGS_STRIP_EDITABLE_SELECTOR = "input, textarea, select, [contenteditable]";
+
+function settingsStripWheelDelta(event, toolbar) {
+  if (event.deltaMode === 1) return event.deltaY * 16;
+  if (event.deltaMode === 2) return event.deltaY * toolbar.clientWidth;
+  return event.deltaY;
+}
 
 export function bindSettingsStripOverflowCue(toolbar) {
   if (!toolbar || boundSettingsStrips.has(toolbar)) return () => {};
@@ -21,8 +28,29 @@ export function bindSettingsStripOverflowCue(toolbar) {
     syncScheduled = true;
     requestAnimationFrame(syncOverflow);
   };
+  const handleWheel = (event) => {
+    if (
+      event.ctrlKey
+      || event.target?.closest?.(SETTINGS_STRIP_EDITABLE_SELECTOR)
+      || Math.abs(event.deltaX) >= Math.abs(event.deltaY)
+    ) {
+      return;
+    }
+    const maxScrollLeft = Math.max(0, toolbar.scrollWidth - toolbar.clientWidth);
+    if (maxScrollLeft <= 1) return;
+    const previousScrollLeft = toolbar.scrollLeft;
+    const nextScrollLeft = Math.min(
+      maxScrollLeft,
+      Math.max(0, previousScrollLeft + settingsStripWheelDelta(event, toolbar)),
+    );
+    if (Math.abs(nextScrollLeft - previousScrollLeft) <= 0.5) return;
+    toolbar.scrollLeft = nextScrollLeft;
+    event.preventDefault();
+    scheduleSync();
+  };
 
   toolbar.addEventListener("scroll", scheduleSync, { passive: true });
+  toolbar.addEventListener("wheel", handleWheel, { passive: false });
   let resizeObserver = null;
   if (typeof ResizeObserver === "function") {
     resizeObserver = new ResizeObserver(scheduleSync);
@@ -44,6 +72,7 @@ export function bindSettingsStripOverflowCue(toolbar) {
     if (disposed) return;
     disposed = true;
     toolbar.removeEventListener("scroll", scheduleSync);
+    toolbar.removeEventListener("wheel", handleWheel);
     resizeObserver?.disconnect();
     mutationObserver?.disconnect();
     boundSettingsStrips.delete(toolbar);

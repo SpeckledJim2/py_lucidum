@@ -1091,6 +1091,11 @@
         overflow-x: auto;
         overflow-y: hidden;
         padding: 0 var(--app-control-strip-padding-inline);
+        scrollbar-width: none;
+      }
+
+      .app-settings-strip.toolbar::-webkit-scrollbar {
+        display: none;
       }
 
       .app-settings-strip.app-control-strip::after {

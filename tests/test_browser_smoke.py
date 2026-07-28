@@ -1324,6 +1324,34 @@ class BrowserSmokeTests(unittest.TestCase):
                         """,
                         timeout=10_000,
                     )
+                    requests_before_editable_wheel = histogram_requests
+                    editable_wheel = page.locator("#histogramBins").evaluate(
+                        """
+                        node => {
+                          const toolbar = document.querySelector("#histogramToolbar");
+                          const before = toolbar.scrollLeft;
+                          const event = new WheelEvent("wheel", {
+                            bubbles: true,
+                            cancelable: true,
+                            deltaY: 120,
+                          });
+                          node.dispatchEvent(event);
+                          return {
+                            before,
+                            after: toolbar.scrollLeft,
+                            prevented: event.defaultPrevented,
+                          };
+                        }
+                        """
+                    )
+                    self.assertAlmostEqual(
+                        editable_wheel["after"],
+                        editable_wheel["before"],
+                        delta=0.5,
+                    )
+                    self.assertFalse(editable_wheel["prevented"])
+                    self.assertEqual(histogram_requests, requests_before_editable_wheel)
+
                     page.locator("#histogramToolbar").evaluate(
                         "node => { node.scrollLeft = (node.scrollWidth - node.clientWidth) / 2; }"
                     )
@@ -8765,7 +8793,15 @@ class BrowserSmokeTests(unittest.TestCase):
                     page = browser.new_page(viewport={"width": 1280, "height": 800})
                     page.emulate_media(color_scheme="light")
                     page_errors: list[str] = []
+                    chart_requests = 0
+
+                    def on_request(request: Any) -> None:
+                        nonlocal chart_requests
+                        if request.url.endswith("/api/chart"):
+                            chart_requests += 1
+
                     page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.on("request", on_request)
 
                     def settings_layout() -> dict[str, Any]:
                         return page.evaluate(
@@ -8855,6 +8891,10 @@ class BrowserSmokeTests(unittest.TestCase):
                                 borderBottomColor: style.borderBottomColor,
                                 borderBottomWidth: style.borderBottomWidth,
                                 pseudoDividerContent: getComputedStyle(toolbar, "::after").content,
+                                scrollbarWidth: style.scrollbarWidth,
+                                webkitScrollbarDisplay:
+                                  getComputedStyle(toolbar, "::-webkit-scrollbar").display,
+                                height: toolbar.getBoundingClientRect().height,
                               };
                             }
                             """
@@ -8995,8 +9035,70 @@ class BrowserSmokeTests(unittest.TestCase):
                     self.assertEqual(start_overflow["borderBottomWidth"], "1px")
                     self.assertNotEqual(start_overflow["borderBottomColor"], "rgba(0, 0, 0, 0)")
                     self.assertEqual(start_overflow["pseudoDividerContent"], "none")
+                    self.assertEqual(start_overflow["scrollbarWidth"], "none")
+                    self.assertEqual(start_overflow["webkitScrollbarDisplay"], "none")
+                    self.assertEqual(start_overflow["height"], 50)
                     self.assertTrue(
                         all(position["labelCenterDelta"] <= 0.5 for position in before["positions"].values())
+                    )
+
+                    chart_requests_before_wheel = chart_requests
+                    wheel_scroll = page.locator("#lineBarToolbar").evaluate(
+                        """
+                        async node => {
+                          const before = node.scrollLeft;
+                          const event = new WheelEvent("wheel", {
+                            bubbles: true,
+                            cancelable: true,
+                            deltaY: 120,
+                          });
+                          node.dispatchEvent(event);
+                          await new Promise(requestAnimationFrame);
+                          await new Promise(requestAnimationFrame);
+                          const toolbarRect = node.getBoundingClientRect();
+                          const button = [...node.querySelectorAll(".segmented button")].find((candidate) => {
+                            const rect = candidate.getBoundingClientRect();
+                            return candidate.getClientRects().length > 0
+                              && rect.left >= toolbarRect.left + 12
+                              && rect.right <= toolbarRect.right - 12;
+                          });
+                          const buttonRect = button?.getBoundingClientRect();
+                          const hit = buttonRect
+                            ? document.elementFromPoint(
+                              buttonRect.left + buttonRect.width / 2,
+                              buttonRect.bottom - 2,
+                            )
+                            : null;
+                          return {
+                            before,
+                            after: node.scrollLeft,
+                            prevented: event.defaultPrevented,
+                            left: node.classList.contains("app-settings-overflow-left"),
+                            right: node.classList.contains("app-settings-overflow-right"),
+                            buttonText: button?.textContent.trim() || "",
+                            hitButtonText: hit?.closest?.("button")?.textContent.trim() || "",
+                          };
+                        }
+                        """
+                    )
+                    self.assertGreater(wheel_scroll["after"], wheel_scroll["before"])
+                    self.assertTrue(wheel_scroll["prevented"])
+                    self.assertTrue(wheel_scroll["left"])
+                    self.assertTrue(wheel_scroll["right"])
+                    self.assertTrue(wheel_scroll["buttonText"])
+                    self.assertEqual(wheel_scroll["hitButtonText"], wheel_scroll["buttonText"])
+                    self.assertEqual(chart_requests, chart_requests_before_wheel)
+
+                    page.locator("#lineBarToolbar").evaluate("node => { node.scrollLeft = 0; }")
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const toolbar = document.querySelector("#lineBarToolbar");
+                          return !toolbar.classList.contains("app-settings-overflow-left")
+                            && toolbar.classList.contains("app-settings-overflow-right");
+                        }
+                        """,
+                        timeout=10_000,
                     )
 
                     page.locator('.segmented[data-control="labels"] button[data-value="bar"]').click()
@@ -9068,6 +9170,33 @@ class BrowserSmokeTests(unittest.TestCase):
                     self.assertNotEqual(end_overflow["maskImage"], "none")
                     self.assertEqual(end_overflow["maskImage"].count("linear-gradient"), 2)
                     self.assertIn("100% 1px", end_overflow["maskSize"])
+
+                    chart_requests_before_boundary_wheel = chart_requests
+                    boundary_wheel = page.locator("#lineBarToolbar").evaluate(
+                        """
+                        node => {
+                          const before = node.scrollLeft;
+                          const event = new WheelEvent("wheel", {
+                            bubbles: true,
+                            cancelable: true,
+                            deltaY: 120,
+                          });
+                          node.dispatchEvent(event);
+                          return {
+                            before,
+                            after: node.scrollLeft,
+                            prevented: event.defaultPrevented,
+                          };
+                        }
+                        """
+                    )
+                    self.assertAlmostEqual(
+                        boundary_wheel["after"],
+                        boundary_wheel["before"],
+                        delta=0.5,
+                    )
+                    self.assertFalse(boundary_wheel["prevented"])
+                    self.assertEqual(chart_requests, chart_requests_before_boundary_wheel)
 
                     page.locator("#lineBarToolbar").evaluate(
                         "node => { node.style.maxWidth = '600px'; }"
@@ -9250,6 +9379,106 @@ class BrowserSmokeTests(unittest.TestCase):
                                 delta=0.5,
                             )
                         self.assertLessEqual(after_position["labelCenterDelta"], 0.5)
+
+                    mobile_context = browser.new_context(
+                        viewport={"width": 390, "height": 844},
+                        has_touch=True,
+                        is_mobile=True,
+                    )
+                    try:
+                        mobile_page = mobile_context.new_page()
+                        mobile_page.on("pageerror", lambda error: page_errors.append(str(error)))
+                        mobile_page.goto(base_url, wait_until="domcontentloaded")
+                        mobile_page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
+                        mobile_page.evaluate(
+                            """
+                            () => {
+                              const toggle = document.querySelector("#lineBarToolbarToggleBtn");
+                              if (toggle?.getAttribute("aria-expanded") === "false") toggle.click();
+                            }
+                            """
+                        )
+                        mobile_page.wait_for_function(
+                            """
+                            () => getComputedStyle(document.querySelector("#lineBarToolbar")).display !== "none"
+                            """,
+                            timeout=10_000,
+                        )
+                        mobile_toolbar = mobile_page.locator("#lineBarToolbar")
+                        mobile_toolbar.evaluate(
+                            "node => { node.style.maxWidth = '300px'; node.scrollLeft = 0; }"
+                        )
+                        mobile_page.wait_for_function(
+                            """
+                            () => {
+                              const toolbar = document.querySelector("#lineBarToolbar");
+                              return toolbar.scrollWidth > toolbar.clientWidth
+                                && toolbar.scrollLeft === 0;
+                            }
+                            """,
+                            timeout=10_000,
+                        )
+                        mobile_toolbar_box = mobile_toolbar.bounding_box()
+                        self.assertIsNotNone(mobile_toolbar_box)
+                        assert mobile_toolbar_box is not None
+                        touch_y = mobile_toolbar_box["y"] + mobile_toolbar_box["height"] / 2
+                        touch_start_x = (
+                            mobile_toolbar_box["x"] + mobile_toolbar_box["width"] - 30
+                        )
+                        touch_end_x = mobile_toolbar_box["x"] + 30
+                        cdp_session = mobile_context.new_cdp_session(mobile_page)
+                        cdp_session.send(
+                            "Input.dispatchTouchEvent",
+                            {
+                                "type": "touchStart",
+                                "touchPoints": [{"x": touch_start_x, "y": touch_y, "id": 1}],
+                            },
+                        )
+                        for step in range(1, 9):
+                            touch_x = (
+                                touch_start_x
+                                + ((touch_end_x - touch_start_x) * step / 8)
+                            )
+                            cdp_session.send(
+                                "Input.dispatchTouchEvent",
+                                {
+                                    "type": "touchMove",
+                                    "touchPoints": [{"x": touch_x, "y": touch_y, "id": 1}],
+                                },
+                            )
+                            mobile_page.wait_for_timeout(20)
+                        cdp_session.send(
+                            "Input.dispatchTouchEvent",
+                            {"type": "touchEnd", "touchPoints": []},
+                        )
+                        mobile_page.wait_for_function(
+                            """
+                            () => {
+                              const toolbar = document.querySelector("#lineBarToolbar");
+                              return toolbar.scrollLeft > 1
+                                && toolbar.classList.contains("app-settings-overflow-left")
+                                && toolbar.classList.contains("app-settings-overflow-right");
+                            }
+                            """,
+                            timeout=10_000,
+                        )
+                        mobile_swipe = mobile_toolbar.evaluate(
+                            """
+                            node => ({
+                              scrollLeft: node.scrollLeft,
+                              height: node.getBoundingClientRect().height,
+                              scrollbarWidth: getComputedStyle(node).scrollbarWidth,
+                              webkitScrollbarDisplay:
+                                getComputedStyle(node, "::-webkit-scrollbar").display,
+                            })
+                            """
+                        )
+                        self.assertGreater(mobile_swipe["scrollLeft"], 1)
+                        self.assertEqual(mobile_swipe["height"], 50)
+                        self.assertEqual(mobile_swipe["scrollbarWidth"], "none")
+                        self.assertEqual(mobile_swipe["webkitScrollbarDisplay"], "none")
+                    finally:
+                        mobile_context.close()
 
                     self.assertEqual(page_errors, [])
                     browser.close()
