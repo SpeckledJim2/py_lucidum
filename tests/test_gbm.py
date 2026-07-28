@@ -25,7 +25,7 @@ from py_lucidum.tools.gbm.store import GbmModelStore, GbmSourceProvider
 from py_lucidum.tools.gbm.tabulation import build_gbm_tabulations
 from py_lucidum.tools.gbm.trees import ebm_gain_summary, tree_detail, tree_summary
 from py_lucidum.tools.gbm.training import MissingGbmDependency, feature_config_with_mean_abs_shap, gbm_dependencies, gbm_training_dependencies, lightgbm_interaction_constraints, lightgbm_pair_interaction_constraints, lightgbm_progress_payload, normalise_feature_scenario, polars_feature_frame, predict_response_values, shap_dataframes, shap_interaction_group_columns, shap_row_limit, should_use_offset_init_score, train_model, tree_dataframe, training_projection_columns, training_select_sql, write_dataframe_parquet
-from py_lucidum.tools.gbm.validation import GBM_METRICS, GBM_OBJECTIVES, available_feature_interaction_groupings, categorical_distinct_counts, default_parameters, ebm_available, feature_interaction_constraint_groups, feature_rows, normalise_feature_grouping_map, normalise_feature_interaction_features, normalise_feature_interaction_groupings, normalise_feature_interaction_pairs, normalise_parameters, validate_request
+from py_lucidum.tools.gbm.validation import DEFAULT_TWEEDIE_VARIANCE_POWER, GBM_METRICS, GBM_OBJECTIVES, available_feature_interaction_groupings, categorical_distinct_counts, default_parameters, ebm_available, feature_interaction_constraint_groups, feature_rows, normalise_feature_grouping_map, normalise_feature_interaction_features, normalise_feature_interaction_groupings, normalise_feature_interaction_pairs, normalise_parameters, validate_request
 from py_lucidum.tools.glm.store import GlmModelStore
 from py_lucidum.tools.glm.tabulation import export_tabulations, tabulation_config, tabulation_table
 from py_lucidum.tools.line_bar.query import chart
@@ -340,9 +340,17 @@ COPY (
             {level["name"]: level["row_count"] for level in payload["sample"]["levels"]},
             {"training": 2, "test": 1, "validation": 0},
         )
-        parameters = {row["name"]: row["value"] for row in payload["parameters"]}
+        parameter_rows = payload["parameters"]
+        parameters = {row["name"]: row["value"] for row in parameter_rows}
         self.assertEqual(parameters["objective"], "poisson")
         self.assertEqual(parameters["metric"], "poisson")
+        self.assertEqual(parameters["tweedie_variance_power"], DEFAULT_TWEEDIE_VARIANCE_POWER)
+        tweedie_row = next(row for row in parameter_rows if row["name"] == "tweedie_variance_power")
+        self.assertTrue(tweedie_row["important"])
+        self.assertEqual(
+            [row["name"] for row in parameter_rows][1:4],
+            ["objective", "metric", "tweedie_variance_power"],
+        )
         self.assertEqual(parameters["num_iterations"], 1000)
         self.assertEqual(parameters["learning_rate"], 0.3)
         self.assertEqual(parameters["num_leaves"], 5)
@@ -1442,6 +1450,46 @@ COPY (
         self.assertIn("linear_tree=true cannot be used", errors)
         self.assertIn("num_threads must be an integer at least 0", errors)
 
+    def test_tweedie_variance_power_range_is_validated_for_every_objective(self) -> None:
+        dataset = Dataset(self.data_path)
+        for value in (1.0, 1.999):
+            with self.subTest(value=value):
+                result = validate_request(
+                    dataset,
+                    {
+                        "features": self.request_features(),
+                        "parameters": [
+                            {"name": "objective", "value": "regression"},
+                            {"name": "metric", "value": "l2"},
+                            {"name": "tweedie_variance_power", "value": value},
+                        ],
+                        "sample_column": "SAMPLE",
+                    },
+                )
+
+                self.assertTrue(result.ok, result.errors)
+
+        for value in (0.999, 2.0, 2.1):
+            with self.subTest(value=value):
+                result = validate_request(
+                    dataset,
+                    {
+                        "features": self.request_features(),
+                        "parameters": [
+                            {"name": "objective", "value": "regression"},
+                            {"name": "metric", "value": "l2"},
+                            {"name": "tweedie_variance_power", "value": value},
+                        ],
+                        "sample_column": "SAMPLE",
+                    },
+                )
+
+                self.assertFalse(result.ok)
+                self.assertIn(
+                    "tweedie_variance_power must be at least 1 and less than 2",
+                    result.errors,
+                )
+
     def test_num_threads_rejects_non_integer_values(self) -> None:
         dataset = Dataset(self.data_path)
         for value in ("abc", 1.5):
@@ -2090,6 +2138,7 @@ COPY (
         self.assertFalse(parameter_rows[-1]["important"])
         self.assertEqual(parameters["objective"], "gamma")
         self.assertEqual(parameters["metric"], "gamma")
+        self.assertEqual(parameters["tweedie_variance_power"], DEFAULT_TWEEDIE_VARIANCE_POWER)
         self.assertEqual(parameters["num_iterations"], 88)
         self.assertEqual(parameters["learning_rate"], 0.125)
         self.assertEqual(parameters["custom_penalty"], 2.5)
@@ -2195,6 +2244,7 @@ COPY (
                 {
                     "objective": "poisson",
                     "metric": "poisson",
+                    "tweedie_variance_power": 1.5 + (int(model_id[-1]) / 10),
                     "learning_rate": learning_rate,
                     "num_iterations": 100 + int(model_id[-1]),
                 },
@@ -2212,6 +2262,7 @@ COPY (
         self.assertEqual(payload["config"]["training_mode"], "normal")
         self.assertEqual(parameters["learning_rate"], 0.2)
         self.assertEqual(parameters["num_iterations"], 102)
+        self.assertEqual(parameters["tweedie_variance_power"], 1.7)
         self.assertNotIn("training_mode", parameters)
         self.assertFalse(features["Age"]["include"])
         self.assertTrue(features["Segment"]["include"])
@@ -2514,6 +2565,7 @@ COPY (
         self.assertNotIn("metric", manifest)
         self.assertEqual(stored_parameters["objective"], "poisson")
         self.assertEqual(stored_parameters["metric"], "poisson")
+        self.assertEqual(stored_parameters["tweedie_variance_power"], DEFAULT_TWEEDIE_VARIANCE_POWER)
         self.assertNotIn("init_score", stored_parameters)
         self.assertNotIn("init_score_metadata", stored_parameters)
         self.assertNotIn("training_mode", stored_parameters)

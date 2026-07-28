@@ -2028,6 +2028,7 @@ import {{ GBM_PARAMETER_GRID_COPY_ERROR, gbmParametersJson }} from "{module}";
 const json = gbmParametersJson([
   {{ name: "init_score", value: "Baseline", important: true }},
   {{ name: "objective", value: "poisson", important: true }},
+  {{ name: "tweedie_variance_power", value: "1.5", important: true }},
   {{ name: "num_iterations", value: "250", important: true }},
   {{ name: "learning_rate", value: " 5e-2 " }},
   {{ name: "force_col_wise", value: "TRUE" }},
@@ -2036,10 +2037,10 @@ const json = gbmParametersJson([
   {{ name: "interaction_constraints", value: [[0, 1], [2]] }},
 ]);
 const params = JSON.parse(json);
-if (Object.keys(params).join("|") !== "objective|num_iterations|learning_rate|force_col_wise|force_row_wise|monotone_constraints") throw new Error("parameter order or metadata filtering failed");
+if (Object.keys(params).join("|") !== "objective|tweedie_variance_power|num_iterations|learning_rate|force_col_wise|force_row_wise|monotone_constraints") throw new Error("parameter order or metadata filtering failed");
 if ("init_score" in params) throw new Error("init_score was copied");
 if ("interaction_constraints" in params) throw new Error("generated interaction constraints were copied");
-if (params.num_iterations !== 250 || params.learning_rate !== 0.05) throw new Error("numeric coercion failed");
+if (params.tweedie_variance_power !== 1.5 || params.num_iterations !== 250 || params.learning_rate !== 0.05) throw new Error("numeric coercion failed");
 if (params.force_col_wise !== true || params.force_row_wise !== false) throw new Error("boolean coercion failed");
 if (JSON.stringify(params.monotone_constraints) !== "[-1,0,1]") throw new Error("list value changed");
 if (!json.includes('\\n  "objective": "poisson"')) throw new Error("JSON was not pretty printed");

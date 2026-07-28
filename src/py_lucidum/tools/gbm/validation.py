@@ -21,6 +21,7 @@ INIT_SCORE_PARAMETER = "init_score"
 INIT_SCORE_NONE = "none"
 DEFAULT_OBJECTIVE = "poisson"
 DEFAULT_METRIC = "poisson"
+DEFAULT_TWEEDIE_VARIANCE_POWER = 1.5
 DEFAULT_TRAINING_MODE = "normal"
 TRAINING_MODES = ("normal", "ebm")
 DATA_SAMPLE_STRATEGIES = ("bagging", "goss")
@@ -81,6 +82,7 @@ def default_parameters() -> list[dict[str, Any]]:
         {"name": INIT_SCORE_PARAMETER, "value": INIT_SCORE_NONE, "important": True},
         {"name": "objective", "value": DEFAULT_OBJECTIVE, "important": True},
         {"name": "metric", "value": DEFAULT_METRIC, "important": True},
+        {"name": "tweedie_variance_power", "value": DEFAULT_TWEEDIE_VARIANCE_POWER, "important": True},
         {"name": "data_sample_strategy", "value": "bagging", "important": True},
         {"name": "num_iterations", "value": 1000, "important": True},
         {"name": "learning_rate", "value": 0.3, "important": True},
@@ -256,7 +258,7 @@ def parameter_numeric_constraint_errors(params: dict[str, Any]) -> list[str]:
         if top_rate + other_rate > 1:
             errors.append("top_rate + other_rate must be no more than 1")
     if "tweedie_variance_power" in params:
-        value = number_parameter(params, "tweedie_variance_power", 1.5)
+        value = number_parameter(params, "tweedie_variance_power", DEFAULT_TWEEDIE_VARIANCE_POWER)
         if value < 1 or value >= 2:
             errors.append("tweedie_variance_power must be at least 1 and less than 2")
     return errors
@@ -1081,6 +1083,7 @@ def sample_split_messages(counts: dict[str, int], *, source_label: str) -> tuple
 __all__ = [
     "DEFAULT_METRIC",
     "DEFAULT_OBJECTIVE",
+    "DEFAULT_TWEEDIE_VARIANCE_POWER",
     "DEFAULT_TRAINING_MODE",
     "DATA_SAMPLE_STRATEGIES",
     "GBM_METRICS",

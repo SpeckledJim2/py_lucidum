@@ -23351,6 +23351,7 @@ COPY (
                 "init_score",
                 "objective",
                 "metric",
+                "tweedie_variance_power",
                 "data_sample_strategy",
                 "num_iterations",
                 "learning_rate",
@@ -26385,7 +26386,19 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                page.locator("#gbmActivateModelBtn").click()
+                page.evaluate(
+                    """
+                    () => {
+                      const row = [...document.querySelectorAll("#gbmModelGrid .tabulator-row")]
+                        .find((item) => item.textContent.includes("Browser smoke model"));
+                      if (!row) throw new Error("Browser smoke model row is unavailable");
+                      if (!row.classList.contains("tabulator-selected")) row.click();
+                      const button = document.querySelector("#gbmActivateModelBtn");
+                      if (!button || button.disabled) throw new Error("Activate model action is unavailable");
+                      button.click();
+                    }
+                    """
+                )
                 page.wait_for_function(
                     """
                     () => document.querySelector("#gbmModelSelectedMeta")?.textContent.includes("Browser smoke model")
@@ -29197,6 +29210,10 @@ COPY (
                 self.assertEqual(
                     page.locator("#gbmParameterGrid .tabulator-row", has_text="num_iterations").locator(".tabulator-cell[tabulator-field='value']").text_content(),
                     "77",
+                )
+                self.assertEqual(
+                    page.locator("#gbmParameterGrid .tabulator-row", has_text="tweedie_variance_power").locator(".tabulator-cell[tabulator-field='value']").text_content(),
+                    "1.5",
                 )
                 parameter_dropdown_before = page.evaluate(
                     """
