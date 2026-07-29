@@ -220,6 +220,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 **UK mapping**
 
 - Area and sector layers join grouped KPI summaries to bundled GeoJSON assets.
+- Area and sector map metadata reports source-row geometry matching without blocking partial plots. The unmatched percentage uses filtered rows with a nonblank postcode as its denominator; blank postcode rows are reported separately with all filtered rows as their percentage denominator. Sector smoothing targets with zero original rows do not affect either count. Quantile legends and hotspot ranking use only aggregate rows whose keys exist in the active GeoJSON, while `No data` continues to mean a bundled geometry without a finite plotted KPI.
 - App map assets load locally, including Leaflet and bundled UK GeoJSON. Nonblank base-map backgrounds are a separate external tile dependency: OSM, Esri/Aerial, Light, and Dark layers fetch tiles from their configured third-party providers, while `Blank` makes no external tile requests.
 - Sector smoothing uses a committed shared-edge adjacency sidecar generated from the bundled sector GeoJSON, then pools already-aggregated numerator and denominator values across sectors reachable within the selected neighbour depth. When smoothing is active, all sidecar sectors are smoothing targets, so sectors with no original data can be filled from valid neighbours. Raw sector fields remain available in the API rows for popup context.
 - Default join columns are `PostcodeArea`, `PostcodeSector`, and `PostcodeUnit`; uppercase aliases are supported.

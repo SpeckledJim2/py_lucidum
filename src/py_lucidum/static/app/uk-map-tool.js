@@ -37,6 +37,85 @@ const POSTCODE_LEVELS = [
   { level: "unit", label: "Unit" },
 ];
 
+function ukMapPositiveRowCount(value) {
+  const count = Number(value);
+  return Number.isFinite(count) && count > 0 ? count : 0;
+}
+
+function ukMapShapeKeySet(shapeKeys) {
+  return shapeKeys instanceof Set
+    ? shapeKeys
+    : new Set(Array.from(shapeKeys || [], (key) => String(key)));
+}
+
+export function ukMapShapefileMatchSummary({
+  level = "area",
+  rows = [],
+  filteredRowCount = 0,
+  shapeKeys = [],
+} = {}) {
+  const levelConfig = MAP_LEVELS[level] || MAP_LEVELS.area;
+  const validShapeKeys = ukMapShapeKeySet(shapeKeys);
+  const matchedRows = [];
+  const unmatchedRows = [];
+  let matchedRowCount = 0;
+  let unmatchedRowCount = 0;
+
+  for (const row of rows || []) {
+    const key = row?.key === null || row?.key === undefined ? "" : String(row.key).trim();
+    if (!key) continue;
+    const rowCount = ukMapPositiveRowCount(row?.row_count);
+    if (validShapeKeys.has(key)) {
+      matchedRows.push(row);
+      matchedRowCount += rowCount;
+    } else {
+      unmatchedRows.push(row);
+      unmatchedRowCount += rowCount;
+    }
+  }
+
+  const eligibleRowCount = matchedRowCount + unmatchedRowCount;
+  const filteredCount = Math.max(0, Number(filteredRowCount) || 0);
+  const missingRowCount = Math.max(0, filteredCount - eligibleRowCount);
+  const unmatchedPercentage = eligibleRowCount > 0
+    ? (unmatchedRowCount / eligibleRowCount) * 100
+    : 0;
+  const missingPercentage = filteredCount > 0
+    ? (missingRowCount / filteredCount) * 100
+    : 0;
+  const unmatchedPercentageText = unmatchedPercentage.toFixed(1);
+  const missingPercentageText = missingPercentage.toFixed(1);
+  let matchText = "";
+  let matchState = "warning";
+  if (eligibleRowCount <= 0) {
+    matchText = `No ${levelConfig.label} to match`;
+  } else if (unmatchedRowCount <= 0) {
+    matchText = `All ${levelConfig.label} matched`;
+    matchState = "complete";
+  } else {
+    matchText = `${unmatchedRowCount.toLocaleString()} ${unmatchedRowCount === 1 ? "row" : "rows"} unmatched (${unmatchedPercentageText}%)`;
+  }
+  const missingText = missingRowCount > 0
+    ? `${missingRowCount.toLocaleString()} ${missingRowCount === 1 ? "row" : "rows"} missing ${levelConfig.singular} (${missingPercentageText}%)`
+    : "";
+
+  return {
+    matchedRows,
+    unmatchedRows,
+    matchedRowCount,
+    unmatchedRowCount,
+    eligibleRowCount,
+    missingRowCount,
+    unmatchedPercentage,
+    unmatchedPercentageText,
+    missingPercentage,
+    missingPercentageText,
+    matchText,
+    missingText,
+    matchState,
+  };
+}
+
 export const UK_MAP_POSTCODE_REGIONS = Object.freeze([
   Object.freeze({ label: "Central London", areas: Object.freeze(["E", "EC", "N", "NW", "SE", "SW", "W", "WC"]) }),
   Object.freeze({ label: "East Midlands", areas: Object.freeze(["DE", "LE", "LN", "NG", "NN"]) }),
@@ -425,11 +504,18 @@ export function createUkMapTool({
   function showMapMissingNumerator() {
     setGroupMeta("uk_map", "Choose an Actual column");
     setMapRowMeta("");
+    setMapMatchLiveStatus("");
     setChartMessage("UK mapping needs a numeric Actual column.");
   }
 
   function setMapRowMeta(message) {
     el("mapRowMeta").textContent = message || "";
+  }
+
+  function setMapMatchLiveStatus(message, { persist = true } = {}) {
+    const liveStatus = String(message || "");
+    el("mapMatchLiveStatus").textContent = liveStatus;
+    if (persist) toolCache("uk_map").mapMatchLiveStatus = liveStatus;
   }
 
   function mapRowMetaForData(data) {
@@ -449,6 +535,7 @@ export function createUkMapTool({
     if (!quietPending) {
       setGroupMeta("uk_map", "Computing map...");
       setMapRowMeta("");
+      setMapMatchLiveStatus("");
     }
     startToolTiming("uk_map");
     try {
@@ -471,6 +558,7 @@ export function createUkMapTool({
       state.mapViewRestorePending = null;
       setGroupMeta("uk_map", "Map failed");
       setMapRowMeta("");
+      setMapMatchLiveStatus("");
       setChartMessage(error.message);
     }
   }
@@ -499,6 +587,7 @@ export function createUkMapTool({
     el("mapLegendBody").textContent = "";
     el("mapLegend").classList.add("hidden");
     setMapRowMeta("");
+    setMapMatchLiveStatus("");
   }
 
   function showPendingRestore() {
@@ -507,6 +596,7 @@ export function createUkMapTool({
     setChartMessage("");
     setGroupMeta("uk_map", "Computing map...");
     setMapRowMeta("");
+    setMapMatchLiveStatus("");
     clearRenderedMap();
     syncFloatingMapControl();
   }
@@ -516,6 +606,7 @@ export function createUkMapTool({
     syncFloatingMapControl();
     applyToolPresentation("uk_map");
     setMapRowMeta(mapRowMetaForData(cache.data));
+    setMapMatchLiveStatus(cache.mapMatchLiveStatus || "", { persist: false });
     const geoJson = state.mapGeoJsonCache[cache.data.level];
     const activeLayer = cache.data.level === "unit" ? ukMapPointLayer : ukMapLayer;
     if (options.renderIfCached) {
@@ -1447,9 +1538,13 @@ export function createUkMapTool({
 
   function cachedMapPolygonLayer(level, geoJson) {
     if (!state.mapPolygonLayerCache[level]) {
+      const levelConfig = MAP_LEVELS[level] || MAP_LEVELS.area;
       state.mapPolygonLayerCache[level] = {
         layer: createMapPolygonLayer(level, geoJson),
         featureCount: geoJson.features?.length || 0,
+        shapeKeys: new Set(
+          (geoJson.features || []).map((feature) => mapPolygonFeatureKey(feature, levelConfig.property)),
+        ),
       };
     }
     return state.mapPolygonLayerCache[level];
@@ -1808,8 +1903,15 @@ export function createUkMapTool({
     syncFloatingMapControl();
     const levelConfig = MAP_LEVELS[data.level] || MAP_LEVELS.area;
     const summaries = new Map((data.rows || []).map((row) => [String(row.key), row]));
-    const scale = makeQuantileScale(data.rows || []);
-    const hotspotKeys = mapHotspotKeys(data.rows || []);
+    const cachedPolygonLayer = cachedMapPolygonLayer(data.level, geoJson);
+    const matchSummary = ukMapShapefileMatchSummary({
+      level: data.level,
+      rows: data.rows || [],
+      filteredRowCount: data.filtered_row_count,
+      shapeKeys: cachedPolygonLayer.shapeKeys,
+    });
+    const scale = makeQuantileScale(matchSummary.matchedRows);
+    const hotspotKeys = mapHotspotKeys(matchSummary.matchedRows);
     state.mapPolygonRenderContext = {
       data,
       joinProperty: data.join_property,
@@ -1817,7 +1919,6 @@ export function createUkMapTool({
       scale,
       hotspotKeys,
     };
-    const cachedPolygonLayer = cachedMapPolygonLayer(data.level, geoJson);
     const featureCount = cachedPolygonLayer.featureCount;
     const matchedFeatureCount = countMatchedMapPolygonFeatures(cachedPolygonLayer.layer, summaries);
     if (ukMapLayer && ukMapLayer !== cachedPolygonLayer.layer) {
@@ -1840,8 +1941,22 @@ export function createUkMapTool({
     renderMapLegend(scale, data.response?.label || "Actual");
     const rowMeta = mapRowMetaForData(data);
     const groupMeta = `${matchedFeatureCount.toLocaleString()} / ${featureCount.toLocaleString()} ${levelConfig.label} matched`;
-    setGroupMeta("uk_map", groupMeta);
+    const matchWarningClass = matchSummary.matchState === "warning"
+      ? " map-shapefile-match-status--warning"
+      : "";
+    const missingStatusHtml = matchSummary.missingText
+      ? `<div class="map-shapefile-missing-status map-shapefile-match-status--warning">${escapeHtml(matchSummary.missingText)}</div>`
+      : "";
+    const groupMetaHtml = `
+      <div class="map-group-meta-count">${escapeHtml(groupMeta)}</div>
+      <div class="map-shapefile-match-status${matchWarningClass}">${escapeHtml(matchSummary.matchText)}</div>
+      ${missingStatusHtml}
+    `;
+    setGroupMeta("uk_map", groupMetaHtml, { html: true });
     setMapRowMeta(rowMeta);
+    setMapMatchLiveStatus(
+      [groupMeta, matchSummary.matchText, matchSummary.missingText].filter(Boolean).join(". "),
+    );
     const warnings = [...(data.warnings || [])];
     if (searchWarning) {
       warnings.push(searchWarning);
@@ -1851,7 +1966,7 @@ export function createUkMapTool({
     }
     const chartMessage = warnings.filter(Boolean).join(" ");
     setChartMessage(chartMessage);
-    saveToolPresentation("uk_map", { groupMeta, chartMessage });
+    saveToolPresentation("uk_map", { groupMeta, groupMetaHtml, chartMessage });
     refreshOpenMapPopup(data);
     scheduleMapViewportSync({ mode: "preserve" });
   }
@@ -1887,6 +2002,7 @@ export function createUkMapTool({
     const groupMeta = `${plottedCount.toLocaleString()} / ${summaryCount.toLocaleString()} units plotted`;
     setGroupMeta("uk_map", groupMeta);
     setMapRowMeta(rowMeta);
+    setMapMatchLiveStatus("");
     const warnings = [...(data.warnings || [])];
     const missingValueCount = Number(pointSummary.missing_value_count || 0);
     const missingCoordinateCount = Number(pointSummary.missing_coordinate_count || 0);
@@ -2618,6 +2734,7 @@ export function createUkMapTool({
     state.mapStartupFitDone = false;
     state.renderedMapLevel = null;
     activeMapPopupSelection = null;
+    setMapMatchLiveStatus("");
   }
 
   return {

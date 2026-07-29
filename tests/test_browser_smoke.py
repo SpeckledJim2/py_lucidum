@@ -2072,6 +2072,10 @@ class BrowserSmokeTests(unittest.TestCase):
                             """,
                             timeout=20_000,
                         )
+                        self.assertIn(
+                            "All areas matched",
+                            page.locator("#mapGroupMeta").inner_text(),
+                        )
                         legend_toggle = page.locator("#mapLegendToggle")
                         self.assertEqual(legend_toggle.get_attribute("title"), "Expand legend")
                         self.assertEqual(legend_toggle.get_attribute("aria-label"), "Expand legend")
@@ -2122,6 +2126,198 @@ class BrowserSmokeTests(unittest.TestCase):
                             """
                         )
                         self.assertEqual(legend_toggle.get_attribute("aria-expanded"), "false")
+                        self.assertEqual(page_errors, [])
+                    finally:
+                        page.close()
+                        browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_uk_map_reports_unmatched_and_missing_rows_without_distorting_legend(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "map_matches.csv"
+            data_path.write_text(
+                "PostcodeArea,PostcodeSector,Actual\n"
+                "AB,AB10 1,10\n"
+                "AL,AL1 1,20\n"
+                "ZZ,ZZ1 1,999999999\n"
+                ",,30\n",
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                tools=["uk_map"],
+                defaults={"actual": "Actual", "denominator": "__none__"},
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+
+                    def warning_palette() -> dict[str, Any]:
+                        return page.evaluate(
+                            """
+                            () => {
+                              const probe = document.createElement("span");
+                              probe.style.color = "var(--danger)";
+                              document.body.append(probe);
+                              const danger = getComputedStyle(probe).color;
+                              probe.remove();
+                              return {
+                                danger,
+                                warnings: [...document.querySelectorAll(
+                                  "#mapGroupMeta .map-shapefile-match-status--warning"
+                                )].map((node) => getComputedStyle(node).color),
+                              };
+                            }
+                            """
+                        )
+
+                    try:
+                        page.goto(f"{base_url}/?tool=uk_map", wait_until="domcontentloaded")
+                        page.locator("#ukMap:not(.hidden)").wait_for(timeout=10_000)
+                        page.wait_for_function(
+                            """
+                            () => {
+                              const meta = document.querySelector("#mapGroupMeta")?.textContent || "";
+                              return meta.includes("areas matched")
+                                && meta.includes("1 row unmatched (33.3%)")
+                                && meta.includes("1 row missing area (25.0%)");
+                            }
+                            """,
+                            timeout=20_000,
+                        )
+                        page.locator("#mapControlReset").click()
+                        page.wait_for_function(
+                            '() => !document.querySelector("#mapFloatingControl")?.classList.contains("collapsed")',
+                            timeout=10_000,
+                        )
+                        area_meta = page.locator("#mapGroupMeta").inner_text()
+                        self.assertIn("2 / 124 areas matched", area_meta)
+                        self.assertIn("1 row unmatched (33.3%)", area_meta)
+                        self.assertIn("1 row missing area (25.0%)", area_meta)
+                        self.assertIn(
+                            "1 row unmatched (33.3%)",
+                            page.locator("#mapMatchLiveStatus").inner_text(),
+                        )
+                        match_status_layout = page.evaluate(
+                            """
+                            () => {
+                              const nodes = [...document.querySelectorAll(
+                                "#mapGroupMeta .map-shapefile-match-status, "
+                                  + "#mapGroupMeta .map-shapefile-missing-status"
+                              )];
+                              return nodes.map((node) => ({
+                                contained: node.scrollWidth <= node.clientWidth + 1,
+                                whiteSpace: getComputedStyle(node).whiteSpace,
+                              }));
+                            }
+                            """
+                        )
+                        self.assertTrue(match_status_layout)
+                        self.assertTrue(all(item["contained"] for item in match_status_layout))
+                        self.assertEqual(
+                            {item["whiteSpace"] for item in match_status_layout},
+                            {"nowrap"},
+                        )
+                        self.assertNotIn("999999999", page.locator("#mapLegendBody").inner_text())
+
+                        page.evaluate("() => document.body.classList.remove('dark')")
+                        light_palette = warning_palette()
+                        self.assertEqual(light_palette["warnings"], [light_palette["danger"], light_palette["danger"]])
+                        page.locator("#themeBtn").click()
+                        page.wait_for_function('() => document.body.classList.contains("dark")', timeout=10_000)
+                        dark_palette = warning_palette()
+                        self.assertEqual(dark_palette["warnings"], [dark_palette["danger"], dark_palette["danger"]])
+                        self.assertNotEqual(light_palette["danger"], dark_palette["danger"])
+
+                        page.eval_on_selector(
+                            "#mapHotspots",
+                            """
+                            (input) => {
+                              input.value = "9";
+                              input.dispatchEvent(new Event("input", { bubbles: true }));
+                            }
+                            """,
+                        )
+                        page.wait_for_function(
+                            """
+                            () => {
+                              const map = document.querySelector("#ukMap")?._lucidumMap;
+                              const fills = {};
+                              map?.eachLayer((layer) => layer.eachLayer?.((featureLayer) => {
+                                const key = featureLayer.feature?.properties?.PostcodeArea;
+                                if (key === "AB" || key === "AL") fills[key] = featureLayer.options?.fillColor;
+                              }));
+                              return fills.AB === "#cbd5e1" && fills.AL && fills.AL !== "#cbd5e1";
+                            }
+                            """,
+                            timeout=10_000,
+                        )
+
+                        with page.expect_response(
+                            lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200,
+                            timeout=10_000,
+                        ):
+                            page.locator('#mapLevelTiles input[name="mapLevel"][value="sector"]').check()
+                        page.wait_for_function(
+                            """
+                            () => {
+                              const meta = document.querySelector("#mapGroupMeta")?.textContent || "";
+                              return meta.includes("sectors matched")
+                                && meta.includes("1 row unmatched (33.3%)")
+                                && meta.includes("1 row missing sector (25.0%)");
+                            }
+                            """,
+                            timeout=20_000,
+                        )
+                        self.assertNotIn("999999999", page.locator("#mapLegendBody").inner_text())
+
+                        page.locator("#filterInput").evaluate(
+                            """
+                            (input) => {
+                              input.value = "PostcodeArea = 'ZZ'";
+                              input.dispatchEvent(new Event("input", { bubbles: true }));
+                            }
+                            """
+                        )
+                        with page.expect_response(
+                            lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200,
+                            timeout=10_000,
+                        ):
+                            page.locator("#filterApplyBtn").evaluate("(button) => button.click()")
+                        page.wait_for_function(
+                            """
+                            () => {
+                              const meta = document.querySelector("#mapGroupMeta")?.textContent || "";
+                              return meta.includes("0 /")
+                                && meta.includes("sectors matched")
+                                && meta.includes("1 row unmatched (100.0%)")
+                                && !meta.includes("missing sector")
+                                && document.querySelector("#mapLegend")?.classList.contains("hidden");
+                            }
+                            """,
+                            timeout=20_000,
+                        )
+                        rendered_sector_features = page.evaluate(
+                            """
+                            () => {
+                              const map = document.querySelector("#ukMap")?._lucidumMap;
+                              let count = 0;
+                              map?.eachLayer((layer) => layer.eachLayer?.((featureLayer) => {
+                                if (featureLayer.feature?.properties?.PostcodeSector) count += 1;
+                              }));
+                              return count;
+                            }
+                            """
+                        )
+                        self.assertGreater(rendered_sector_features, 0)
                         self.assertEqual(page_errors, [])
                     finally:
                         page.close()

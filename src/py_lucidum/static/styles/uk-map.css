@@ -166,6 +166,36 @@
         white-space: nowrap;
       }
 
+      .map-group-meta-count,
+      .map-shapefile-match-status,
+      .map-shapefile-missing-status {
+        display: block;
+        min-height: 1.1em;
+      }
+
+      .map-shapefile-match-status,
+      .map-shapefile-missing-status {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .map-shapefile-match-status--warning {
+        color: var(--danger);
+      }
+
+      .map-match-live-status {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
+
       .map-floating-header #mapRowMeta {
         min-height: 1.1em;
       }

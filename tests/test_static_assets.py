@@ -941,6 +941,108 @@ if (preferredStartupSource(schema.data_sources, "") !== "dataset") throw new Err
 
 
 
+    def test_uk_map_shapefile_match_summary_helper(self) -> None:
+        module = Path("src/py_lucidum/static/app/uk-map-tool.js").resolve().as_uri()
+        script = f"""
+import {{ ukMapShapefileMatchSummary }} from "{module}";
+
+const allMatched = ukMapShapefileMatchSummary({{
+  level: "area",
+  rows: [
+    {{ key: "AB", row_count: 2, value: 10 }},
+    {{ key: "AL", row_count: 1, value: null }},
+  ],
+  filteredRowCount: 3,
+  shapeKeys: new Set(["AB", "AL"]),
+}});
+if (allMatched.matchedRowCount !== 3
+    || allMatched.unmatchedRowCount !== 0
+    || allMatched.eligibleRowCount !== 3
+    || allMatched.missingRowCount !== 0
+    || allMatched.unmatchedPercentageText !== "0.0"
+    || allMatched.missingPercentageText !== "0.0"
+    || allMatched.matchText !== "All areas matched"
+    || allMatched.missingText !== ""
+    || allMatched.matchState !== "complete"
+    || allMatched.matchedRows.length !== 2
+    || allMatched.unmatchedRows.length !== 0) {{
+  throw new Error(`incorrect all-matched summary: ${{JSON.stringify(allMatched)}}`);
+}}
+
+const partial = ukMapShapefileMatchSummary({{
+  level: "area",
+  rows: [
+    {{ key: "AB", row_count: 2, value: 10 }},
+    {{ key: "ZZ", row_count: 1, value: 999999999 }},
+  ],
+  filteredRowCount: 4,
+  shapeKeys: ["AB", "AL"],
+}});
+if (partial.matchedRowCount !== 2
+    || partial.unmatchedRowCount !== 1
+    || partial.eligibleRowCount !== 3
+    || partial.missingRowCount !== 1
+    || partial.unmatchedPercentageText !== "33.3"
+    || partial.matchText !== "1 row unmatched (33.3%)"
+    || partial.missingPercentageText !== "25.0"
+    || partial.missingText !== "1 row missing area (25.0%)"
+    || partial.matchState !== "warning"
+    || partial.matchedRows.map((row) => row.key).join("|") !== "AB"
+    || partial.unmatchedRows.map((row) => row.key).join("|") !== "ZZ") {{
+  throw new Error(`incorrect partial summary: ${{JSON.stringify(partial)}}`);
+}}
+
+const plural = ukMapShapefileMatchSummary({{
+  level: "sector",
+  rows: [
+    {{ key: "AB10 1", row_count: 2 }},
+    {{ key: "ZZ1 1", row_count: 2 }},
+  ],
+  filteredRowCount: 6,
+  shapeKeys: new Set(["AB10 1"]),
+}});
+if (plural.matchText !== "2 rows unmatched (50.0%)"
+    || plural.missingPercentageText !== "33.3"
+    || plural.missingText !== "2 rows missing sector (33.3%)") {{
+  throw new Error(`incorrect plural summary: ${{JSON.stringify(plural)}}`);
+}}
+
+const noEligibleRows = ukMapShapefileMatchSummary({{
+  level: "area",
+  rows: [],
+  filteredRowCount: 2,
+  shapeKeys: new Set(["AB"]),
+}});
+if (noEligibleRows.matchText !== "No areas to match"
+    || noEligibleRows.missingPercentageText !== "100.0"
+    || noEligibleRows.missingText !== "2 rows missing area (100.0%)"
+    || noEligibleRows.unmatchedPercentageText !== "0.0") {{
+  throw new Error(`incorrect empty summary: ${{JSON.stringify(noEligibleRows)}}`);
+}}
+
+const smoothedSector = ukMapShapefileMatchSummary({{
+  level: "sector",
+  rows: [
+    {{ key: "AB10 1", row_count: 1, raw_row_count: 1, value: 10 }},
+    {{ key: "AB10 2", row_count: 0, raw_row_count: null, value: 10 }},
+    {{ key: "ZZ1 1", row_count: 3, raw_row_count: 3, value: 100 }},
+  ],
+  filteredRowCount: 4,
+  shapeKeys: new Set(["AB10 1", "AB10 2"]),
+}});
+if (smoothedSector.matchedRowCount !== 1
+    || smoothedSector.unmatchedRowCount !== 3
+    || smoothedSector.eligibleRowCount !== 4
+    || smoothedSector.missingRowCount !== 0
+    || smoothedSector.unmatchedPercentageText !== "75.0"
+    || smoothedSector.missingPercentageText !== "0.0"
+    || smoothedSector.matchedRows.length !== 2) {{
+  throw new Error(`incorrect smoothed-sector summary: ${{JSON.stringify(smoothedSector)}}`);
+}}
+"""
+        self.run_node_script(script)
+
+
     def test_uk_map_postcode_availability_helper(self) -> None:
         module = Path("src/py_lucidum/static/app/uk-map-tool.js").resolve().as_uri()
         area_geojson = Path(
@@ -2461,6 +2563,10 @@ if (message !== GBM_PARAMETER_GRID_COPY_ERROR) throw new Error("grid-search copy
         self.assertIn(
             'id="mapLegendToggle" class="map-legend-toggle" type="button" title="Expand legend" '
             'aria-label="Expand legend" aria-controls="mapLegendBody" aria-expanded="false"',
+            index,
+        )
+        self.assertIn(
+            'id="mapMatchLiveStatus" class="map-match-live-status" role="status" aria-live="polite"',
             index,
         )
 
