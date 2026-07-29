@@ -1376,6 +1376,52 @@ COPY (
         self.assertEqual(captured["feature_interaction_groupings"], ["POSTCODE"])
         self.assertEqual(captured["feature_interaction_features"], ["Age"])
 
+    def test_train_endpoint_records_individual_dependency_import_phases(self) -> None:
+        app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
+        operation_id = "gbm-dependency-phases"
+        app.state.telemetry.ensure_operation(operation_id, tool="gbm", label="GBM Train")
+
+        def fake_dependencies(*, dependency_progress: Any = None) -> tuple[Any, Any, Any, Any]:
+            dependency_progress("importing_lightgbm")
+            dependency_progress("importing_pyarrow")
+            return object(), object(), object(), object()
+
+        def fake_start(
+            dataset: Dataset,
+            store: GbmModelStore,
+            payload: dict[str, Any],
+            *,
+            operation_id: str | None = None,
+        ) -> GbmJob:
+            self.assertEqual(operation_id, "gbm-dependency-phases")
+            return GbmJob(id="dependency-job")
+
+        app.state.gbm_jobs.start = fake_start
+        request = {
+            "features": self.request_features(),
+            "parameters": [{"name": "objective", "value": "poisson"}, {"name": "metric", "value": "poisson"}],
+            "sample_column": "SAMPLE",
+        }
+
+        with (
+            patch("py_lucidum.tools.gbm.routes.request_operation_id", return_value=operation_id),
+            patch("py_lucidum.tools.gbm.routes.gbm_training_dependencies", side_effect=fake_dependencies),
+        ):
+            status, body = asgi_post_json(app, "/api/gbm/train", request)
+
+        self.assertEqual(status, 200, body)
+        app.state.telemetry.finish_operation(operation_id, status="succeeded")
+        operation = app.state.telemetry.snapshot()["operations"]["recent"][0]
+        self.assertEqual(
+            [phase["name"] for phase in operation["phases"]],
+            ["importing_lightgbm", "importing_pyarrow", "validating_request", "starting"],
+        )
+        self.assertEqual(
+            [phase["label"] for phase in operation["phases"][:2]],
+            ["Importing LightGBM", "Importing PyArrow"],
+        )
+        self.assertNotIn("loading_dependencies", [phase["name"] for phase in operation["phases"]])
+
     def test_parameter_grid_parses_ranges_sets_and_samples_indexes(self) -> None:
         grid = parse_parameter_grid(
             [
@@ -1626,6 +1672,32 @@ COPY (
         self.assertIn("lightgbm runtime", message)
         self.assertIn("brew install libomp", message)
 
+    def test_gbm_training_dependencies_reports_only_cold_import_stages(self) -> None:
+        stages: list[str] = []
+
+        with patch("py_lucidum.tools.gbm.training._dependency_is_loaded", return_value=False):
+            dependencies = gbm_training_dependencies(dependency_progress=stages.append)
+
+        self.assertEqual(len(dependencies), 4)
+        self.assertEqual(
+            stages,
+            [
+                "importing_lightgbm",
+                "importing_numpy",
+                "importing_pandas",
+                "importing_polars",
+                "importing_pyarrow",
+                "importing_cffi",
+            ],
+        )
+
+        stages.clear()
+        with patch("py_lucidum.tools.gbm.training._dependency_is_loaded", return_value=True):
+            cached_dependencies = gbm_training_dependencies(dependency_progress=stages.append)
+
+        self.assertEqual(len(cached_dependencies), 4)
+        self.assertEqual(stages, [])
+
     def test_gbm_training_dependencies_report_missing_arrow_runtime(self) -> None:
         real_import = builtins.__import__
 
@@ -1640,6 +1712,23 @@ COPY (
 
         self.assertIn("LightGBM Arrow runtime (cffi)", str(raised.exception))
         self.assertIn("py-lucidum[gbm]", str(raised.exception))
+
+    def test_train_model_reports_dependency_import_progress_without_generic_phase(self) -> None:
+        progress_events: list[dict[str, Any]] = []
+        dataset = Dataset(self.data_path)
+        store = GbmModelStore(self.data_path)
+
+        def fake_dependencies(*, dependency_progress: Any = None) -> tuple[Any, Any, Any, Any]:
+            dependency_progress("importing_lightgbm")
+            return object(), object(), object(), object()
+
+        with patch("py_lucidum.tools.gbm.training.gbm_training_dependencies", side_effect=fake_dependencies):
+            with self.assertRaises(ValueError):
+                train_model(dataset, store, {}, progress_callback=progress_events.append)
+
+        self.assertEqual(progress_events[0]["stage"], "importing_lightgbm")
+        self.assertEqual(progress_events[0]["message"], "Preparing GBM: importing LightGBM...")
+        self.assertNotIn("loading_dependencies", [event.get("stage") for event in progress_events])
 
     def test_polars_feature_frame_is_numeric_ordered_and_stably_categorical(self) -> None:
         try:

@@ -104,8 +104,9 @@ def register(app: FastAPI, context: AppContext) -> None:
         payload = dict(await request.json())
         payload["feature_groupings"] = config.feature_groupings()
         try:
-            operation_phase(operation_id, "loading_dependencies")
-            gbm_training_dependencies()
+            gbm_training_dependencies(
+                dependency_progress=lambda stage: operation_phase(operation_id, stage),
+            )
             if payload.get("create_sample"):
                 operation_phase(operation_id, "creating_sample")
                 create_generated_sample(context.dataset, store.generated_sample_path)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import sys
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -45,8 +46,17 @@ from .validation import (
 
 
 ProgressCallback = Callable[[dict[str, Any]], None]
+DependencyProgressCallback = Callable[[str], None]
 EBM_INITIAL_LEARNING_RATE = 0.3
 DEFAULT_SHAP_SAMPLE_SEED = 2026
+DEPENDENCY_IMPORT_PACKAGES = {
+    "importing_lightgbm": "LightGBM",
+    "importing_numpy": "NumPy",
+    "importing_pandas": "pandas",
+    "importing_polars": "Polars",
+    "importing_pyarrow": "PyArrow",
+    "importing_cffi": "CFFI",
+}
 
 
 class MissingGbmDependency(RuntimeError):
@@ -59,8 +69,29 @@ class MissingGbmDependency(RuntimeError):
         self.hint = hint
 
 
-def gbm_dependencies() -> tuple[Any, Any, Any]:
+def _dependency_is_loaded(module_name: str) -> bool:
+    return module_name in sys.modules
+
+
+def _report_dependency_import(
+    progress_callback: DependencyProgressCallback | None,
+    *,
+    module_name: str,
+    stage: str,
+) -> None:
+    if progress_callback is not None and not _dependency_is_loaded(module_name):
+        progress_callback(stage)
+
+
+def gbm_dependencies(
+    dependency_progress: DependencyProgressCallback | None = None,
+) -> tuple[Any, Any, Any]:
     missing: list[str] = []
+    _report_dependency_import(
+        dependency_progress,
+        module_name="lightgbm",
+        stage="importing_lightgbm",
+    )
     try:
         import lightgbm as lgb  # type: ignore[import-not-found]
     except ImportError:
@@ -73,11 +104,21 @@ def gbm_dependencies() -> tuple[Any, Any, Any]:
         hint = "On macOS, install the OpenMP runtime with `brew install libomp`." if "libomp" in str(exc) else str(exc)
     else:
         hint = None
+    _report_dependency_import(
+        dependency_progress,
+        module_name="numpy",
+        stage="importing_numpy",
+    )
     try:
         import numpy as np  # type: ignore[import-not-found]
     except ImportError:
         np = None
         missing.append("numpy")
+    _report_dependency_import(
+        dependency_progress,
+        module_name="pandas",
+        stage="importing_pandas",
+    )
     try:
         import pandas as pd  # type: ignore[import-not-found]
     except ImportError:
@@ -88,19 +129,36 @@ def gbm_dependencies() -> tuple[Any, Any, Any]:
     return lgb, np, pd
 
 
-def gbm_training_dependencies() -> tuple[Any, Any, Any, Any]:
-    lgb, np, pd = gbm_dependencies()
+def gbm_training_dependencies(
+    dependency_progress: DependencyProgressCallback | None = None,
+) -> tuple[Any, Any, Any, Any]:
+    lgb, np, pd = gbm_dependencies(dependency_progress=dependency_progress)
     missing: list[str] = []
+    _report_dependency_import(
+        dependency_progress,
+        module_name="polars",
+        stage="importing_polars",
+    )
     try:
         import polars as pl  # type: ignore[import-not-found]
     except ImportError:
         pl = None
         missing.append("polars")
+    _report_dependency_import(
+        dependency_progress,
+        module_name="pyarrow",
+        stage="importing_pyarrow",
+    )
     try:
         import pyarrow as pa  # type: ignore[import-not-found]
     except ImportError:
         pa = None
         missing.append("pyarrow")
+    _report_dependency_import(
+        dependency_progress,
+        module_name="cffi",
+        stage="importing_cffi",
+    )
     try:
         import cffi  # type: ignore[import-not-found]  # noqa: F401
     except ImportError:
@@ -510,9 +568,20 @@ def train_model(
     activate: bool = True,
     grid_search: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    emit_preparing_progress(progress_callback, "Preparing GBM: loading dependencies...", 0, stage="loading_dependencies")
     dependency_started = time.perf_counter()
-    lgb, np, pd, pl = gbm_training_dependencies()
+
+    def dependency_progress(stage: str) -> None:
+        package = DEPENDENCY_IMPORT_PACKAGES.get(stage, stage.replace("_", " ").title())
+        emit_preparing_progress(
+            progress_callback,
+            f"Preparing GBM: importing {package}...",
+            0,
+            stage=stage,
+        )
+
+    lgb, np, pd, pl = gbm_training_dependencies(
+        dependency_progress=dependency_progress,
+    )
     timings = {"dependency_seconds": elapsed_seconds(dependency_started)}
     started = time.perf_counter()
     emit_preparing_progress(progress_callback, "Preparing GBM: validating request...", 0, stage="validating_request")
