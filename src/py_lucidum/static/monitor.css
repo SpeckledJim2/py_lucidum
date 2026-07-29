@@ -290,7 +290,7 @@ main {
   min-width: 0;
   min-height: 0;
   padding: 10px 12px 12px;
-  overflow: hidden;
+  overflow: auto;
   display: flex;
   flex-direction: column;
   gap: 9px;
@@ -504,6 +504,116 @@ main {
   flex: 0 0 auto;
 }
 
+.model-operations-panel {
+  flex: 0 0 auto;
+}
+
+.model-operations-panel .section-header > div:first-child {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.operations-header-actions {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.operations-header-actions .meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.operations-content {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(360px, 0.9fr) minmax(420px, 1.1fr);
+  gap: 8px;
+}
+
+.operations-table-wrap,
+.operation-timeline-wrap {
+  max-height: min(170px, 22vh);
+  border-radius: 7px;
+}
+
+.model-operations-panel table {
+  font-size: 11px;
+}
+
+.model-operations-panel th,
+.model-operations-panel td {
+  padding: 4px 7px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.operation-row {
+  cursor: pointer;
+}
+
+.operation-row:hover td,
+.operation-row.selected td {
+  background: color-mix(in srgb, var(--accent) 9%, var(--panel));
+}
+
+.operation-phase-cell {
+  max-width: 230px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.operation-detail {
+  min-width: 0;
+  min-height: 72px;
+}
+
+.operation-detail-empty {
+  height: 100%;
+  min-height: 72px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--line);
+  border-radius: 7px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.operation-detail-empty[hidden],
+.operation-detail [hidden] {
+  display: none !important;
+}
+
+.operation-detail-heading {
+  min-width: 0;
+  min-height: 23px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 2px 5px;
+}
+
+.operation-detail-heading strong,
+.operation-detail-heading .meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.operation-metadata {
+  min-height: 17px;
+  padding: 0 2px 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .lucidum-servers-table-wrap {
   max-height: min(135px, 20vh);
 }
@@ -692,6 +802,16 @@ tbody tr:last-child td {
   .performance-meta-stack {
     justify-items: start;
     text-align: left;
+  }
+
+  .operations-content {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .operations-header-actions {
+    align-items: flex-end;
+    flex-direction: column;
+    gap: 4px;
   }
 
   main {

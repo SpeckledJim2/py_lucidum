@@ -5,6 +5,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 
 from py_lucidum.app.context import AppContext
+from py_lucidum.app.telemetry import request_operation_id
 
 from .formula_assist import formula_levels
 from .jobs import GlmJobManager
@@ -17,9 +18,38 @@ from .validation import DENOMINATOR_COLUMN, RESPONSE_COLUMN, family_options_payl
 def register(app: FastAPI, context: AppContext) -> None:
     store = GlmModelStore(context.dataset.path, dataset=context.dataset)
     context.dataset.register_data_source_provider(GlmSourceProvider(store))
-    jobs = GlmJobManager()
+    telemetry = getattr(app.state, "telemetry", None)
+    jobs = GlmJobManager(telemetry=telemetry)
     app.state.glm_store = store
     app.state.glm_jobs = jobs
+
+    def fail_operation(operation_id: str | None, exc: Exception | None = None) -> None:
+        if telemetry is None:
+            return
+        try:
+            telemetry.finish_operation(
+                operation_id,
+                status="failed",
+                error_type=type(exc).__name__ if exc is not None else "ValidationError",
+            )
+        except Exception:
+            pass
+
+    def operation_phase(
+        operation_id: str | None,
+        name: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        if telemetry is None:
+            return
+        try:
+            telemetry.update_operation_phase(
+                operation_id,
+                name=name,
+                metadata=metadata,
+            )
+        except Exception:
+            pass
 
     def config_payload() -> dict[str, Any]:
         return {
@@ -56,8 +86,19 @@ def register(app: FastAPI, context: AppContext) -> None:
     @app.post("/api/glm/validate")
     async def validate_endpoint(request: Request) -> dict[str, Any]:
         context.check_token(request)
+        operation_id = request_operation_id(request)
         payload = dict(await request.json())
-        return validate_request(context.dataset, payload)
+        operation_phase(operation_id, "validating_request")
+        try:
+            validation = validate_request(context.dataset, payload)
+        except Exception as exc:
+            fail_operation(operation_id, exc)
+            raise
+        if not validation["ok"]:
+            fail_operation(operation_id)
+        else:
+            operation_phase(operation_id, "awaiting_job_request")
+        return validation
 
     @app.post("/api/glm/formula/levels")
     async def formula_levels_endpoint(request: Request) -> dict[str, Any]:
@@ -71,18 +112,27 @@ def register(app: FastAPI, context: AppContext) -> None:
     @app.post("/api/glm/build")
     async def build_endpoint(request: Request) -> dict[str, Any]:
         context.check_token(request)
+        operation_id = request_operation_id(request)
         payload = dict(await request.json())
         try:
+            operation_phase(operation_id, "loading_dependencies")
             glm_training_dependencies()
+            operation_phase(operation_id, "validating_request")
             validation = validate_request(context.dataset, payload)
             if not validation["ok"]:
                 raise ValueError("; ".join(validation["errors"]))
-            job = jobs.start(context.dataset, store, payload)
+            operation_phase(operation_id, "starting")
+            job = jobs.start(context.dataset, store, payload, operation_id=operation_id)
             return job.as_payload()
         except MissingGlmDependency as exc:
+            fail_operation(operation_id, exc)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except ValueError as exc:
+            fail_operation(operation_id, exc)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            fail_operation(operation_id, exc)
+            raise
 
     @app.get("/api/glm/jobs/{job_id}")
     async def job_endpoint(request: Request, job_id: str) -> dict[str, Any]:
@@ -95,12 +145,25 @@ def register(app: FastAPI, context: AppContext) -> None:
     @app.post("/api/glm/tabulations/build")
     async def tabulation_build_endpoint(request: Request) -> dict[str, Any]:
         context.check_token(request)
+        operation_id = request_operation_id(request)
         payload = dict(await request.json())
         try:
-            job = jobs.start_tabulations(context.dataset, store, payload, getattr(app.state, "feature_spec", {}), getattr(app.state, "gbm_store", None))
+            operation_phase(operation_id, "starting")
+            job = jobs.start_tabulations(
+                context.dataset,
+                store,
+                payload,
+                getattr(app.state, "feature_spec", {}),
+                getattr(app.state, "gbm_store", None),
+                operation_id=operation_id,
+            )
             return job.as_payload()
         except ValueError as exc:
+            fail_operation(operation_id, exc)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            fail_operation(operation_id, exc)
+            raise
 
     @app.get("/api/glm/tabulations/jobs/{job_id}")
     async def tabulation_job_endpoint(request: Request, job_id: str) -> dict[str, Any]:

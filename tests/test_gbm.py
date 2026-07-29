@@ -14,6 +14,7 @@ from unittest.mock import patch
 import duckdb
 
 from py_lucidum.app import create_app
+from py_lucidum.app.telemetry import TelemetryStore
 from py_lucidum.core import Dataset, quote_ident, sql_literal
 from py_lucidum.demo import demo_dataset_path
 from py_lucidum.tools.gbm.grid import parse_parameter_grid, prepare_grid_run, sampled_combination_indexes, validate_grid_or_request
@@ -1347,7 +1348,13 @@ COPY (
         )
         captured: dict[str, Any] = {}
 
-        def fake_start(dataset: Dataset, store: GbmModelStore, payload: dict[str, Any]) -> GbmJob:
+        def fake_start(
+            dataset: Dataset,
+            store: GbmModelStore,
+            payload: dict[str, Any],
+            *,
+            operation_id: str | None = None,
+        ) -> GbmJob:
             captured.update(payload)
             return GbmJob(id="j1")
 
@@ -1726,7 +1733,8 @@ COPY (
     def test_gbm_job_manager_records_and_preserves_progress_on_failure(self) -> None:
         dataset = Dataset(self.data_path)
         store = GbmModelStore(self.data_path)
-        manager = GbmJobManager()
+        telemetry = TelemetryStore(environment={})
+        manager = GbmJobManager(telemetry=telemetry)
 
         def fake_train_model(dataset_arg: Dataset, store_arg: GbmModelStore, payload: dict[str, Any], progress_callback: Any = None) -> dict[str, Any]:
             self.assertIs(dataset_arg, dataset)
@@ -1743,7 +1751,12 @@ COPY (
             raise ValueError("boom")
 
         with patch("py_lucidum.tools.gbm.jobs.train_model", side_effect=fake_train_model):
-            job = manager.start(dataset, store, {"label": "broken"})
+            job = manager.start(
+                dataset,
+                store,
+                {"label": "broken"},
+                operation_id="gbm-failure-test",
+            )
             for _ in range(100):
                 snapshot = manager.get(job.id)
                 if snapshot and snapshot.status == "failed":
@@ -1758,6 +1771,11 @@ COPY (
         self.assertEqual(snapshot.progress["message"], "boom")
         self.assertEqual(snapshot.progress["iteration"], 1)
         self.assertEqual(snapshot.progress["evaluation"], {"test": {"poisson": [1.2]}})
+        self.assertEqual(snapshot.as_payload()["operation_id"], "gbm-failure-test")
+        operation = telemetry.snapshot()["operations"]["recent"][0]
+        self.assertEqual(operation["status"], "failed")
+        self.assertEqual(operation["error_type"], "ValueError")
+        self.assertEqual([phase["name"] for phase in operation["phases"]], ["queued", "training"])
 
     def test_gbm_job_route_returns_progress(self) -> None:
         app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
@@ -1807,6 +1825,7 @@ COPY (
         )
 
         self.assertEqual(payload["phase"], "training")
+        self.assertEqual(payload["stage"], "fitting")
         self.assertEqual(payload["iteration"], 3)
         self.assertEqual(payload["total_iterations"], 10)
         self.assertEqual(payload["percent"], 27.0)

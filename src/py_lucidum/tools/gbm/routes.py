@@ -5,6 +5,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 
 from py_lucidum.app.context import AppContext
+from py_lucidum.app.telemetry import request_operation_id
 
 from .config import GbmConfigBuilder
 from .grid import validate_grid_or_request
@@ -20,10 +21,39 @@ from .trees import ebm_gain_summary, tree_detail, tree_summary
 def register(app: FastAPI, context: AppContext) -> None:
     store = GbmModelStore(context.dataset.path, dataset=context.dataset)
     context.dataset.register_data_source_provider(GbmSourceProvider(store))
-    jobs = GbmJobManager()
+    telemetry = getattr(app.state, "telemetry", None)
+    jobs = GbmJobManager(telemetry=telemetry)
     app.state.gbm_store = store
     app.state.gbm_jobs = jobs
     config = GbmConfigBuilder(context.dataset, store, lambda: getattr(app.state, "feature_spec", None))
+
+    def fail_operation(operation_id: str | None, exc: Exception | None = None) -> None:
+        if telemetry is None:
+            return
+        try:
+            telemetry.finish_operation(
+                operation_id,
+                status="failed",
+                error_type=type(exc).__name__ if exc is not None else "ValidationError",
+            )
+        except Exception:
+            pass
+
+    def operation_phase(
+        operation_id: str | None,
+        name: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        if telemetry is None:
+            return
+        try:
+            telemetry.update_operation_phase(
+                operation_id,
+                name=name,
+                metadata=metadata,
+            )
+        except Exception:
+            pass
 
     @app.get("/api/gbm/summary")
     async def summary_endpoint(request: Request) -> dict[str, Any]:
@@ -46,9 +76,20 @@ def register(app: FastAPI, context: AppContext) -> None:
     @app.post("/api/gbm/validate")
     async def validate_endpoint(request: Request) -> dict[str, Any]:
         context.check_token(request)
+        operation_id = request_operation_id(request)
         payload = dict(await request.json())
         payload["feature_groupings"] = config.feature_groupings()
-        return validate_grid_or_request(context.dataset, payload, generated_sample_path=store.generated_sample_path)
+        operation_phase(operation_id, "validating_request")
+        try:
+            validation = validate_grid_or_request(context.dataset, payload, generated_sample_path=store.generated_sample_path)
+        except Exception as exc:
+            fail_operation(operation_id, exc)
+            raise
+        if not validation["ok"]:
+            fail_operation(operation_id)
+        else:
+            operation_phase(operation_id, "awaiting_job_request")
+        return validation
 
     @app.post("/api/gbm/sample")
     async def sample_endpoint(request: Request) -> dict[str, Any]:
@@ -59,21 +100,31 @@ def register(app: FastAPI, context: AppContext) -> None:
     @app.post("/api/gbm/train")
     async def train_endpoint(request: Request) -> dict[str, Any]:
         context.check_token(request)
+        operation_id = request_operation_id(request)
         payload = dict(await request.json())
         payload["feature_groupings"] = config.feature_groupings()
         try:
+            operation_phase(operation_id, "loading_dependencies")
             gbm_training_dependencies()
             if payload.get("create_sample"):
+                operation_phase(operation_id, "creating_sample")
                 create_generated_sample(context.dataset, store.generated_sample_path)
+            operation_phase(operation_id, "validating_request")
             validation = validate_grid_or_request(context.dataset, payload, generated_sample_path=store.generated_sample_path)
             if not validation["ok"]:
                 raise ValueError("; ".join(validation["errors"]))
-            job = jobs.start(context.dataset, store, payload)
+            operation_phase(operation_id, "starting")
+            job = jobs.start(context.dataset, store, payload, operation_id=operation_id)
             return job.as_payload()
         except MissingGbmDependency as exc:
+            fail_operation(operation_id, exc)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except ValueError as exc:
+            fail_operation(operation_id, exc)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            fail_operation(operation_id, exc)
+            raise
 
     @app.get("/api/gbm/jobs/{job_id}")
     async def job_endpoint(request: Request, job_id: str) -> dict[str, Any]:

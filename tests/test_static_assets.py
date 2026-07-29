@@ -146,6 +146,31 @@ if (formatters.formatLineValue(-0.125) !== "-12.5%") throw new Error("KPI percen
 """
         self.run_node_script(script)
 
+    def test_api_client_adds_operation_id_only_when_supplied(self) -> None:
+        module = Path("src/py_lucidum/static/app/shared/api.js").resolve().as_uri()
+        script = f"""
+import {{ createApiClient, createOperationId }} from "{module}";
+const calls = [];
+const fetchImpl = async (path, options) => {{
+  calls.push({{ path, options }});
+  return {{ ok: true, text: async () => '{{"ok":true}}' }};
+}};
+let tick = 0;
+const api = createApiClient({{
+  token: "token",
+  fetchImpl,
+  performanceImpl: {{ now: () => ++tick }},
+}});
+const operationId = createOperationId("GBM train");
+if (!/^gbm-train-[A-Za-z0-9._-]+$/.test(operationId)) throw new Error(operationId);
+await api("/with-operation", {{ method: "POST", operationId }});
+await api("/without-operation", {{ method: "GET" }});
+if (calls[0].options.headers["x-lucidum-operation-id"] !== operationId) throw new Error("missing operation header");
+if ("x-lucidum-operation-id" in calls[1].options.headers) throw new Error("unexpected operation header");
+if ("operationId" in calls[0].options) throw new Error("operation option leaked to fetch");
+"""
+        self.run_node_script(script)
+
     def test_shared_echarts_target_readiness_helper(self) -> None:
         module = Path("src/py_lucidum/static/app/shared/echarts-gl.js").resolve().as_uri()
         script = f"""

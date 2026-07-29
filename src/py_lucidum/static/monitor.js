@@ -14,6 +14,8 @@ const token = paramsFromLocation().get("token") || "";
 const state = {
   paused: false,
   timer: null,
+  selectedOperationId: "",
+  snapshot: null,
 };
 let stoppedOverlayShown = false;
 let faviconDataUrl = "";
@@ -45,6 +47,18 @@ function formatDuration(value) {
   if (!Number.isFinite(number)) return "--";
   if (number < 1) return `${number.toFixed(1)}ms`;
   return `${Math.round(number).toLocaleString()}ms`;
+}
+
+function formatCpuSeconds(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "--";
+  return number < 10 ? `${number.toFixed(2)}s` : `${number.toFixed(1)}s`;
+}
+
+function formatCores(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "--";
+  return `${number.toFixed(2)} cores`;
 }
 
 function formatMegabytes(value) {
@@ -258,6 +272,153 @@ function renderActivity(activity) {
   });
 }
 
+function operationList(snapshot) {
+  const operations = snapshot?.operations || {};
+  return [
+    ...(Array.isArray(operations.active) ? operations.active : []),
+    ...(Array.isArray(operations.recent) ? operations.recent : []),
+  ];
+}
+
+function operationPhaseLabel(operation) {
+  if (operation.current_phase) return operation.current_phase;
+  const slowest = operation.slowest_phase;
+  return slowest?.label ? `Slowest: ${slowest.label}` : "--";
+}
+
+function operationStatusClass(status) {
+  if (status === "running") return "active";
+  if (status === "succeeded") return "ok";
+  if (status === "failed") return "error";
+  return "";
+}
+
+function environmentLabel(environment) {
+  const packages = environment?.packages || {};
+  const cpu = environment?.cpu || {};
+  const dataset = environment?.dataset || {};
+  return [
+    packages.lucidum ? `lucidum ${packages.lucidum}` : "",
+    environment?.python ? `Python ${environment.python}` : "",
+    environment?.python_environment || "",
+    packages.duckdb ? `DuckDB ${packages.duckdb}` : "",
+    packages.lightgbm ? `LightGBM ${packages.lightgbm}` : "",
+    environment?.machine || "",
+    cpu.logical ? `${formatNumber(cpu.logical)} logical CPUs` : "",
+    dataset.row_count && dataset.column_count
+      ? `${formatNumber(dataset.row_count)} rows × ${formatNumber(dataset.column_count)} columns`
+      : "",
+  ].filter(Boolean).join(" · ");
+}
+
+function operationMetadataLabel(metadata) {
+  if (!metadata) return "";
+  return [
+    metadata.feature_count !== undefined ? `${formatNumber(metadata.feature_count)} features` : "",
+    metadata.categorical_feature_count !== undefined
+      ? `${formatNumber(metadata.categorical_feature_count)} categoricals`
+      : "",
+    metadata.projection_column_count !== undefined
+      ? `${formatNumber(metadata.projection_column_count)} projected columns`
+      : "",
+    metadata.training_rows !== undefined ? `${formatNumber(metadata.training_rows)} training rows` : "",
+    metadata.test_rows !== undefined ? `${formatNumber(metadata.test_rows)} test rows` : "",
+    metadata.validation_rows !== undefined ? `${formatNumber(metadata.validation_rows)} validation rows` : "",
+    metadata.scored_rows !== undefined ? `${formatNumber(metadata.scored_rows)} scored rows` : "",
+    metadata.worker_mode ? `${metadata.worker_mode} worker` : "",
+  ].filter(Boolean).join(" · ");
+}
+
+function renderOperationDetail(operation) {
+  const empty = el("operationDetailEmpty");
+  const content = el("operationDetailContent");
+  const copyButton = el("copyDiagnosticsBtn");
+  if (!operation) {
+    empty.hidden = false;
+    content.hidden = true;
+    copyButton.disabled = true;
+    return;
+  }
+
+  empty.hidden = true;
+  content.hidden = false;
+  copyButton.disabled = false;
+  el("operationDetailTitle").textContent = operation.label || operation.operation_id || "Operation";
+  const detailSummary = [
+    operation.status,
+    formatDuration(operation.duration_ms),
+    `CPU ${formatCpuSeconds(operation.cpu_seconds)}`,
+    formatCores(operation.average_cores),
+    `observed peak ${formatMegabytes(operation.observed_peak_rss_mb)}`,
+    operation.error_type ? `error ${operation.error_type}` : "",
+  ].filter(Boolean);
+  el("operationDetailSummary").textContent = detailSummary.join(" · ");
+  el("operationMetadata").textContent = operationMetadataLabel(operation.metadata);
+
+  const body = el("operationTimelineBody");
+  body.replaceChildren();
+  const timeline = Array.isArray(operation.timeline) ? operation.timeline : [];
+  if (!timeline.length) {
+    body.append(emptyRow(8, "Waiting for operation phases"));
+    return;
+  }
+  timeline.forEach((entry) => {
+    const row = document.createElement("tr");
+    textCell(row, formatDuration(entry.start_offset_ms));
+    textCell(row, entry.kind);
+    textCell(row, entry.label);
+    pillCell(
+      row,
+      entry.status,
+      Number(entry.status) >= 400 || entry.status === "failed"
+        ? "error"
+        : (entry.status === "running" ? "active" : "ok"),
+    );
+    textCell(row, formatDuration(entry.duration_ms));
+    textCell(row, formatCpuSeconds(entry.cpu_seconds));
+    textCell(row, formatCores(entry.average_cores));
+    textCell(row, formatMegabytes(entry.rss_change_mb));
+    body.append(row);
+  });
+}
+
+function renderOperations(snapshot) {
+  state.snapshot = snapshot;
+  const operations = operationList(snapshot);
+  const activeCount = Number(snapshot?.operations?.active_count || 0);
+  el("operationsMeta").textContent = `${formatNumber(activeCount)} active · ${formatNumber(operations.length - activeCount)} recent`;
+  const environmentText = environmentLabel(snapshot?.environment || {});
+  el("environmentMeta").textContent = environmentText;
+  el("environmentMeta").title = environmentText;
+
+  if (!operations.some((operation) => operation.operation_id === state.selectedOperationId)) {
+    state.selectedOperationId = operations[0]?.operation_id || "";
+  }
+  const selected = operations.find((operation) => operation.operation_id === state.selectedOperationId) || null;
+  const body = el("operationsBody");
+  body.replaceChildren();
+  if (!operations.length) {
+    body.append(emptyRow(6, "No model operations yet"));
+    renderOperationDetail(null);
+    return;
+  }
+
+  operations.forEach((operation) => {
+    const row = document.createElement("tr");
+    row.className = "operation-row";
+    row.dataset.operationId = operation.operation_id || "";
+    row.classList.toggle("selected", operation.operation_id === state.selectedOperationId);
+    textCell(row, operation.label || operation.operation_id);
+    pillCell(row, operation.status, operationStatusClass(operation.status));
+    textCell(row, formatDuration(operation.duration_ms));
+    textCell(row, operationPhaseLabel(operation), "operation-phase-cell");
+    textCell(row, `${formatCpuSeconds(operation.cpu_seconds)} · ${formatCores(operation.average_cores)}`);
+    textCell(row, formatMegabytes(operation.observed_peak_rss_mb));
+    body.append(row);
+  });
+  renderOperationDetail(selected);
+}
+
 function listenerLabel(listeners) {
   if (!Array.isArray(listeners) || !listeners.length) return "--";
   return listeners.map((listener) => {
@@ -352,8 +513,35 @@ function renderLucidumServers(payload) {
 function renderSnapshot(snapshot, serversPayload) {
   renderMetrics(snapshot);
   renderLucidumServers(serversPayload);
+  renderOperations(snapshot);
   renderClients(snapshot.clients || []);
   renderActivity(snapshot.recent_activity || []);
+}
+
+async function copyDiagnostics() {
+  const operation = operationList(state.snapshot)
+    .find((item) => item.operation_id === state.selectedOperationId);
+  if (!operation) return;
+  const diagnostics = {
+    generated_at: state.snapshot?.now || null,
+    environment: state.snapshot?.environment || {},
+    operation,
+  };
+  const text = JSON.stringify(diagnostics, null, 2);
+  try {
+    await navigator.clipboard.writeText(text);
+    setStatus("Operation diagnostics copied");
+  } catch (_) {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.append(textarea);
+    textarea.select();
+    const copied = document.execCommand("copy");
+    textarea.remove();
+    setStatus(copied ? "Operation diagnostics copied" : "Could not copy diagnostics", !copied);
+  }
 }
 
 async function loadTelemetry() {
@@ -552,6 +740,13 @@ function bindControls() {
     syncThemeButton();
   });
   el("stopAppBtn").addEventListener("click", stopApp);
+  el("copyDiagnosticsBtn").addEventListener("click", copyDiagnostics);
+  el("operationsBody").addEventListener("click", (event) => {
+    const row = event.target?.closest?.(".operation-row");
+    if (!row) return;
+    state.selectedOperationId = row.dataset.operationId || "";
+    renderOperations(state.snapshot || {});
+  });
   el("lucidumServersBody").addEventListener("click", async (event) => {
     const button = event.target?.closest?.(".server-stop-button");
     if (!button || button.disabled) return;

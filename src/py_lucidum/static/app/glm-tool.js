@@ -1,6 +1,7 @@
 import { createGlmFormulaBuilder } from "./glm-formula-builder.js";
 import { createGlmModelNavigator } from "./glm-model-navigator.js";
 import { createGlmTabulations, GLM_TABULATION_MODEL_CROSSTAB } from "./glm-tabulations.js";
+import { createOperationId } from "./shared/api.js";
 import { loadTabulator } from "./shared/tabulator.js";
 import {
   bindToolScreenNavigation,
@@ -146,6 +147,8 @@ export function createGlmTool({
   let tabulationSelectionAnchorModelId = "";
   let pollTimer = null;
   let tabulationPollTimer = null;
+  let buildOperationId = "";
+  let tabulationOperationId = "";
   let modelListRefreshSeq = 0;
   let modelListLastRefreshAt = 0;
   let isBuilding = false;
@@ -1634,11 +1637,16 @@ export function createGlmTool({
       return;
     }
     isTabulating = true;
+    tabulationOperationId = createOperationId("glm-tabulation");
     liveProgress = { phase: "queued", message: "Tabulating GLM..." };
     renderLiveProgress(liveProgress);
     renderTabulationsPanel();
     try {
-      const job = await api("/api/glm/tabulations/build", { method: "POST", body: JSON.stringify({ model_refs: model_ids }) });
+      const job = await api("/api/glm/tabulations/build", {
+        method: "POST",
+        body: JSON.stringify({ model_refs: model_ids }),
+        operationId: tabulationOperationId,
+      });
       pollTabulationJob(job.job_id);
     } catch (error) {
       setTabulationFailure(error.message);
@@ -1673,7 +1681,10 @@ export function createGlmTool({
     if (tabulationPollTimer) window.clearTimeout(tabulationPollTimer);
     const poll = async () => {
       try {
-        const job = await api(`/api/glm/tabulations/jobs/${encodeURIComponent(jobId)}`, { method: "GET" });
+        const job = await api(`/api/glm/tabulations/jobs/${encodeURIComponent(jobId)}`, {
+          method: "GET",
+          operationId: tabulationOperationId,
+        });
         const progress = job.progress || { phase: job.status, message: job.status };
         liveProgress = progress;
         renderLiveProgress(liveProgress);
@@ -1698,6 +1709,7 @@ export function createGlmTool({
           renderLiveProgress(liveProgress);
           setAppReadyStatus("Ready");
           tabulationElapsedStartedAt = null;
+          tabulationOperationId = "";
         } else {
           setTabulationFailure(job.error || progress.message || "Model tabulation failed");
         }
@@ -1716,6 +1728,7 @@ export function createGlmTool({
     isTabulating = false;
     setAppReadyStatus("Ready");
     tabulationElapsedStartedAt = null;
+    tabulationOperationId = "";
     liveProgress = { phase: "failed", message: String(message || "Model tabulation failed") };
     renderLiveProgress(liveProgress);
     renderTabulationsPanel();
@@ -2175,8 +2188,13 @@ export function createGlmTool({
       setBuildFailure("Choose an Actual metric or enter a full response ~ terms formula");
       return;
     }
+    buildOperationId = createOperationId("glm-build");
     try {
-      const validation = await api("/api/glm/validate", { method: "POST", body: JSON.stringify(payload) });
+      const validation = await api("/api/glm/validate", {
+        method: "POST",
+        body: JSON.stringify(payload),
+        operationId: buildOperationId,
+      });
       if (Array.isArray(validation.errors) && validation.errors.length) {
         setBuildFailure(validation.errors.join("; "));
         return;
@@ -2190,7 +2208,11 @@ export function createGlmTool({
     renderLiveProgress(liveProgress);
     setGlmNotice("");
     try {
-      const job = await api("/api/glm/build", { method: "POST", body: JSON.stringify(payload) });
+      const job = await api("/api/glm/build", {
+        method: "POST",
+        body: JSON.stringify(payload),
+        operationId: buildOperationId,
+      });
       pollBuildJob(job.job_id);
     } catch (error) {
       setBuildFailure(error.message);
@@ -2205,6 +2227,7 @@ export function createGlmTool({
     isBuilding = false;
     setAppReadyStatus("Ready");
     buildElapsedStartedAt = null;
+    buildOperationId = "";
     liveProgress = { phase: "failed", message: String(message || "GLM training did not save a model") };
     renderLiveProgress(liveProgress);
     setGlmNotice("");
@@ -2222,7 +2245,10 @@ export function createGlmTool({
     if (pollTimer) window.clearTimeout(pollTimer);
     const poll = async () => {
       try {
-        const job = await api(`/api/glm/jobs/${encodeURIComponent(jobId)}`, { method: "GET" });
+        const job = await api(`/api/glm/jobs/${encodeURIComponent(jobId)}`, {
+          method: "GET",
+          operationId: buildOperationId,
+        });
         const progress = job.progress || { phase: job.status, message: job.status };
         liveProgress = progress;
         renderLiveProgress(liveProgress);
@@ -2239,6 +2265,7 @@ export function createGlmTool({
           renderLiveProgress(liveProgress);
           setAppReadyStatus("Ready");
           buildElapsedStartedAt = null;
+          buildOperationId = "";
         } else {
           setBuildFailure(job.error || progress.message || "GLM training did not save a model");
         }

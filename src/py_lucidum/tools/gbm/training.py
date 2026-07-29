@@ -510,19 +510,19 @@ def train_model(
     activate: bool = True,
     grid_search: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    emit_preparing_progress(progress_callback, "Preparing GBM: loading dependencies...", 0)
+    emit_preparing_progress(progress_callback, "Preparing GBM: loading dependencies...", 0, stage="loading_dependencies")
     dependency_started = time.perf_counter()
     lgb, np, pd, pl = gbm_training_dependencies()
     timings = {"dependency_seconds": elapsed_seconds(dependency_started)}
     started = time.perf_counter()
-    emit_preparing_progress(progress_callback, "Preparing GBM: validating request...", 0)
+    emit_preparing_progress(progress_callback, "Preparing GBM: validating request...", 0, stage="validating_request")
     validation_started = time.perf_counter()
     validation = validate_request(dataset, payload, generated_sample_path=store.generated_sample_path)
     if not validation.ok:
         raise ValueError("; ".join(validation.errors))
     timings["validation_seconds"] = elapsed_seconds(validation_started)
 
-    emit_preparing_progress(progress_callback, "Preparing GBM: resolving parameters...", 0)
+    emit_preparing_progress(progress_callback, "Preparing GBM: resolving parameters...", 0, stage="resolving_parameters")
     params = normalise_parameters(payload.get("parameters"))
     selected_init_score = normalise_init_score_value(params.pop("init_score", INIT_SCORE_NONE))
     training_mode = normalise_training_mode(payload.get("training_mode"))
@@ -542,8 +542,14 @@ def train_model(
         params["learning_rate"] = EBM_INITIAL_LEARNING_RATE
 
     data_load_started = time.perf_counter()
+    emit_preparing_progress(
+        progress_callback,
+        "Preparing GBM: waiting for dataset access...",
+        0,
+        stage="waiting_for_dataset",
+    )
     with dataset.lock:
-        emit_preparing_progress(progress_callback, "Preparing GBM: resolving selected features...", 0)
+        emit_preparing_progress(progress_callback, "Preparing GBM: resolving selected features...", 0, stage="resolving_features")
         columns = dataset.column_map()
         response_col = selected_response_column(payload, columns)
         offset_col = selected_offset_column(payload, columns)
@@ -555,7 +561,12 @@ def train_model(
         selected_interaction_pairs = normalise_feature_interaction_pairs(payload.get("feature_interaction_pairs"))
         dataset_sample = dataset_sample_column(dataset)
         if not dataset_sample and payload.get("create_sample"):
-            emit_preparing_progress(progress_callback, "Preparing GBM: creating generated SAMPLE split...", 0)
+            emit_preparing_progress(
+                progress_callback,
+                "Preparing GBM: creating generated SAMPLE split...",
+                0,
+                stage="creating_sample",
+            )
             create_generated_sample(dataset, store.generated_sample_path)
         generated_sample_path = (
             store.generated_sample_path
@@ -577,6 +588,7 @@ def train_model(
             progress_callback,
             f"Preparing GBM: loading selected data from DuckDB ({len(projection_columns):,} columns)...",
             0,
+            stage="loading_data",
             feature_count=len(feature_names),
             projection_column_count=len(projection_columns),
         )
@@ -597,6 +609,7 @@ def train_model(
         progress_callback,
         f"Preparing GBM: loaded {scored_rows:,} rows; creating model workspace...",
         0,
+        stage="creating_workspace",
         scored_rows=scored_rows,
         feature_count=len(feature_names),
     )
@@ -675,7 +688,13 @@ def train_model(
         stored_params["interaction_constraints"] = interaction_constraints
 
     matrix_prep_started = time.perf_counter()
-    emit_preparing_progress(progress_callback, "Preparing GBM: coercing response and denominator columns...", 0, scored_rows=scored_rows)
+    emit_preparing_progress(
+        progress_callback,
+        "Preparing GBM: coercing response and denominator columns...",
+        0,
+        stage="coercing_columns",
+        scored_rows=scored_rows,
+    )
     numeric_expressions = [pl.col(response_col).cast(pl.Float64, strict=False).alias(response_col)]
     if offset_col:
         numeric_expressions.append(pl.col(offset_col).cast(pl.Float64, strict=False).alias(offset_col))
@@ -712,6 +731,7 @@ def train_model(
             f"({int(train_mask.sum()):,} train, {int(test_mask.sum()):,} test, {int(validation_mask.sum()):,} validation)..."
         ),
         0,
+        stage="splitting_sample",
         scored_rows=scored_rows,
         training_rows=int(train_mask.sum()),
         test_rows=int(test_mask.sum()),
@@ -721,12 +741,19 @@ def train_model(
         progress_callback,
         f"Preparing GBM: encoding {len(categorical_features):,} categorical features...",
         0,
+        stage="encoding_categoricals",
         feature_count=len(feature_names),
         categorical_feature_count=len(categorical_features),
     )
     feature_frame, categorical_labels = polars_feature_frame(work_frame, feature_names, categorical_features, pl)
 
-    emit_preparing_progress(progress_callback, "Preparing GBM: preparing init scores...", 0, scored_rows=scored_rows)
+    emit_preparing_progress(
+        progress_callback,
+        "Preparing GBM: preparing init scores...",
+        0,
+        stage="preparing_init_scores",
+        scored_rows=scored_rows,
+    )
     offset_values = polars_numeric_array(work_frame, offset_col, pl) if offset_col else None
     log_offset = np.log(offset_values) if offset_values is not None else None
     use_supplied_init_score = init_score_requested({"init_score": selected_init_score})
@@ -745,7 +772,13 @@ def train_model(
     validation_init = active_init_score[validation_mask] if active_init_score is not None and bool(validation_mask.any()) else None
     timings["matrix_prep_seconds"] = elapsed_seconds(matrix_prep_started)
 
-    emit_preparing_progress(progress_callback, "Preparing GBM: building LightGBM datasets...", 0, training_rows=int(train_mask.sum()))
+    emit_preparing_progress(
+        progress_callback,
+        "Preparing GBM: building LightGBM datasets...",
+        0,
+        stage="constructing_datasets",
+        training_rows=int(train_mask.sum()),
+    )
     dataset_construct_started = time.perf_counter()
     train_set = lgb.Dataset(
         arrow_rows(feature_frame, train_mask, pl),
@@ -803,7 +836,12 @@ def train_model(
         callbacks.append(lgb.early_stopping(early_stopping_rounds, verbose=False))
     callbacks.append(lgb.log_evaluation(period=0))
 
-    emit_preparing_progress(progress_callback, f"Preparing GBM: starting LightGBM training ({num_boost_round:,} trees)...", 0)
+    emit_preparing_progress(
+        progress_callback,
+        f"Preparing GBM: starting LightGBM training ({num_boost_round:,} trees)...",
+        0,
+        stage="fitting",
+    )
     fit_started = time.perf_counter()
     booster = lgb.train(
         params,
@@ -1111,9 +1149,15 @@ def emit_preparing_progress(
     progress_callback: ProgressCallback | None,
     message: str,
     percent: float | int | None,
+    stage: str | None = None,
     **extra: Any,
 ) -> None:
-    payload = phase_progress_payload(phase="preparing", message=message, percent=percent)
+    payload = phase_progress_payload(
+        phase="preparing",
+        stage=stage,
+        message=message,
+        percent=percent,
+    )
     payload.update({key: value for key, value in extra.items() if value is not None})
     emit_progress(progress_callback, payload)
 
@@ -1121,6 +1165,7 @@ def emit_preparing_progress(
 def phase_progress_payload(
     *,
     phase: str,
+    stage: str | None = None,
     message: str,
     percent: float | int | None,
     iteration: int | None = None,
@@ -1131,6 +1176,7 @@ def phase_progress_payload(
     safe_evaluation = json_safe_evaluation(evaluation or {})
     return {
         "phase": phase,
+        "stage": stage or phase,
         "message": message,
         "iteration": iteration,
         "total_iterations": total_iterations,
@@ -1223,6 +1269,7 @@ def lightgbm_progress_payload(
     message = training_progress_message(current_iteration, total, preferred, metric_name, stage)
     payload = {
         "phase": "training",
+        "stage": "fitting",
         "message": message,
         "iteration": current_iteration,
         "total_iterations": total,

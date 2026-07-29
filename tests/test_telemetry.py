@@ -410,6 +410,114 @@ class TelemetryTests(unittest.TestCase):
             self.assertGreaterEqual(process["uss_bytes"], 0)
             self.assertGreaterEqual(process["uss_mb"], 0)
 
+    def test_schema_populates_sanitized_runtime_environment(self) -> None:
+        app = create_app(self.data_path, token="")
+
+        asgi_request(app, "GET", "/api/schema")
+        snapshot = telemetry_snapshot(app)
+        environment = snapshot["environment"]
+
+        self.assertTrue(environment["python"])
+        self.assertTrue(environment["platform"])
+        self.assertIn(environment["python_environment"], {"pipx", "virtualenv", "system"})
+        self.assertIn("lucidum", environment["packages"])
+        self.assertIn("duckdb", environment["packages"])
+        self.assertEqual(environment["dataset"]["name"], "sample.csv")
+        self.assertEqual(environment["dataset"]["row_count"], 2)
+        self.assertEqual(environment["dataset"]["column_count"], 3)
+        self.assertNotIn(str(self.data_path.parent), json.dumps(environment))
+
+    def test_model_operation_correlates_requests_phases_and_resource_deltas(self) -> None:
+        store = TelemetryStore(environment={"python": "test"})
+        operation_id = "gbm-train-test"
+        request = store.begin({
+            "type": "http",
+            "method": "POST",
+            "path": "/api/gbm/validate",
+            "headers": [(b"x-lucidum-operation-id", operation_id.encode("ascii"))],
+            "client": ("127.0.0.1", 12345),
+        })
+        store.update_operation_phase(
+            operation_id,
+            name="loading_data",
+            metadata={"feature_count": 16, "filter": "customer-secret"},
+        )
+        store.finish_operation(operation_id, status="succeeded")
+        store.finish(request, 200)
+
+        poll = store.begin({
+            "type": "http",
+            "method": "GET",
+            "path": "/api/gbm/jobs/job-1",
+            "headers": [(b"x-lucidum-operation-id", operation_id.encode("ascii"))],
+            "client": ("127.0.0.1", 12345),
+        })
+        store.finish(poll, 200)
+        snapshot = store.snapshot()
+
+        self.assertEqual(snapshot["operations"]["active_count"], 0)
+        self.assertEqual(len(snapshot["operations"]["recent"]), 1)
+        operation = snapshot["operations"]["recent"][0]
+        self.assertEqual(operation["operation_id"], operation_id)
+        self.assertEqual(operation["tool"], "gbm")
+        self.assertEqual(operation["label"], "GBM Train")
+        self.assertEqual(operation["status"], "succeeded")
+        self.assertEqual(operation["metadata"]["feature_count"], 16)
+        self.assertNotIn("filter", operation["metadata"])
+        self.assertEqual([phase["name"] for phase in operation["phases"]], ["loading_data"])
+        self.assertEqual(
+            [request_item["label"] for request_item in operation["requests"]],
+            ["Preflight validation", "Job poll"],
+        )
+        self.assertTrue(all(request_item["status"] == 200 for request_item in operation["requests"]))
+        self.assertGreaterEqual(operation["duration_ms"], 0)
+        self.assertGreaterEqual(operation["cpu_seconds"], 0)
+        self.assertGreaterEqual(operation["observed_peak_rss_mb"], 0)
+        self.assertEqual(
+            [event["operation_id"] for event in snapshot["recent_activity"]],
+            [operation_id, operation_id],
+        )
+
+    def test_operation_history_is_bounded_and_invalid_ids_are_ignored(self) -> None:
+        store = TelemetryStore(max_operations=2, environment={})
+        for index in range(3):
+            operation_id = f"glm-build-{index}"
+            store.ensure_operation(operation_id, tool="glm", label="GLM Build")
+            store.finish_operation(operation_id, status="succeeded")
+        store.ensure_operation("contains spaces", tool="glm", label="GLM Build")
+        snapshot = store.snapshot()
+
+        self.assertEqual(snapshot["operations"]["active_count"], 0)
+        self.assertEqual(
+            [operation["operation_id"] for operation in snapshot["operations"]["recent"]],
+            ["glm-build-2", "glm-build-1"],
+        )
+
+    def test_operation_phase_and_request_timelines_are_bounded(self) -> None:
+        store = TelemetryStore(
+            max_operation_phases=3,
+            max_operation_requests=3,
+            environment={},
+        )
+        operation_id = "gbm-bounded"
+        for index in range(5):
+            request = store.begin({
+                "type": "http",
+                "method": "GET",
+                "path": f"/api/gbm/jobs/job-{index}",
+                "headers": [(b"x-lucidum-operation-id", operation_id.encode("ascii"))],
+                "client": ("127.0.0.1", 12345),
+            })
+            store.finish(request, 200)
+            store.update_operation_phase(operation_id, name=f"phase_{index}")
+        store.finish_operation(operation_id, status="succeeded")
+        operation = store.snapshot()["operations"]["recent"][0]
+
+        self.assertEqual(len(operation["requests"]), 3)
+        self.assertEqual(operation["dropped_request_count"], 2)
+        self.assertEqual(len(operation["phases"]), 3)
+        self.assertEqual(operation["dropped_phase_count"], 2)
+
     def test_token_query_values_and_request_bodies_are_not_stored(self) -> None:
         app = create_app(self.data_path, token="secret-token")
 

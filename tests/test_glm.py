@@ -21,9 +21,11 @@ from unittest.mock import patch
 
 from py_lucidum import demo_dataset_path
 from py_lucidum.app import create_app
+from py_lucidum.app.telemetry import TelemetryStore
 from py_lucidum.core import Dataset, sql_literal
 from py_lucidum.core.features import load_features
 from py_lucidum.tools.glm import tabulation as glm_tabulation
+from py_lucidum.tools.glm.jobs import GlmJobManager
 from py_lucidum.tools.glm.store import GlmModelStore, GlmSourceProvider
 from py_lucidum.tools.glm.tabulation import build_tabulations, export_tabulations, tabulation_config, tabulation_plot, tabulation_table
 from py_lucidum.tools.glm.training import (
@@ -680,6 +682,45 @@ if result.get("iteration") != 10:
         self.assertEqual(status, 400)
         self.assertIn("pip install 'py-lucidum[glm]'", payload["detail"])
         self.assertIn("polars", payload["detail"])
+
+    def test_glm_job_progress_updates_operation_telemetry(self) -> None:
+        dataset = Dataset(self.data_path)
+        store = GlmModelStore(self.data_path)
+        telemetry = TelemetryStore(environment={})
+        manager = GlmJobManager(telemetry=telemetry)
+
+        def fake_train_model(
+            dataset_arg: Dataset,
+            store_arg: GlmModelStore,
+            payload: dict[str, Any],
+            progress_callback: Any = None,
+        ) -> dict[str, Any]:
+            self.assertIs(dataset_arg, dataset)
+            self.assertIs(store_arg, store)
+            progress_callback({
+                "phase": "loading",
+                "message": "Loading GLM training data",
+                "training_rows": 6,
+            })
+            return {"model_id": "glm-test"}
+
+        with patch("py_lucidum.tools.glm.jobs.train_model", side_effect=fake_train_model):
+            job = manager.start(
+                dataset,
+                store,
+                {"label": "test"},
+                operation_id="glm-build-test",
+            )
+            for _ in range(100):
+                snapshot = manager.get(job.id)
+                if snapshot and snapshot.status == "succeeded":
+                    break
+                time.sleep(0.01)
+
+        operation = telemetry.snapshot()["operations"]["recent"][0]
+        self.assertEqual(operation["status"], "succeeded")
+        self.assertEqual(operation["metadata"]["training_rows"], 6)
+        self.assertEqual([phase["name"] for phase in operation["phases"]], ["queued", "loading"])
 
     def test_formula_levels_endpoint_returns_sorted_capped_categorical_values(self) -> None:
         app = create_app(self.data_path, token="", tools=["glm", "line_bar"], use_saved_filters=False, use_kpis=False)

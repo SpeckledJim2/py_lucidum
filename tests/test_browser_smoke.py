@@ -326,6 +326,102 @@ class BrowserSmokeTests(unittest.TestCase):
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_monitor_shows_correlated_model_operation_and_copies_sanitized_diagnostics(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "monitor.csv"
+            data_path.write_text(
+                "actualNumerator,Age,SAMPLE\n"
+                "10,30,training\n"
+                "20,40,test\n",
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                tools=["line_bar", "gbm"],
+                defaults={"x": "Age", "actual": "actualNumerator", "denominator": "__none__"},
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1440, "height": 900})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.goto(f"{base_url}/monitor", wait_until="domcontentloaded")
+                    page.evaluate("() => fetch('/api/schema').then((response) => response.json())")
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const text = document.querySelector("#environmentMeta")?.textContent || "";
+                          return text.includes("Python") && text.includes("rows");
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    validation = page.evaluate(
+                        """
+                        async () => {
+                          const response = await fetch("/api/gbm/validate", {
+                            method: "POST",
+                            headers: {
+                              "Content-Type": "application/json",
+                              "x-lucidum-operation-id": "gbm-monitor-smoke",
+                            },
+                            body: JSON.stringify({ features: [], parameters: [] }),
+                          });
+                          return { status: response.status, body: await response.json() };
+                        }
+                        """
+                    )
+                    self.assertEqual(validation["status"], 200)
+                    self.assertFalse(validation["body"]["ok"])
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const row = document.querySelector('#operationsBody [data-operation-id="gbm-monitor-smoke"]');
+                          return row?.textContent.includes("failed");
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    timeline_text = page.locator("#operationTimelineBody").inner_text()
+                    self.assertIn("Preflight validation", timeline_text)
+                    self.assertIn("Validating request", timeline_text)
+                    self.assertFalse(page.locator("#operationDetailEmpty").is_visible())
+                    self.assertTrue(page.locator("#operationDetailContent").is_visible())
+                    self.assertIn("Python", page.locator("#environmentMeta").inner_text())
+                    self.assertIn("rows", page.locator("#environmentMeta").inner_text())
+                    self.assertTrue(page.locator("#copyDiagnosticsBtn").is_enabled())
+                    page.evaluate(
+                        """
+                        () => {
+                          window.__lucidumCopiedDiagnostics = "";
+                          Object.defineProperty(navigator, "clipboard", {
+                            configurable: true,
+                            value: {
+                              writeText: async (text) => {
+                                window.__lucidumCopiedDiagnostics = text;
+                              },
+                            },
+                          });
+                        }
+                        """
+                    )
+                    page.locator("#copyDiagnosticsBtn").click()
+                    page.wait_for_function('() => Boolean(window.__lucidumCopiedDiagnostics)')
+                    diagnostics = json.loads(page.evaluate("() => window.__lucidumCopiedDiagnostics"))
+                    self.assertEqual(diagnostics["operation"]["operation_id"], "gbm-monitor-smoke")
+                    self.assertEqual(diagnostics["operation"]["status"], "failed")
+                    self.assertEqual(diagnostics["environment"]["dataset"]["name"], "monitor.csv")
+                    self.assertNotIn(tmp_dir, json.dumps(diagnostics))
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_chart_and_map_tools_load_and_switch_without_extra_api_requests(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "sample.csv"

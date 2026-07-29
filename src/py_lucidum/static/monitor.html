@@ -155,6 +155,63 @@
           </div>
         </section>
 
+        <section id="modelOperationsPanel" class="panel model-operations-panel">
+          <div class="section-header">
+            <div>
+              <h2>Model operations</h2>
+              <span id="operationsMeta" class="meta">No operations yet</span>
+            </div>
+            <div class="operations-header-actions">
+              <span id="environmentMeta" class="meta"></span>
+              <button id="copyDiagnosticsBtn" class="ghost" type="button" disabled>Copy diagnostics</button>
+            </div>
+          </div>
+          <div class="operations-content">
+            <div class="table-wrap operations-table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Operation</th>
+                    <th>State</th>
+                    <th>Total</th>
+                    <th>Current / slowest</th>
+                    <th>CPU</th>
+                    <th>Observed RSS peak</th>
+                  </tr>
+                </thead>
+                <tbody id="operationsBody"></tbody>
+              </table>
+            </div>
+            <div id="operationDetail" class="operation-detail">
+              <div id="operationDetailEmpty" class="operation-detail-empty">Select an operation to inspect its timeline.</div>
+              <div id="operationDetailContent" hidden>
+                <div class="operation-detail-heading">
+                  <strong id="operationDetailTitle">--</strong>
+                  <span id="operationDetailSummary" class="meta"></span>
+                </div>
+                <div id="operationMetadata" class="operation-metadata meta"></div>
+                <div class="table-wrap operation-timeline-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Start</th>
+                        <th>Kind</th>
+                        <th>Phase</th>
+                        <th>Status</th>
+                        <th>Duration</th>
+                        <th>CPU</th>
+                        <th>Avg cores</th>
+                        <th>RSS change</th>
+                      </tr>
+                    </thead>
+                    <tbody id="operationTimelineBody"></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <div id="status" class="status" role="status" aria-live="polite"></div>
 
         <section id="clientsPanel" class="panel clients-panel">

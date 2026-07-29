@@ -9,6 +9,7 @@ import { createGbmModelNavigator } from "./gbm-model-navigator.js";
 import { createGbmShapTool } from "./gbm-shap-tool.js";
 import { createGbmStackedShapTool } from "./gbm-stacked-shap-tool.js";
 import { bindGbmTabs, gbmPanelClass, gbmTabsHtml, syncGbmRenderedTab } from "./gbm-tab-orchestration.js";
+import { createOperationId } from "./shared/api.js";
 import { loadTabulator } from "./shared/tabulator.js";
 import {
   createSidebarModelHeading,
@@ -146,6 +147,7 @@ export function createGbmTool({
   let config = null;
   let activeDetail = null;
   let pollTimer = null;
+  let trainingOperationId = "";
   let modelListRefreshSeq = 0;
   let modelListLastRefreshAt = 0;
   let isTraining = false;
@@ -3286,10 +3288,16 @@ export function createGbmTool({
     if (featureInteractionGroupings) payload.feature_interaction_groupings = featureInteractionGroupings;
     if (featureInteractionFeatures) payload.feature_interaction_features = featureInteractionFeatures;
     if (featureInteractionPairs) payload.feature_interaction_pairs = featureInteractionPairs;
+    trainingOperationId = createOperationId("gbm-train");
     try {
-      const validation = await api("/api/gbm/validate", { method: "POST", body: JSON.stringify(payload) });
+      const validation = await api("/api/gbm/validate", {
+        method: "POST",
+        body: JSON.stringify(payload),
+        operationId: trainingOperationId,
+      });
       if (!validation.ok) {
         trainingElapsedStartedAt = null;
+        trainingOperationId = "";
         setGbmNotice(validation.errors.join("; "));
         return;
       }
@@ -3303,7 +3311,12 @@ export function createGbmTool({
       liveEvaluationParameters = payload.parameters;
       liveProgress = null;
       setTrainingStatus("Training GBM...", "queued", gridTrainingNotice);
-      const job = await api("/api/gbm/train", { method: "POST", body: JSON.stringify(payload), clientTiming: true });
+      const job = await api("/api/gbm/train", {
+        method: "POST",
+        body: JSON.stringify(payload),
+        clientTiming: true,
+        operationId: trainingOperationId,
+      });
       applyJobProgress(job);
       pollJob(job.job_id, 0);
     } catch (error) {
@@ -3312,6 +3325,7 @@ export function createGbmTool({
       trainingElapsedStartedAt = null;
       liveEvaluationParameters = null;
       gridTrainingNotice = "";
+      trainingOperationId = "";
       setToolTimingFailed(tool);
       setTrainingStatus("");
       setGbmNotice(error.message);
@@ -3327,7 +3341,11 @@ export function createGbmTool({
     clearTimeout(pollTimer);
     pollTimer = setTimeout(async () => {
       try {
-        const job = await api(`/api/gbm/jobs/${encodeURIComponent(jobId)}`, { method: "GET", clientTiming: true });
+        const job = await api(`/api/gbm/jobs/${encodeURIComponent(jobId)}`, {
+          method: "GET",
+          clientTiming: true,
+          operationId: trainingOperationId,
+        });
         applyJobProgress(job);
         if (isModelJobPending(job.status)) {
           if (!job.progress) {
@@ -3346,6 +3364,7 @@ export function createGbmTool({
           trainingElapsedStartedAt = null;
           liveEvaluationParameters = null;
           gridTrainingNotice = "";
+          trainingOperationId = "";
           setToolTimingFailed(tool);
           if (!job.progress) setTrainingStatus("GBM failed", "failed");
           setGbmNotice(job.error || "GBM training failed");
@@ -3367,6 +3386,7 @@ export function createGbmTool({
         setTrainingState(false);
         setAppReadyStatus("Ready");
         trainingElapsedStartedAt = null;
+        trainingOperationId = "";
         setTrainingStatus("");
         measureToolRender(tool, () => render(data));
         if (!preserveProfile) refreshActiveTool({ force: true });
@@ -3376,6 +3396,7 @@ export function createGbmTool({
         trainingElapsedStartedAt = null;
         liveEvaluationParameters = null;
         gridTrainingNotice = "";
+        trainingOperationId = "";
         setToolTimingFailed(tool);
         setGbmNotice(error.message);
       }

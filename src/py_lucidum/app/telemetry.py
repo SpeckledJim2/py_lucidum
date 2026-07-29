@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import copy
+import importlib.metadata
+import platform
 import re
+import sys
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
@@ -49,6 +53,114 @@ HEARTBEAT_PATH = "/api/health"
 EXCLUDED_PATHS = {"/api/telemetry", "/api/lucidum-servers"}
 UNKNOWN_USER_AGENT = "(unknown)"
 BYTES_PER_MB = 1024 * 1024
+OPERATION_ID_HEADER = "x-lucidum-operation-id"
+OPERATION_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
+OPERATION_PHASE_RE = re.compile(r"^[a-z0-9_]{1,40}$")
+OPERATION_PHASE_LABELS = {
+    "artifacts": "Saving artifacts",
+    "awaiting_job_request": "Awaiting job request",
+    "coercing_columns": "Coercing response and denominator",
+    "constructing_datasets": "Constructing LightGBM datasets",
+    "creating_sample": "Creating SAMPLE split",
+    "creating_workspace": "Creating model workspace",
+    "encoding_categoricals": "Encoding categoricals",
+    "fitting": "Fitting model",
+    "grid": "Grid search",
+    "loading": "Loading training data",
+    "loading_data": "Loading selected data",
+    "loading_dependencies": "Loading dependencies",
+    "preparing": "Preparing model",
+    "preparing_init_scores": "Preparing initial scores",
+    "queued": "Queued",
+    "resolving_features": "Resolving selected features",
+    "resolving_parameters": "Resolving parameters",
+    "scoring": "Scoring rows",
+    "shap": "Calculating SHAP values",
+    "splitting_sample": "Applying SAMPLE split",
+    "starting": "Starting",
+    "tabulating": "Building tabulations",
+    "validating_request": "Validating request",
+    "waiting_for_dataset": "Waiting for dataset access",
+    "writing": "Saving artifacts",
+}
+OPERATION_METADATA_KEYS = {
+    "categorical_feature_count",
+    "cells",
+    "feature_count",
+    "iteration",
+    "projection_column_count",
+    "scored_rows",
+    "scoring_rows",
+    "test_rows",
+    "total_iterations",
+    "training_rows",
+    "validation_rows",
+    "worker_mode",
+}
+TERMINAL_OPERATION_PHASES = {"failed", "succeeded"}
+PACKAGE_VERSIONS = {
+    "lucidum": "py-lucidum",
+    "duckdb": "duckdb",
+    "lightgbm": "lightgbm",
+    "numpy": "numpy",
+    "pandas": "pandas",
+    "polars": "polars",
+    "pyarrow": "pyarrow",
+}
+
+
+@dataclass(frozen=True)
+class ResourcePoint:
+    perf: float
+    cpu_seconds: float
+    rss_bytes: int
+    thread_count: int
+
+
+@dataclass
+class OperationPhase:
+    name: str
+    label: str
+    started_wall: float
+    started: ResourcePoint
+    metadata: dict[str, Any] = field(default_factory=dict)
+    ended_wall: float | None = None
+    ended: ResourcePoint | None = None
+
+
+@dataclass
+class OperationRequest:
+    request_id: int
+    method: str
+    path: str
+    label: str
+    started_wall: float
+    started: ResourcePoint
+    status: int | None = None
+    ended_wall: float | None = None
+    ended: ResourcePoint | None = None
+
+
+@dataclass
+class OperationTelemetry:
+    operation_id: str
+    tool: str
+    label: str
+    status: str
+    started_wall: float
+    started: ResourcePoint
+    updated_perf: float
+    metadata: dict[str, Any] = field(default_factory=dict)
+    phases: list[OperationPhase] = field(default_factory=list)
+    requests: list[OperationRequest] = field(default_factory=list)
+    in_flight_requests: set[int] = field(default_factory=set)
+    current_phase: OperationPhase | None = None
+    ended_wall: float | None = None
+    ended: ResourcePoint | None = None
+    error_type: str | None = None
+    observed_peak_rss_bytes: int = 0
+    dropped_phase_count: int = 0
+    dropped_request_count: int = 0
 
 
 @dataclass
@@ -65,6 +177,9 @@ class TelemetryRequest:
     started_perf: float
     heartbeat: bool = False
     static_asset: bool = False
+    operation_id: str | None = None
+    operation_label: str | None = None
+    operation_started: ResourcePoint | None = None
 
 
 @dataclass
@@ -114,6 +229,110 @@ def header_value(scope: dict[str, Any], name: str) -> str | None:
         if key.lower() == name_bytes:
             return value.decode("latin-1", errors="replace")
     return None
+
+
+def normalise_operation_id(value: Any) -> str | None:
+    operation_id = str(value or "").strip()
+    return operation_id if OPERATION_ID_RE.fullmatch(operation_id) else None
+
+
+def request_operation_id(request: Any) -> str | None:
+    headers = getattr(request, "headers", {})
+    return normalise_operation_id(headers.get(OPERATION_ID_HEADER))
+
+
+def operation_request_spec(method: str, path: str) -> tuple[str, str, str] | None:
+    key = (method.upper(), path)
+    exact = {
+        ("POST", "/api/gbm/validate"): ("gbm", "GBM Train", "Preflight validation"),
+        ("POST", "/api/gbm/train"): ("gbm", "GBM Train", "Train request"),
+        ("POST", "/api/glm/validate"): ("glm", "GLM Build", "Preflight validation"),
+        ("POST", "/api/glm/build"): ("glm", "GLM Build", "Build request"),
+        ("POST", "/api/glm/tabulations/build"): ("glm", "GLM Tabulation", "Tabulation request"),
+    }
+    if key in exact:
+        return exact[key]
+    if method.upper() == "GET" and re.fullmatch(r"/api/gbm/jobs/[^/]+", path):
+        return ("gbm", "GBM Train", "Job poll")
+    if method.upper() == "GET" and re.fullmatch(r"/api/glm/jobs/[^/]+", path):
+        return ("glm", "GLM Build", "Job poll")
+    if method.upper() == "GET" and re.fullmatch(r"/api/glm/tabulations/jobs/[^/]+", path):
+        return ("glm", "GLM Tabulation", "Job poll")
+    return None
+
+
+def package_version(distribution: str) -> str | None:
+    try:
+        return importlib.metadata.version(distribution)
+    except Exception:
+        return None
+
+
+def python_environment_kind() -> str:
+    prefix = str(getattr(sys, "prefix", "")).lower()
+    if "pipx" in prefix:
+        return "pipx"
+    if getattr(sys, "prefix", None) != getattr(sys, "base_prefix", None):
+        return "virtualenv"
+    return "system"
+
+
+def runtime_environment() -> dict[str, Any]:
+    return {
+        "python": platform.python_version(),
+        "implementation": platform.python_implementation(),
+        "platform": platform.platform(),
+        "system": platform.system(),
+        "release": platform.release(),
+        "machine": platform.machine(),
+        "executable_name": str(getattr(sys, "executable", "")).rsplit("/", 1)[-1],
+        "python_environment": python_environment_kind(),
+        "cpu": {
+            "logical": psutil.cpu_count(logical=True),
+            "physical": psutil.cpu_count(logical=False),
+        },
+        "packages": {
+            label: version
+            for label, distribution in PACKAGE_VERSIONS.items()
+            if (version := package_version(distribution)) is not None
+        },
+    }
+
+
+def operation_metadata(payload: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    metadata: dict[str, Any] = {}
+    for key in OPERATION_METADATA_KEYS:
+        value = payload.get(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float, str)) and str(value).strip():
+            metadata[key] = value
+    return metadata
+
+
+def resource_point(process: psutil.Process) -> ResourcePoint:
+    perf = time.perf_counter()
+    try:
+        cpu_times = process.cpu_times()
+        cpu_seconds = float(cpu_times.user) + float(cpu_times.system)
+    except (psutil.Error, AttributeError, OSError):
+        cpu_seconds = 0.0
+    try:
+        rss_bytes = int(process.memory_info().rss)
+    except (psutil.Error, AttributeError, OSError):
+        rss_bytes = 0
+    try:
+        thread_count = int(process.num_threads())
+    except (psutil.Error, AttributeError, OSError):
+        thread_count = 0
+    return ResourcePoint(
+        perf=perf,
+        cpu_seconds=cpu_seconds,
+        rss_bytes=rss_bytes,
+        thread_count=thread_count,
+    )
 
 
 def client_ip_from_scope(scope: dict[str, Any]) -> str:
@@ -254,9 +473,18 @@ class TelemetryStore:
         active_window_seconds: float = 60,
         max_events: int = 200,
         max_clients: int = 200,
+        max_operations: int = 100,
+        max_operation_phases: int = 200,
+        max_operation_requests: int = 200,
+        orphan_operation_seconds: float = 60,
+        environment: dict[str, Any] | None = None,
     ) -> None:
         self.active_window_seconds = active_window_seconds
         self.max_clients = max_clients
+        self.max_operations = max(1, int(max_operations))
+        self.max_operation_phases = max(2, int(max_operation_phases))
+        self.max_operation_requests = max(3, int(max_operation_requests))
+        self.orphan_operation_seconds = max(1.0, float(orphan_operation_seconds))
         self.started_at = time.time()
         self._lock = RLock()
         self._next_request_id = 1
@@ -272,6 +500,322 @@ class TelemetryStore:
         self._peak_rss_bytes = 0
         self._heartbeat = HeartbeatTelemetry()
         self._static_assets = DiagnosticTelemetry()
+        self._active_operations: dict[str, OperationTelemetry] = {}
+        self._recent_operations: deque[OperationTelemetry] = deque(maxlen=self.max_operations)
+        self._environment = copy.deepcopy(environment) if isinstance(environment, dict) else runtime_environment()
+
+    def update_environment(self, values: dict[str, Any]) -> None:
+        if not isinstance(values, dict):
+            return
+        with self._lock:
+            for key, value in values.items():
+                self._environment[str(key)] = copy.deepcopy(value)
+
+    def ensure_operation(
+        self,
+        operation_id: Any,
+        *,
+        tool: str,
+        label: str,
+        metadata: dict[str, Any] | None = None,
+        _point: ResourcePoint | None = None,
+    ) -> str | None:
+        normalised = normalise_operation_id(operation_id)
+        if not normalised:
+            return None
+        point = _point or resource_point(self._process)
+        now = time.time()
+        with self._lock:
+            self._expire_orphan_operations_locked(now, point)
+            operation = self._active_operations.get(normalised)
+            if operation is None:
+                completed = self._operation_by_id_locked(normalised)
+                if completed is not None:
+                    if metadata:
+                        completed.metadata.update(operation_metadata(metadata))
+                    completed.observed_peak_rss_bytes = max(
+                        completed.observed_peak_rss_bytes,
+                        point.rss_bytes,
+                    )
+                    return normalised
+                if len(self._active_operations) >= self.max_operations:
+                    oldest_id = min(
+                        self._active_operations,
+                        key=lambda item: self._active_operations[item].updated_perf,
+                    )
+                    oldest = self._active_operations.pop(oldest_id)
+                    self._abandon_operation_locked(oldest, now, point)
+                operation = OperationTelemetry(
+                    operation_id=normalised,
+                    tool=str(tool or ""),
+                    label=str(label or "Operation"),
+                    status="running",
+                    started_wall=now,
+                    started=point,
+                    updated_perf=point.perf,
+                    observed_peak_rss_bytes=point.rss_bytes,
+                )
+                self._active_operations[normalised] = operation
+            if metadata:
+                operation.metadata.update(operation_metadata(metadata))
+            operation.updated_perf = point.perf
+            operation.observed_peak_rss_bytes = max(operation.observed_peak_rss_bytes, point.rss_bytes)
+        return normalised
+
+    def update_operation_phase(
+        self,
+        operation_id: Any,
+        *,
+        name: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        normalised = normalise_operation_id(operation_id)
+        phase_name = str(name or "").strip().lower()
+        if (
+            not normalised
+            or not OPERATION_PHASE_RE.fullmatch(phase_name)
+            or phase_name in TERMINAL_OPERATION_PHASES
+        ):
+            return
+        phase_label = OPERATION_PHASE_LABELS.get(
+            phase_name,
+            phase_name.replace("_", " ").title(),
+        )
+        now = time.time()
+        with self._lock:
+            operation = self._active_operations.get(normalised)
+            if operation is None:
+                return
+            safe_metadata = operation_metadata(metadata)
+            current = operation.current_phase
+            if current is not None and current.name == phase_name:
+                current.metadata.update(safe_metadata)
+                operation.metadata.update(safe_metadata)
+                return
+            point = resource_point(self._process)
+            if current is not None:
+                self._finish_phase_locked(operation, current, now, point)
+            phase = OperationPhase(
+                name=phase_name,
+                label=phase_label,
+                started_wall=now,
+                started=point,
+                metadata=safe_metadata,
+            )
+            operation.phases.append(phase)
+            if len(operation.phases) > self.max_operation_phases:
+                del operation.phases[1]
+                operation.dropped_phase_count += 1
+            operation.current_phase = phase
+            operation.metadata.update(safe_metadata)
+            operation.updated_perf = point.perf
+            operation.observed_peak_rss_bytes = max(operation.observed_peak_rss_bytes, point.rss_bytes)
+
+    def finish_operation(
+        self,
+        operation_id: Any,
+        *,
+        status: str,
+        error_type: str | None = None,
+    ) -> None:
+        normalised = normalise_operation_id(operation_id)
+        if not normalised:
+            return
+        point = resource_point(self._process)
+        now = time.time()
+        with self._lock:
+            operation = self._active_operations.pop(normalised, None)
+            if operation is None:
+                return
+            if operation.current_phase is not None:
+                self._finish_phase_locked(operation, operation.current_phase, now, point)
+            operation.status = str(status or "succeeded")
+            operation.error_type = str(error_type or "").strip() or None
+            operation.ended_wall = now
+            operation.ended = point
+            operation.updated_perf = point.perf
+            operation.observed_peak_rss_bytes = max(operation.observed_peak_rss_bytes, point.rss_bytes)
+            self._recent_operations.appendleft(operation)
+
+    def _finish_phase_locked(
+        self,
+        operation: OperationTelemetry,
+        phase: OperationPhase,
+        now: float,
+        point: ResourcePoint,
+    ) -> None:
+        if phase.ended is None:
+            phase.ended_wall = now
+            phase.ended = point
+        if operation.current_phase is phase:
+            operation.current_phase = None
+
+    def _operation_by_id_locked(self, operation_id: str) -> OperationTelemetry | None:
+        operation = self._active_operations.get(operation_id)
+        if operation is not None:
+            return operation
+        return next(
+            (
+                item
+                for item in self._recent_operations
+                if item.operation_id == operation_id
+            ),
+            None,
+        )
+
+    def _expire_orphan_operations_locked(
+        self,
+        now: float,
+        point: ResourcePoint,
+    ) -> None:
+        orphan_ids = [
+            operation_id
+            for operation_id, operation in self._active_operations.items()
+            if (
+                operation.current_phase is None
+                or operation.current_phase.name == "awaiting_job_request"
+            )
+            and not operation.in_flight_requests
+            and point.perf - operation.updated_perf >= self.orphan_operation_seconds
+        ]
+        for operation_id in orphan_ids:
+            operation = self._active_operations.pop(operation_id)
+            self._abandon_operation_locked(operation, now, point)
+
+    def _abandon_operation_locked(
+        self,
+        operation: OperationTelemetry,
+        now: float,
+        point: ResourcePoint,
+    ) -> None:
+        if operation.current_phase is not None:
+            self._finish_phase_locked(operation, operation.current_phase, now, point)
+        operation.status = "abandoned"
+        operation.ended_wall = now
+        operation.ended = point
+        operation.updated_perf = point.perf
+        operation.observed_peak_rss_bytes = max(operation.observed_peak_rss_bytes, point.rss_bytes)
+        self._recent_operations.appendleft(operation)
+
+    @staticmethod
+    def _resource_delta(start: ResourcePoint, end: ResourcePoint) -> dict[str, Any]:
+        wall_seconds = max(0.0, end.perf - start.perf)
+        cpu_seconds = max(0.0, end.cpu_seconds - start.cpu_seconds)
+        return {
+            "duration_ms": round(wall_seconds * 1000, 1),
+            "cpu_seconds": round(cpu_seconds, 3),
+            "average_cores": round(cpu_seconds / wall_seconds, 2) if wall_seconds > 0 else None,
+            "rss_start_mb": bytes_to_mb(start.rss_bytes),
+            "rss_end_mb": bytes_to_mb(end.rss_bytes),
+            "rss_change_mb": bytes_to_mb(end.rss_bytes - start.rss_bytes),
+            "threads_start": start.thread_count,
+            "threads_end": end.thread_count,
+        }
+
+    def _phase_snapshot(
+        self,
+        operation: OperationTelemetry,
+        phase: OperationPhase,
+        point: ResourcePoint,
+    ) -> dict[str, Any]:
+        end = phase.ended or point
+        payload = {
+            "kind": "phase",
+            "name": phase.name,
+            "label": phase.label,
+            "status": "running" if phase.ended is None else "completed",
+            "started_at": iso_timestamp(phase.started_wall),
+            "start_offset_ms": round(max(0.0, phase.started.perf - operation.started.perf) * 1000, 1),
+            "metadata": dict(phase.metadata),
+            **self._resource_delta(phase.started, end),
+        }
+        if phase.ended_wall is not None:
+            payload["ended_at"] = iso_timestamp(phase.ended_wall)
+        return payload
+
+    def _operation_request_snapshot(
+        self,
+        operation: OperationTelemetry,
+        request: OperationRequest,
+        point: ResourcePoint,
+    ) -> dict[str, Any]:
+        end = request.ended or point
+        payload = {
+            "kind": "request",
+            "request_id": request.request_id,
+            "method": request.method,
+            "path": request.path,
+            "name": request.label.lower().replace(" ", "_"),
+            "label": request.label,
+            "status": request.status if request.status is not None else "running",
+            "started_at": iso_timestamp(request.started_wall),
+            "start_offset_ms": round(max(0.0, request.started.perf - operation.started.perf) * 1000, 1),
+            **self._resource_delta(request.started, end),
+        }
+        if request.ended_wall is not None:
+            payload["ended_at"] = iso_timestamp(request.ended_wall)
+        return payload
+
+    def _operation_snapshot(
+        self,
+        operation: OperationTelemetry,
+        point: ResourcePoint,
+    ) -> dict[str, Any]:
+        end = operation.ended or point
+        operation.observed_peak_rss_bytes = max(operation.observed_peak_rss_bytes, point.rss_bytes)
+        phases = [
+            self._phase_snapshot(operation, phase, point)
+            for phase in operation.phases
+        ]
+        requests = [
+            self._operation_request_snapshot(operation, request, point)
+            for request in operation.requests
+        ]
+        timeline = sorted(
+            [*requests, *phases],
+            key=lambda item: (float(item.get("start_offset_ms") or 0), 0 if item["kind"] == "request" else 1),
+        )
+        completed_timeline = [
+            item
+            for item in timeline
+            if isinstance(item.get("duration_ms"), (int, float))
+        ]
+        slowest = (
+            max(completed_timeline, key=lambda item: float(item.get("duration_ms") or 0))
+            if completed_timeline
+            else None
+        )
+        current_phase = operation.current_phase.label if operation.current_phase is not None else None
+        payload = {
+            "operation_id": operation.operation_id,
+            "tool": operation.tool,
+            "label": operation.label,
+            "status": operation.status,
+            "started_at": iso_timestamp(operation.started_wall),
+            "metadata": dict(operation.metadata),
+            "current_phase": current_phase,
+            "observed_peak_rss_mb": bytes_to_mb(operation.observed_peak_rss_bytes),
+            "error_type": operation.error_type,
+            "dropped_phase_count": operation.dropped_phase_count,
+            "dropped_request_count": operation.dropped_request_count,
+            "phases": phases,
+            "requests": requests,
+            "timeline": timeline,
+            "slowest_phase": (
+                {
+                    "kind": slowest.get("kind"),
+                    "name": slowest.get("name"),
+                    "label": slowest.get("label"),
+                    "duration_ms": slowest.get("duration_ms"),
+                }
+                if slowest
+                else None
+            ),
+            **self._resource_delta(operation.started, end),
+        }
+        if operation.ended_wall is not None:
+            payload["ended_at"] = iso_timestamp(operation.ended_wall)
+        return payload
 
     def begin(self, scope: dict[str, Any]) -> TelemetryRequest | None:
         if scope.get("type") != "http":
@@ -290,6 +834,21 @@ class TelemetryStore:
         client_key = f"{client_ip}\n{user_agent}"
         action = app_action_for(method, path)
         action_label = action or f"{method} {path}"
+        operation_spec = operation_request_spec(method, path)
+        operation_id = (
+            normalise_operation_id(header_value(scope, OPERATION_ID_HEADER))
+            if operation_spec
+            else None
+        )
+        operation_started = resource_point(self._process) if operation_id else None
+        if operation_id and operation_spec:
+            tool, operation_name, _ = operation_spec
+            self.ensure_operation(
+                operation_id,
+                tool=tool,
+                label=operation_name,
+                _point=operation_started,
+            )
 
         with self._lock:
             request_id = self._next_request_id
@@ -343,6 +902,31 @@ class TelemetryStore:
             client.last_seen = now
             client.last_path = path
             client.current_actions[request_id] = {"label": action_label, "started_wall": now}
+            operation_label: str | None = None
+            if operation_id and operation_spec and operation_started is not None:
+                operation = self._operation_by_id_locked(operation_id)
+                if operation is not None:
+                    operation_label = operation_spec[2]
+                    operation.requests.append(
+                        OperationRequest(
+                            request_id=request_id,
+                            method=method,
+                            path=path,
+                            label=operation_label,
+                            started_wall=now,
+                            started=operation_started,
+                        )
+                    )
+                    if len(operation.requests) > self.max_operation_requests:
+                        del operation.requests[2]
+                        operation.dropped_request_count += 1
+                    if operation.status == "running":
+                        operation.in_flight_requests.add(request_id)
+                    operation.updated_perf = operation_started.perf
+                    operation.observed_peak_rss_bytes = max(
+                        operation.observed_peak_rss_bytes,
+                        operation_started.rss_bytes,
+                    )
 
         return TelemetryRequest(
             request_id=request_id,
@@ -355,6 +939,9 @@ class TelemetryStore:
             action_label=action_label,
             started_wall=now,
             started_perf=time.perf_counter(),
+            operation_id=operation_id,
+            operation_label=operation_label,
+            operation_started=operation_started,
         )
 
     def finish(self, request: TelemetryRequest | None, status_code: int | None, failed: bool = False) -> None:
@@ -364,6 +951,12 @@ class TelemetryStore:
         duration_ms = max(0.0, (time.perf_counter() - request.started_perf) * 1000)
         status = int(status_code or 500)
         is_error = failed or status >= 400
+        operation_ended = resource_point(self._process) if request.operation_id else None
+        should_fail_operation = bool(
+            is_error
+            and request.operation_id
+            and request.operation_label != "Job poll"
+        )
 
         with self._lock:
             if request.heartbeat:
@@ -389,6 +982,7 @@ class TelemetryStore:
                 client.current_actions.pop(request.request_id, None)
 
             self._recent.appendleft({
+                "request_id": request.request_id,
                 "timestamp": iso_timestamp(now),
                 "timestamp_unix": now,
                 "client_ip": request.client_ip,
@@ -400,12 +994,45 @@ class TelemetryStore:
                 "status": status,
                 "duration_ms": round(duration_ms, 1),
                 "error": is_error,
+                **({"operation_id": request.operation_id} if request.operation_id else {}),
             })
+            if request.operation_id and operation_ended is not None:
+                operation = self._operation_by_id_locked(request.operation_id)
+                if operation is not None:
+                    operation_request = next(
+                        (
+                            item
+                            for item in reversed(operation.requests)
+                            if item.request_id == request.request_id
+                        ),
+                        None,
+                    )
+                    if operation_request is not None:
+                        operation_request.status = status
+                        operation_request.ended_wall = now
+                        operation_request.ended = operation_ended
+                    operation.in_flight_requests.discard(request.request_id)
+                    operation.updated_perf = operation_ended.perf
+                    operation.observed_peak_rss_bytes = max(
+                        operation.observed_peak_rss_bytes,
+                        operation_ended.rss_bytes,
+                    )
+                    if operation.ended is not None and operation_ended.perf > operation.ended.perf:
+                        operation.ended_wall = now
+                        operation.ended = operation_ended
+        if should_fail_operation:
+            self.finish_operation(
+                request.operation_id,
+                status="failed",
+                error_type=f"HTTP{status}",
+            )
 
     def snapshot(self) -> dict[str, Any]:
         now = time.time()
         process = process_memory_snapshot(self._process)
+        operation_point = resource_point(self._process)
         with self._lock:
+            self._expire_orphan_operations_locked(now, operation_point)
             rss_bytes = int(process.get("rss_bytes") or 0)
             self._peak_rss_bytes = max(self._peak_rss_bytes, rss_bytes)
             process["peak_rss_bytes"] = self._peak_rss_bytes
@@ -415,6 +1042,15 @@ class TelemetryStore:
             in_flight = sum(client["in_flight"] for client in clients)
             active_clients = sum(1 for client in clients if client["active"])
             recent_error_count = sum(1 for event in self._recent if event.get("error"))
+            active_operations = [
+                self._operation_snapshot(operation, operation_point)
+                for operation in self._active_operations.values()
+            ]
+            active_operations.sort(key=lambda operation: str(operation.get("started_at") or ""))
+            recent_operations = [
+                self._operation_snapshot(operation, operation.ended or operation_point)
+                for operation in self._recent_operations
+            ]
             return {
                 "started_at": iso_timestamp(self.started_at),
                 "started_at_unix": self.started_at,
@@ -437,6 +1073,13 @@ class TelemetryStore:
                     "slowest_recent_action": slowest_recent_action(self._recent),
                 },
                 "process": process,
+                "environment": copy.deepcopy(self._environment),
+                "operations": {
+                    "active": active_operations,
+                    "recent": recent_operations,
+                    "active_count": len(active_operations),
+                    "recent_limit": self.max_operations,
+                },
                 "clients": clients,
                 "recent_activity": list(self._recent),
                 "heartbeat": self._heartbeat_snapshot_locked(now),
@@ -552,7 +1195,10 @@ class TelemetryMiddleware:
         self.store = store
 
     async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
-        request = self.store.begin(scope)
+        try:
+            request = self.store.begin(scope)
+        except Exception:
+            request = None
         status_code: int | None = None
 
         async def telemetry_send(message: dict[str, Any]) -> None:
@@ -564,6 +1210,12 @@ class TelemetryMiddleware:
         try:
             await self.app(scope, receive, telemetry_send)
         except Exception:
-            self.store.finish(request, status_code or 500, failed=True)
+            try:
+                self.store.finish(request, status_code or 500, failed=True)
+            except Exception:
+                pass
             raise
-        self.store.finish(request, status_code or 500)
+        try:
+            self.store.finish(request, status_code or 500)
+        except Exception:
+            pass

@@ -316,6 +316,8 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 - In notebook-style runtimes with an existing event loop, `serve()` and `run_app()` start the Uvicorn server in a background thread and return the URL.
 - In a normal terminal or Python shell, server calls block until stopped.
 - When enabled, the browser Stop app button calls `POST /api/shutdown`; health polling greys out the page after server shutdown. The monitor page remains available at `/monitor` with the normal token rules even when the main app header button is hidden.
+- Detailed monitor operations are currently limited to GLM builds/tabulations and GBM training. The browser supplies one bounded `x-lucidum-operation-id` across validation, job creation, and polling; job progress closes and starts named phases in the in-memory telemetry store. Operation timing uses process CPU deltas over wall-clock intervals, so `average_cores` is diagnostic process activity rather than per-thread attribution. RSS values are observed at request and phase boundaries rather than continuously sampled.
+- `/api/telemetry` exposes additive `environment` and `operations` objects. Retain only bounded in-memory operation history and an allowlist of numeric/non-sensitive progress metadata. Do not add request bodies, filters, tokens, model formulas, absolute paths, or persistent diagnostic files. Telemetry must stay fail-open and must not change modelling control flow.
 
 ## UI Direction
 

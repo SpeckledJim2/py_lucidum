@@ -1,12 +1,13 @@
 export function createApiClient({ token, fetchImpl = fetch, performanceImpl = performance }) {
   return async function api(path, options = {}) {
-    const { clientTiming = false, ...fetchOptions } = options;
+    const { clientTiming = false, operationId = "", ...fetchOptions } = options;
     const started = performanceImpl.now();
     const response = await fetchImpl(path, {
       ...fetchOptions,
       headers: {
         "Content-Type": "application/json",
         "x-lucidum-token": token,
+        ...(operationId ? { "x-lucidum-operation-id": operationId } : {}),
         ...(fetchOptions.headers || {}),
       },
     });
@@ -35,6 +36,17 @@ export function createApiClient({ token, fetchImpl = fetch, performanceImpl = pe
     }
     return data;
   };
+}
+
+export function createOperationId(prefix = "operation") {
+  const safePrefix = String(prefix || "operation")
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 24) || "operation";
+  const randomPart = globalThis.crypto?.randomUUID?.().replaceAll("-", "")
+    || `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 14)}`;
+  return `${safePrefix}-${randomPart}`.slice(0, 80);
 }
 
 export function monitorPath({ token, href }) {

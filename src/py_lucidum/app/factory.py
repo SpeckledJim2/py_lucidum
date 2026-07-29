@@ -269,6 +269,19 @@ def create_app(
         payload["app_version"] = __version__
         payload["header_buttons"] = app.state.header_buttons
         payload["title_prefix"] = app.state.title_prefix
+        try:
+            app.state.telemetry.update_environment({
+                "dataset": {
+                    "name": app.state.dataset.path.name,
+                    "source_kind": payload.get("source_kind"),
+                    "file_size": payload.get("file_size"),
+                    "file_count": payload.get("file_count"),
+                    "row_count": payload.get("row_count"),
+                    "column_count": len(payload.get("columns") or []),
+                },
+            })
+        except Exception:
+            pass
         return payload
 
     @app.get("/")
