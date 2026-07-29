@@ -396,7 +396,8 @@ export function createUkMapTool({
 
   function buildMapRequest() {
     if (!state.schema) return null;
-    const numerator = el("actualNumerator").value;
+    const numeratorOption = el("actualNumerator")?.selectedOptions?.[0] || null;
+    const numerator = numeratorOption?.value || "";
     if (!numerator) return null;
     const denominatorOption = el("denominator")?.selectedOptions?.[0] || null;
     if (denominatorOption?.dataset.unavailable === "true") {
@@ -406,7 +407,7 @@ export function createUkMapTool({
     if (state.mapLevel === "unit" && !mapLevelSelectable("unit")) return null;
     return {
       level: state.mapLevel,
-      source: state.source || "dataset",
+      source: numeratorOption?.dataset.sourceId || state.source || "dataset",
       numerator,
       denominator: denominatorOption?.value || "__none__",
       denominatorSource: denominatorOption?.dataset.sourceId || "dataset",

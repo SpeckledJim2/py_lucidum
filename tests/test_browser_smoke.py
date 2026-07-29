@@ -348,6 +348,170 @@ class BrowserSmokeTests(unittest.TestCase):
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_map_and_histogram_follow_actual_source_after_model_grouping(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "sample.csv"
+            data_path.write_text(
+                "PostcodeArea,PostcodeSector,PostcodeUnit,lat,long,actualNumerator,denominator,Age,Segment,SAMPLE\n"
+                "AB,AB10 1,AB10 1AA,57.1,-2.1,10,100,30,A,training\n"
+                "AB,AB10 1,AB10 1AB,57.2,-2.2,20,200,40,B,test\n"
+                "AL,AL1 1,AL1 1AA,51.8,-0.3,30,300,50,C,training\n"
+                "AL,AL1 2,AL1 2AA,51.7,-0.2,40,400,60,D,validation\n",
+                encoding="utf-8",
+            )
+            gbm_store = GbmModelStore(data_path)
+            self.write_gbm_prediction_model(
+                gbm_store,
+                "map-source-gbm",
+                "Map source GBM",
+                "2026-07-29T00:00:00Z",
+                [11.0, 21.0, 31.0, 41.0],
+            )
+            gbm_store.activate_model("map-source-gbm")
+            glm_store = GlmModelStore(data_path)
+            self.write_glm_prediction_model(
+                glm_store,
+                "map-source-glm",
+                "Map source GLM",
+                "2026-07-29T00:00:01Z",
+                [12.0, 22.0, 32.0, 42.0],
+            )
+            glm_store.activate_model("map-source-glm")
+            gbm_source = "gbm:map-source-gbm:predictions"
+            glm_source = "glm:map-source-glm:predictions"
+            base_url, server, thread = self.start_app(
+                data_path,
+                defaults={"x": "Age", "actual": "actualNumerator", "denominator": "__none__"},
+                tools=["line_bar", "histogram", "uk_map", "glm", "gbm"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    map_requests: list[dict[str, Any]] = []
+                    histogram_requests: list[dict[str, Any]] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+
+                    def capture_request(request: Any) -> None:
+                        if request.method != "POST":
+                            return
+                        if request.url.endswith("/api/uk-map/summary"):
+                            map_requests.append(json.loads(request.post_data or "{}"))
+                        elif request.url.endswith("/api/histogram/chart"):
+                            histogram_requests.append(json.loads(request.post_data or "{}"))
+
+                    page.on("request", capture_request)
+
+                    def open_line_bar(source: str, feature: str, actual: str) -> None:
+                        page.goto(
+                            f"{base_url}/?tool=line_bar&source={source}&x={feature}"
+                            f"&actual={actual}&denominator=__none__",
+                            wait_until="domcontentloaded",
+                        )
+                        page.wait_for_function(
+                            '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
+                            timeout=10_000,
+                        )
+
+                    def open_map(expected_source: str, expected_denominator_source: str = "dataset") -> None:
+                        previous_count = len(map_requests)
+                        with page.expect_response(
+                            lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200,
+                            timeout=10_000,
+                        ):
+                            page.locator("#ukMapTool").click()
+                        page.wait_for_function(
+                            '() => document.querySelector("#mapGroupMeta")?.textContent.includes("areas matched")',
+                            timeout=10_000,
+                        )
+                        page.wait_for_function(
+                            """
+                            () => Object.keys(document.querySelector("#ukMap")?._lucidumMap?._layers || {}).length > 0
+                            """,
+                            timeout=10_000,
+                        )
+                        self.assertEqual(len(map_requests), previous_count + 1)
+                        self.assertEqual(map_requests[-1]["source"], expected_source)
+                        self.assertEqual(map_requests[-1]["denominatorSource"], expected_denominator_source)
+
+                    def open_histogram(expected_source: str) -> None:
+                        previous_count = len(histogram_requests)
+                        with page.expect_response(
+                            lambda response: response.url.endswith("/api/histogram/chart") and response.status == 200,
+                            timeout=10_000,
+                        ):
+                            page.locator("#histogramTool").click()
+                        page.locator("#histogramChart canvas").wait_for(timeout=10_000)
+                        self.assertEqual(len(histogram_requests), previous_count + 1)
+                        self.assertEqual(histogram_requests[-1]["source"], expected_source)
+
+                    open_line_bar(gbm_source, "gbm_prediction", "actualNumerator")
+                    open_map("dataset")
+
+                    open_line_bar(glm_source, "glm_prediction", "actualNumerator")
+                    open_map("dataset")
+
+                    open_line_bar("dataset", "Age", "gbm_prediction")
+                    open_map(gbm_source)
+
+                    open_line_bar(gbm_source, "gbm_prediction", "gbm_prediction")
+                    open_map(gbm_source)
+
+                    open_line_bar("dataset", "Age", "actualNumerator")
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.evaluate(
+                            """
+                            ({ value, source }) => {
+                              const select = document.querySelector("#denominator");
+                              const option = [...select.options].find(
+                                (candidate) => candidate.value === value && candidate.dataset.sourceId === source
+                              );
+                              if (!option) throw new Error("Model denominator option was not found");
+                              option.selected = true;
+                              select.dispatchEvent(new Event("change", { bubbles: true }));
+                            }
+                            """,
+                            {"value": "gbm_prediction", "source": gbm_source},
+                        )
+                    open_map("dataset", gbm_source)
+
+                    open_line_bar(gbm_source, "gbm_prediction", "actualNumerator")
+                    page.locator("#lineBarSideControlsToggleBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#lineBarSideControlsToggleBtn")
+                          ?.getAttribute("aria-expanded") === "true"
+                        """,
+                        timeout=10_000,
+                    )
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator(
+                            '#featureList .feature[data-source-id="dataset"][data-value="Age"]'
+                        ).click()
+                    open_map("dataset")
+
+                    open_line_bar(gbm_source, "gbm_prediction", "actualNumerator")
+                    open_histogram("dataset")
+
+                    open_line_bar("dataset", "Age", "glm_prediction")
+                    open_histogram(glm_source)
+
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_histogram_binning_labels_outlines_and_dense_integer_axis(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "histogram_presentation.csv"

@@ -207,15 +207,16 @@ export function createHistogramTool({
   }
 
   function buildHistogramRequest() {
-    if (!state.schema || !el("actualNumerator")?.value) return null;
+    const actualOption = el("actualNumerator")?.selectedOptions?.[0] || null;
+    if (!state.schema || !actualOption?.value) return null;
     const denominatorOption = el("denominator")?.selectedOptions?.[0] || null;
     if (denominatorOption?.dataset.unavailable === "true") {
       setStatus("The selected model prediction Denominator is unavailable because there is no active model.", true);
       return null;
     }
     const request = {
-      source: state.source || "dataset",
-      actual: el("actualNumerator").value,
+      source: actualOption?.dataset.sourceId || state.source || "dataset",
+      actual: actualOption.value,
       denominator: denominatorOption?.value || "__none__",
       denominatorSource: denominatorOption?.dataset.sourceId || "dataset",
       bins: histogramBinsValue(),
