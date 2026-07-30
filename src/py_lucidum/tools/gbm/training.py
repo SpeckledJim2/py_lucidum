@@ -718,6 +718,7 @@ def train_model(
             {
                 "mode": "pairs",
                 "pairs": selected_interaction_pairs,
+                "uncovered_policy": "singletons",
                 **({"groupings": [str(group["grouping"]) for group in interaction_group_constraints]} if interaction_group_constraints else {}),
                 **({"groups": interaction_group_constraints} if interaction_group_constraints else {}),
                 **({"features": interaction_feature_constraints} if interaction_feature_constraints else {}),
@@ -1203,9 +1204,9 @@ def lightgbm_pair_interaction_constraints(
         seen_groups.add(key)
     if not constraints:
         return []
-    remainder = [index for index in range(len(feature_names)) if index not in constrained_indexes]
-    if remainder:
-        constraints.append(remainder)
+    for index in range(len(feature_names)):
+        if index not in constrained_indexes:
+            constraints.append([index])
     return constraints
 
 

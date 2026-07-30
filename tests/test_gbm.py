@@ -940,6 +940,7 @@ COPY (
             "mode": "pairs",
             "pairs": [{"left": "Age", "right": "Segment"}, {"left": "Segment", "right": "Age"}],
             "features": ["PostcodeArea"],
+            "uncovered_policy": "singletons",
         }
         store.write_json(store.artifact_path("m1", "manifest"), manifest)
         app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
@@ -956,6 +957,8 @@ COPY (
                 "groupings": [],
                 "features": ["PostcodeArea"],
                 "groups": [],
+                "uncovered_policy": "singletons",
+                "policy_inferred": False,
             },
         )
 
@@ -968,6 +971,7 @@ COPY (
             "features": ["PostcodeSector"],
             "groupings": ["POSTCODE"],
             "groups": [{"grouping": "POSTCODE", "features": ["PostcodeArea"]}],
+            "uncovered_policy": "singletons",
         }
         store.write_json(store.artifact_path("m1", "manifest"), manifest)
         features_path = self.root / "pair_group_feature_spec.csv"
@@ -999,8 +1003,47 @@ COPY (
                 "groupings": ["POSTCODE"],
                 "features": ["PostcodeSector"],
                 "groups": [{"grouping": "POSTCODE", "features": ["PostcodeArea"], "status": "current"}],
+                "uncovered_policy": "singletons",
+                "policy_inferred": False,
             },
         )
+
+    def test_active_feature_interaction_constraints_infer_legacy_uncovered_policy(self) -> None:
+        store = self.write_model_artifacts()
+        manifest = store.manifest("m1")
+        manifest["feature_interaction_constraints"] = {
+            "mode": "pairs",
+            "pairs": [{"left": "Age", "right": "Segment"}],
+        }
+        store.write_json(store.artifact_path("m1", "manifest"), manifest)
+        write_gbm_feature_config(
+            store,
+            "m1",
+            features=["Age", "Segment", "PostcodeArea", "PostcodeSector"],
+        )
+
+        cases = [
+            ("remainder", [[0, 1], [2, 3]], "remainder"),
+            ("singletons", [[0, 1], [2], [3]], "singletons"),
+            ("unknown", [[0, 1]], "unknown"),
+        ]
+        for name, constraints, expected_policy in cases:
+            with self.subTest(name=name):
+                write_gbm_parameters(store, "m1", interaction_constraints=constraints)
+                app = create_app(
+                    self.data_path,
+                    token="",
+                    tools=["gbm", "line_bar"],
+                    use_saved_filters=False,
+                    use_kpis=False,
+                )
+
+                status, body = asgi_get(app, "/api/gbm/config")
+                active = json.loads(body)["active_feature_interaction_constraints"]
+
+                self.assertEqual(status, 200)
+                self.assertEqual(active["uncovered_policy"], expected_policy)
+                self.assertTrue(active["policy_inferred"])
 
     def test_normalise_feature_scenario_dedupes_and_rejects_missing_name(self) -> None:
         self.assertEqual(
@@ -1067,7 +1110,7 @@ COPY (
         self.assertEqual(constraints, [[1], [0], [2, 3]])
         self.assertEqual(lightgbm_interaction_constraints(["Age"], [{"grouping": "DRIVER", "features": []}]), [])
 
-    def test_lightgbm_pair_interaction_constraints_add_remainder_group(self) -> None:
+    def test_lightgbm_pair_interaction_constraints_add_singleton_main_effects(self) -> None:
         pairs = [{"left": "Age", "right": "Segment"}, {"left": "Age", "right": "VehicleAge"}]
 
         constraints = lightgbm_pair_interaction_constraints(["Age", "Segment", "VehicleAge", "Ncd"], pairs)
@@ -1083,7 +1126,7 @@ COPY (
 
         self.assertEqual(constraints, [[0, 1], [2, 3], [4]])
 
-    def test_lightgbm_pair_interaction_constraints_group_uncovered_features_together(self) -> None:
+    def test_lightgbm_pair_interaction_constraints_keep_uncovered_features_separate(self) -> None:
         pairs = [{"left": "Age", "right": "Segment"}]
 
         constraints = lightgbm_pair_interaction_constraints(
@@ -1091,7 +1134,7 @@ COPY (
             pairs,
         )
 
-        self.assertEqual(constraints, [[0, 1], [2, 3, 4]])
+        self.assertEqual(constraints, [[0, 1], [2], [3], [4]])
 
     def test_lightgbm_pair_interaction_constraints_keep_main_effect_only_features_separate(self) -> None:
         pairs = [{"left": "Age", "right": "Segment"}]
@@ -1103,7 +1146,7 @@ COPY (
             groups,
         )
 
-        self.assertEqual(constraints, [[0, 1], [2], [3, 4]])
+        self.assertEqual(constraints, [[0, 1], [2], [3], [4]])
 
     def test_validate_rejects_unknown_feature_interaction_grouping(self) -> None:
         dataset = Dataset(self.data_path)
@@ -1128,7 +1171,7 @@ COPY (
             "response": "actualNumerator",
             "offset": "denominator",
             "features": [{"name": "Age", "include": True}],
-            "parameters": default_parameters(),
+            "parameters": default_parameters() + [{"name": "num_leaves", "value": 3}],
             "sample_column": "SAMPLE",
             "feature_interaction_features": ["Missing"],
         }
@@ -1144,7 +1187,7 @@ COPY (
             "response": "actualNumerator",
             "offset": "denominator",
             "features": self.request_features(),
-            "parameters": default_parameters(),
+            "parameters": default_parameters() + [{"name": "num_leaves", "value": 3}],
             "sample_column": "SAMPLE",
             "feature_interaction_pairs": [
                 {"left": "Age", "right": "Segment"},
@@ -1169,7 +1212,7 @@ COPY (
             "response": "actualNumerator",
             "offset": "denominator",
             "features": self.request_features() + [{"name": "PostcodeArea", "include": True, "monotonicity": ""}],
-            "parameters": default_parameters(),
+            "parameters": default_parameters() + [{"name": "num_leaves", "value": 3}],
             "sample_column": "SAMPLE",
             "feature_groupings": {"Age": "DRIVER", "Segment": "VEHICLE", "PostcodeArea": "POSTCODE"},
             "feature_interaction_groupings": ["POSTCODE"],
@@ -1186,7 +1229,7 @@ COPY (
             "response": "actualNumerator",
             "offset": "denominator",
             "features": self.request_features() + [{"name": "PostcodeArea", "include": True, "monotonicity": ""}],
-            "parameters": default_parameters(),
+            "parameters": default_parameters() + [{"name": "num_leaves", "value": 3}],
             "sample_column": "SAMPLE",
             "feature_groupings": {"Age": "DRIVER", "Segment": "VEHICLE", "PostcodeArea": "POSTCODE"},
             "feature_interaction_groupings": ["DRIVER"],
@@ -1212,7 +1255,7 @@ COPY (
                 "response": "actualNumerator",
                 "offset": "denominator",
                 "features": features,
-                "parameters": default_parameters(),
+                "parameters": default_parameters() + [{"name": "num_leaves", "value": 3}],
                 "sample_column": "SAMPLE",
                 "feature_interaction_pairs": [{"left": "Age", "right": "Segment"}],
                 "feature_interaction_features": ["PostcodeArea"],
@@ -1224,7 +1267,7 @@ COPY (
                 "response": "actualNumerator",
                 "offset": "denominator",
                 "features": features,
-                "parameters": default_parameters(),
+                "parameters": default_parameters() + [{"name": "num_leaves", "value": 3}],
                 "sample_column": "SAMPLE",
                 "feature_interaction_pairs": [{"left": "Age", "right": "Segment"}],
                 "feature_interaction_features": ["Age"],
@@ -1234,6 +1277,48 @@ COPY (
         self.assertTrue(valid.ok, valid.errors)
         self.assertFalse(invalid.ok)
         self.assertIn("Age cannot be both main-effect-only and used in a GBM feature interaction pair", invalid.errors)
+
+    def test_validate_rejects_more_than_three_leaves_with_feature_interaction_pairs(self) -> None:
+        dataset = Dataset(self.data_path)
+        payload = {
+            "response": "actualNumerator",
+            "offset": "denominator",
+            "features": self.request_features(),
+            "parameters": default_parameters() + [{"name": "num_leaves", "value": 4}],
+            "sample_column": "SAMPLE",
+            "feature_interaction_pairs": [{"left": "Age", "right": "Segment"}],
+        }
+
+        result = validate_request(dataset, payload)
+
+        self.assertFalse(result.ok)
+        self.assertIn(
+            "num_leaves must be no more than 3 when GBM feature interaction pairs are used",
+            result.errors,
+        )
+
+    def test_validate_uses_lightgbm_leaf_default_for_feature_interaction_pairs(self) -> None:
+        dataset = Dataset(self.data_path)
+        payload = {
+            "response": "actualNumerator",
+            "offset": "denominator",
+            "features": self.request_features(),
+            "parameters": [
+                parameter
+                for parameter in default_parameters()
+                if parameter["name"] != "num_leaves"
+            ],
+            "sample_column": "SAMPLE",
+            "feature_interaction_pairs": [{"left": "Age", "right": "Segment"}],
+        }
+
+        result = validate_request(dataset, payload)
+
+        self.assertFalse(result.ok)
+        self.assertIn(
+            "num_leaves must be no more than 3 when GBM feature interaction pairs are used",
+            result.errors,
+        )
 
     def test_generated_sample_sidecar_is_reused_for_missing_sample_column(self) -> None:
         data_path = self.root / "no_sample.csv"
@@ -1464,6 +1549,55 @@ COPY (
         self.assertEqual(result["grid"]["skipped_count"], 2)
         self.assertIn("Grid has 4 combinations; running all 4.", result["grid"]["messages"])
         self.assertIn("skipped 2 invalid", " ".join(result["grid"]["messages"]))
+
+    def test_grid_validation_skips_pair_models_above_three_leaves(self) -> None:
+        dataset = Dataset(self.data_path)
+        payload = {
+            "features": self.request_features(),
+            "parameters": [
+                {"name": "objective", "value": "poisson"},
+                {"name": "metric", "value": "poisson"},
+                {"name": "num_leaves", "value": "{3, 4}"},
+            ],
+            "sample_column": "SAMPLE",
+            "feature_interaction_pairs": [{"left": "Age", "right": "Segment"}],
+            "grid_samples": 99,
+        }
+
+        grid_run = prepare_grid_run(dataset, payload)
+
+        self.assertTrue(grid_run.ok, grid_run.errors)
+        self.assertEqual([item.resolved_parameters["num_leaves"] for item in grid_run.combinations], [3])
+        self.assertEqual(grid_run.skipped[0]["parameters"]["num_leaves"], 4)
+        self.assertIn(
+            "num_leaves must be no more than 3 when GBM feature interaction pairs are used",
+            grid_run.skipped[0]["errors"],
+        )
+
+    def test_grid_validation_fails_when_all_pair_models_exceed_three_leaves(self) -> None:
+        dataset = Dataset(self.data_path)
+        payload = {
+            "features": self.request_features(),
+            "parameters": [
+                {"name": "objective", "value": "poisson"},
+                {"name": "metric", "value": "poisson"},
+                {"name": "num_leaves", "value": "{4, 5}"},
+            ],
+            "sample_column": "SAMPLE",
+            "feature_interaction_pairs": [{"left": "Age", "right": "Segment"}],
+            "grid_samples": 99,
+        }
+
+        grid_run = prepare_grid_run(dataset, payload)
+
+        self.assertFalse(grid_run.ok)
+        self.assertEqual(grid_run.combinations, [])
+        self.assertEqual(len(grid_run.skipped), 2)
+        self.assertIn(
+            "No valid grid combinations remain. First error: "
+            "num_leaves must be no more than 3 when GBM feature interaction pairs are used",
+            grid_run.errors,
+        )
 
     def test_lightgbm_parameter_compatibility_validation(self) -> None:
         dataset = Dataset(self.data_path)
@@ -2559,11 +2693,11 @@ COPY (
 
         data_path = self.root / "pair_train.csv"
         data_path.write_text(
-            "actualNumerator,denominator,Age,VehicleAge,Segment,PostcodeArea\n"
-            "10,100,30,4,A,AB\n"
-            "20,200,40,5,B,AB\n"
-            "30,300,50,6,A,CD\n"
-            "40,400,60,7,B,CD\n",
+            "actualNumerator,denominator,Age,VehicleAge,Segment,PostcodeArea,Ncd,CarValue\n"
+            "10,100,30,4,A,AB,1,1000\n"
+            "20,200,40,5,B,AB,2,2000\n"
+            "30,300,50,6,A,CD,3,3000\n"
+            "40,400,60,7,B,CD,4,4000\n",
             encoding="utf-8",
         )
         dataset = Dataset(data_path)
@@ -2589,6 +2723,8 @@ COPY (
                     {"name": "VehicleAge", "include": True, "monotonicity": ""},
                     {"name": "Segment", "include": True, "monotonicity": ""},
                     {"name": "PostcodeArea", "include": True, "monotonicity": ""},
+                    {"name": "Ncd", "include": True, "monotonicity": ""},
+                    {"name": "CarValue", "include": True, "monotonicity": ""},
                 ],
                 "parameters": parameters,
                 "sample_column": "",
@@ -2606,6 +2742,7 @@ COPY (
             {
                 "mode": "pairs",
                 "pairs": [{"left": "Age", "right": "Segment"}],
+                "uncovered_policy": "singletons",
                 "groupings": ["POSTCODE"],
                 "groups": [{"grouping": "POSTCODE", "features": ["PostcodeArea"]}],
                 "features": ["VehicleAge"],
@@ -2613,7 +2750,82 @@ COPY (
         )
         self.assertEqual(
             store.read_json(store.artifact_path(result["model_id"], "parameters"))["interaction_constraints"],
-            [[0, 2], [1], [3]],
+            [[0, 2], [1], [3], [4], [5]],
+        )
+
+    def test_ebm_pair_allowlist_produces_only_allowed_pairs_or_group_terms(self) -> None:
+        try:
+            import lightgbm  # noqa: F401
+        except ImportError:
+            self.skipTest("LightGBM is not installed")
+
+        data_path = self.root / "strict_pair_ebm.csv"
+        rows = ["actualNumerator,denominator,A,B,C,D,SAMPLE"]
+        for index in range(240):
+            a = index % 2
+            b = (index // 2) % 2
+            c = 0
+            d = 0
+            sample = "training" if index < 160 else ("test" if index < 200 else "validation")
+            if sample == "test":
+                response = 50 if a == b else 10
+            elif a == b == 1:
+                response = 60
+            elif a == b == 0:
+                response = 50
+            else:
+                response = 10
+            rows.append(f"{response},1,{a},{b},{c},{d},{sample}")
+        data_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+        dataset = Dataset(data_path)
+        store = GbmModelStore(data_path)
+        parameters = default_parameters() + [
+            {"name": "num_iterations", "value": 80},
+            {"name": "early_stopping_rounds", "value": 2},
+            {"name": "num_leaves", "value": 3},
+            {"name": "min_data_in_leaf", "value": 1},
+            {"name": "metric", "value": "poisson"},
+            {"name": "objective", "value": "poisson"},
+        ]
+
+        result = train_model(
+            dataset,
+            store,
+            {
+                "label": "Strict pair EBM",
+                "response": "actualNumerator",
+                "offset": "denominator",
+                "features": [
+                    {"name": name, "include": True, "monotonicity": ""}
+                    for name in ("A", "B", "C", "D")
+                ],
+                "parameters": parameters,
+                "sample_column": "SAMPLE",
+                "shap_rows": "0",
+                "training_mode": "ebm",
+                "feature_groupings": {"C": "NOISE", "D": "NOISE"},
+                "feature_interaction_groupings": ["NOISE"],
+                "feature_interaction_pairs": [{"left": "A", "right": "B"}],
+            },
+        )
+
+        saved_parameters = store.read_json(store.artifact_path(result["model_id"], "parameters"))
+        gain_rows = ebm_gain_summary(store, result["model_id"])["rows"]
+        interaction_rows = [
+            row
+            for row in gain_rows
+            if row["dim"] == 2
+        ]
+        allowed_pairs = {frozenset(("A", "B"))}
+        allowed_groups = [frozenset(("C", "D"))]
+        self.assertEqual(saved_parameters["interaction_constraints"], [[0, 1], [2, 3]])
+        self.assertTrue(interaction_rows, gain_rows)
+        self.assertTrue(
+            all(
+                frozenset(row["features"]) in allowed_pairs
+                or any(frozenset(row["features"]) <= group for group in allowed_groups)
+                for row in interaction_rows
+            )
         )
 
     def test_training_persists_init_score_and_uses_it_for_predictions(self) -> None:

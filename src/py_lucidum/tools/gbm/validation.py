@@ -951,8 +951,8 @@ def validate_request(dataset: Dataset, payload: dict[str, Any], generated_sample
                 reserved_sample_names=reserved_sample_names,
             )
         )
-        if selected_interaction_pairs and integer_parameter(params, "num_leaves", 0) > 3:
-            warnings.append("Feature interaction pairs constrain branch co-occurrence, but num_leaves above 3 can still create higher-order branches through overlapping pairs")
+        if selected_interaction_pairs and integer_parameter(params, "num_leaves", 31) > 3:
+            errors.append("num_leaves must be no more than 3 when GBM feature interaction pairs are used")
 
         if selected_training_mode == "ebm":
             early_stopping_rounds = integer_parameter(params, "early_stopping_rounds", 0)

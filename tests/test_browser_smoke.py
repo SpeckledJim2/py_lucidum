@@ -12391,6 +12391,284 @@ COPY (
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_gbm_pair_constraints_use_strict_automatic_singletons(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            data_path = tmp_path / "sample.csv"
+            data_path.write_text(
+                "actualNumerator,denominator,Age,Segment,Region,VehicleType,SAMPLE\n"
+                "10,100,30,A,North,Car,training\n"
+                "20,200,40,B,South,Van,test\n"
+                "30,300,50,C,North,Car,training\n",
+                encoding="utf-8",
+            )
+            features_path = tmp_path / "feature_spec.csv"
+            features_path.write_text(
+                "Feature,Grouping\n"
+                "Age,DRIVER\n"
+                "Segment,VEHICLE\n"
+                "Region,GEO\n"
+                "VehicleType,GEO\n",
+                encoding="utf-8",
+            )
+            store = GbmModelStore(data_path)
+            model_id = "legacy-pair-model"
+            model_dir = store.create_model_dir(model_id)
+            store.write_json(
+                model_dir / "manifest.json",
+                {
+                    "model_id": model_id,
+                    "label": "Legacy pair model",
+                    "created_at": "2026-07-30T00:00:00Z",
+                    "training_mode": "ebm",
+                    "response_column": "actualNumerator",
+                    "offset_column": "denominator",
+                    "best_iteration": 2,
+                    "training_rows": 2,
+                    "test_rows": 1,
+                    "scored_rows": 3,
+                    "sample_column": "SAMPLE",
+                    "sample_source": "dataset",
+                    "feature_interaction_constraints": {
+                        "mode": "pairs",
+                        "pairs": [{"left": "Age", "right": "Segment"}],
+                    },
+                },
+            )
+            write_gbm_feature_config(
+                store,
+                model_id,
+                [
+                    {"name": "Age", "kind": "integer", "include": True, "monotonicity": "", "gain": 5.0},
+                    {"name": "Segment", "kind": "categorical", "include": True, "monotonicity": "", "gain": 4.0},
+                    {"name": "Region", "kind": "categorical", "include": True, "monotonicity": "", "gain": 3.0},
+                    {"name": "VehicleType", "kind": "categorical", "include": True, "monotonicity": "", "gain": 2.0},
+                ],
+            )
+            store.write_json(
+                model_dir / "parameters.json",
+                {
+                    "objective": "gamma",
+                    "metric": "gamma",
+                    "num_iterations": 10,
+                    "num_leaves": 3,
+                    "early_stopping_rounds": 2,
+                    "interaction_constraints": [[0, 1], [2, 3]],
+                },
+            )
+            write_gbm_evaluation(
+                store,
+                model_id,
+                {"training": {"gamma": [7.4, 7.3]}, "test": {"gamma": [7.35, 7.2]}},
+            )
+            store.activate_model(model_id)
+            base_url, server, thread = self.start_app(
+                data_path,
+                tools=["line_bar", "gbm"],
+                features_path=features_path,
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    try:
+                        page.goto(base_url, wait_until="domcontentloaded")
+                        page.locator("#datasetMeta", has_text="sample.csv").wait_for(timeout=10_000)
+                        page.locator("#gbmTool").click()
+                        page.locator("#modelToolWrap:not(.hidden) .gbm-tool").wait_for(timeout=10_000)
+                        page.locator("#gbmTrainBtn").wait_for(timeout=10_000)
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector("#gbmFeatureInteractionPairButton")?.textContent.trim() === "Interaction pairs (1)"
+                              && document.querySelectorAll("#gbmFeatureGrid .tabulator-row").length >= 4
+                            """,
+                            timeout=10_000,
+                        )
+                        if page.locator("#gbmFeatureSetupBtn").get_attribute("aria-expanded") == "false":
+                            page.locator("#gbmFeatureSetupBtn").click()
+
+                        page.locator("#gbmFeatureInteractionPairButton").click()
+                        legacy_summary = page.locator("#gbmInteractionPairPolicySummary")
+                        self.assertIn("legacy open remainder", legacy_summary.text_content())
+                        self.assertIn("Retraining uses strict singletons", legacy_summary.text_content())
+                        for name in ("Region", "VehicleType"):
+                            row = page.locator("#gbmFeatureGrid .tabulator-row", has_text=name)
+                            self.assertEqual(row.locator(".gbm-automatic-singleton-lock").count(), 0)
+
+                        page.locator("[data-gbm-remove-interaction-pair]").click()
+                        page.locator("#gbmInteractionPairLeft").select_option("Age")
+                        page.locator("#gbmInteractionPairRight").select_option("Segment")
+                        page.locator("#gbmInteractionPairAdd").click()
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector("#gbmInteractionPairPolicySummary")?.textContent.includes(
+                              "Strict allowlist: 2 unlisted selected features are main-effect-only"
+                            )
+                            """,
+                            timeout=10_000,
+                        )
+                        page.keyboard.press("Escape")
+                        for name in ("Region", "VehicleType"):
+                            automatic_lock = page.locator(
+                                "#gbmFeatureGrid .tabulator-row",
+                                has_text=name,
+                            ).locator(".gbm-automatic-singleton-lock")
+                            self.assertEqual(automatic_lock.count(), 1)
+                            self.assertEqual(
+                                automatic_lock.get_attribute("aria-label"),
+                                "Main effect only — automatic because pair mode uses a strict allowlist",
+                            )
+
+                        region_name = page.locator(
+                            "#gbmFeatureGrid .tabulator-row",
+                            has_text="Region",
+                        ).locator(".tabulator-cell[tabulator-field='name']")
+                        region_name.click(button="right")
+                        automatic_action = page.locator(
+                            "#gbmFeatureContextMenu [role='menuitem']",
+                            has_text="Main effect only (automatic)",
+                        )
+                        self.assertTrue(automatic_action.is_disabled())
+                        self.assertEqual(
+                            automatic_action.get_attribute("title"),
+                            "Add an allowed pair to let this feature interact",
+                        )
+                        add_pair_action = page.locator(
+                            "#gbmFeatureContextMenu [role='menuitem']",
+                            has_text="Add pair interaction (2D)…",
+                        )
+                        self.assertFalse(add_pair_action.is_disabled())
+                        add_pair_action.click()
+                        page.locator("#gbmFeatureInteractionPairMenu:not(.hidden)").wait_for(timeout=10_000)
+                        self.assertEqual(page.locator("#gbmInteractionPairLeft").input_value(), "Region")
+                        page.locator("#gbmInteractionPairRight").select_option("VehicleType")
+                        page.locator("#gbmInteractionPairAdd").click()
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector("#gbmInteractionPairPolicySummary")?.textContent.includes(
+                              "Strict allowlist: 0 unlisted selected features are main-effect-only"
+                            )
+                            """,
+                            timeout=10_000,
+                        )
+                        page.keyboard.press("Escape")
+                        for name in ("Region", "VehicleType"):
+                            row = page.locator("#gbmFeatureGrid .tabulator-row", has_text=name)
+                            self.assertEqual(row.locator(".gbm-pair-interaction-lock").count(), 1)
+                            self.assertEqual(row.locator(".gbm-automatic-singleton-lock").count(), 0)
+
+                        page.locator("#gbmFeatureInteractionPairButton").click()
+                        pair_row = page.locator(
+                            '[data-gbm-interaction-pair-row][data-gbm-interaction-pair-left="Region"]'
+                            '[data-gbm-interaction-pair-right="VehicleType"]'
+                        )
+                        pair_row.locator("[data-gbm-remove-interaction-pair]").click()
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector("#gbmInteractionPairPolicySummary")?.textContent.includes(
+                              "Strict allowlist: 2 unlisted selected features are main-effect-only"
+                            )
+                            """,
+                            timeout=10_000,
+                        )
+                        page.keyboard.press("Escape")
+                        for name in ("Region", "VehicleType"):
+                            row = page.locator("#gbmFeatureGrid .tabulator-row", has_text=name)
+                            self.assertEqual(row.locator(".gbm-automatic-singleton-lock").count(), 1)
+
+                        page.locator("#gbmFeatureInteractionConstraintButton").click()
+                        geo_group = page.locator('[data-gbm-interaction-grouping="GEO"]')
+                        self.assertFalse(geo_group.is_disabled())
+                        self.assertIn("GEO (2)", geo_group.locator("xpath=..").text_content())
+                        geo_group.check()
+                        page.keyboard.press("Escape")
+                        for name in ("Region", "VehicleType"):
+                            row = page.locator("#gbmFeatureGrid .tabulator-row", has_text=name)
+                            self.assertEqual(row.locator(".gbm-automatic-singleton-lock").count(), 0)
+                            self.assertEqual(row.locator(".gbm-group-interaction-lock").count(), 1)
+                            self.assertEqual(
+                                row.locator(".gbm-group-interaction-lock .gbm-interaction-lock-subscript").text_content(),
+                                "2",
+                            )
+
+                        validate_payload: dict[str, Any] = {}
+                        train_payload: dict[str, Any] = {}
+
+                        def validate_route(route: Any) -> None:
+                            validate_payload["value"] = route.request.post_data_json
+                            route.fulfill(
+                                status=200,
+                                content_type="application/json",
+                                body=json.dumps({"ok": True, "errors": [], "warnings": [], "grid": {"messages": []}}),
+                            )
+
+                        def train_route(route: Any) -> None:
+                            train_payload["value"] = route.request.post_data_json
+                            route.fulfill(
+                                status=200,
+                                content_type="application/json",
+                                body=json.dumps(
+                                    {
+                                        "job_id": "strict-pair-job",
+                                        "status": "queued",
+                                        "created_at": "2026-07-30T00:00:00Z",
+                                        "updated_at": "2026-07-30T00:00:00Z",
+                                        "result": None,
+                                        "error": None,
+                                        "progress": None,
+                                    }
+                                ),
+                            )
+
+                        def job_route(route: Any) -> None:
+                            route.fulfill(
+                                status=200,
+                                content_type="application/json",
+                                body=json.dumps(
+                                    {
+                                        "job_id": "strict-pair-job",
+                                        "status": "succeeded",
+                                        "created_at": "2026-07-30T00:00:00Z",
+                                        "updated_at": "2026-07-30T00:00:01Z",
+                                        "result": {"sources": {}},
+                                        "error": None,
+                                        "progress": {
+                                            "phase": "succeeded",
+                                            "message": "GBM training complete",
+                                            "percent": 100,
+                                        },
+                                    }
+                                ),
+                            )
+
+                        page.route("**/api/gbm/validate", validate_route)
+                        page.route("**/api/gbm/train", train_route)
+                        page.route("**/api/gbm/jobs/strict-pair-job", job_route)
+                        with page.expect_request("**/api/gbm/train", timeout=10_000):
+                            page.locator("#gbmTrainBtn").click()
+                        page.wait_for_function(
+                            "() => !document.querySelector('#gbmTrainBtn')?.classList.contains('training')",
+                            timeout=10_000,
+                        )
+                        for payload in (validate_payload["value"], train_payload["value"]):
+                            self.assertEqual(
+                                payload["feature_interaction_pairs"],
+                                [{"left": "Age", "right": "Segment"}],
+                            )
+                            self.assertEqual(payload["feature_interaction_groupings"], ["GEO"])
+                            self.assertNotIn("feature_interaction_features", payload)
+                        self.assertEqual(page_errors, [])
+                    finally:
+                        browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_gbm_sidebar_switch_preserves_profile_but_refreshes_model_chart(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "sample.csv"
@@ -27962,6 +28240,12 @@ COPY (
                 self.assertIn("Age", driver_with_pair.get_attribute("aria-label") or "")
                 self.assertIn("Segment", vehicle_with_pair.get_attribute("aria-label") or "")
                 page.keyboard.press("Escape")
+                page.locator(
+                    "#gbmParameterGrid .tabulator-row",
+                    has_text="num_leaves",
+                ).locator(".tabulator-cell[tabulator-field='value']").click()
+                page.locator("#gbmParameterGrid input.gbm-parameter-input-editor").fill("3")
+                page.locator("#gbmParameterGrid input.gbm-parameter-input-editor").press("Enter")
                 page.evaluate(
                     """
                     () => {
@@ -28144,6 +28428,12 @@ COPY (
                 self.assertEqual(page.evaluate("window.__gbmBusyPointerMoves"), gbm_pointer_moves_while_busy)
 
                 live_job_status["value"] = "failed"
+                page.locator(
+                    "#gbmParameterGrid .tabulator-row",
+                    has_text="num_leaves",
+                ).locator(".tabulator-cell[tabulator-field='value']").click()
+                page.locator("#gbmParameterGrid input.gbm-parameter-input-editor").fill("3")
+                page.locator("#gbmParameterGrid input.gbm-parameter-input-editor").press("Enter")
                 page.locator("#gbmTrainBtn").click()
                 page.locator("#gbmNotice", has_text="Synthetic GBM training failure").wait_for(timeout=10_000)
                 page.locator("#appStatusBadge.ready", has_text="Ready").wait_for(timeout=10_000)

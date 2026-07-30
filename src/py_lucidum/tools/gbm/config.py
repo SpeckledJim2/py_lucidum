@@ -281,12 +281,23 @@ WHERE feature IS NOT NULL
                 payload["status"] = "current"
             payload_groups.append(payload)
         if str(stored.get("mode") or "").strip().lower() == "pairs" or pairs:
+            uncovered_policy = str(stored.get("uncovered_policy") or "").strip().lower()
+            policy_inferred = uncovered_policy not in {"singletons", "remainder"}
+            if policy_inferred:
+                uncovered_policy = self.infer_pair_uncovered_policy(
+                    model_id,
+                    pairs=pairs,
+                    groups=groups,
+                    explicit_features=features,
+                )
             return {
                 "mode": "pairs",
                 "pairs": pairs,
                 "groupings": [group["grouping"] for group in payload_groups],
                 "features": features,
                 "groups": payload_groups,
+                "uncovered_policy": uncovered_policy,
+                "policy_inferred": policy_inferred,
             } if pairs else None
         if not groups and not features:
             return None
@@ -296,6 +307,65 @@ WHERE feature IS NOT NULL
             "features": features,
             "groups": payload_groups,
         }
+
+    def infer_pair_uncovered_policy(
+        self,
+        model_id: str,
+        *,
+        pairs: list[dict[str, str]],
+        groups: list[dict[str, Any]],
+        explicit_features: list[str],
+    ) -> str:
+        feature_names = self.store.model_feature_names(model_id)
+        if not feature_names:
+            return "unknown"
+
+        covered_names = set(explicit_features)
+        for pair in pairs:
+            covered_names.update((pair["left"], pair["right"]))
+        for group in groups:
+            covered_names.update(group["features"])
+        uncovered_indexes = [
+            index
+            for index, feature_name in enumerate(feature_names)
+            if feature_name not in covered_names
+        ]
+        if not uncovered_indexes:
+            return "singletons"
+
+        parameters = self.store.model_parameters(model_id)
+        raw_constraints = parameters.get("interaction_constraints")
+        if not isinstance(raw_constraints, list):
+            return "unknown"
+
+        constraint_sets: list[frozenset[int]] = []
+        for raw_group in raw_constraints:
+            if not isinstance(raw_group, list):
+                continue
+            indexes: set[int] = set()
+            valid = True
+            for raw_index in raw_group:
+                if isinstance(raw_index, bool):
+                    valid = False
+                    break
+                try:
+                    index = int(raw_index)
+                except (TypeError, ValueError):
+                    valid = False
+                    break
+                if index < 0 or index >= len(feature_names):
+                    valid = False
+                    break
+                indexes.add(index)
+            if valid and indexes:
+                constraint_sets.append(frozenset(indexes))
+
+        uncovered_set = frozenset(uncovered_indexes)
+        if len(uncovered_indexes) > 1 and uncovered_set in constraint_sets:
+            return "remainder"
+        if all(frozenset({index}) in constraint_sets for index in uncovered_indexes):
+            return "singletons"
+        return "unknown"
 
     def normalise_interaction_constraint_groups(self, raw_groups: Any) -> list[dict[str, Any]]:
         if not isinstance(raw_groups, list):

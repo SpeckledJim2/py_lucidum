@@ -1066,6 +1066,7 @@ export function createGbmTool({
               <button id="gbmInteractionPairAdd" class="tab gbm-inline-action-button gbm-interaction-pair-add" type="button">Add pair</button>
             </div>
           </div>
+          <div id="gbmInteractionPairPolicySummary" class="gbm-interaction-pair-policy-summary" role="note">${escapeHtml(pairInteractionPolicySummary(features, pairs, { rendered: true }))}</div>
           <div class="gbm-interaction-pair-section gbm-interaction-pair-list-section" role="group" aria-labelledby="gbmInteractionPairListTitle">
             <div id="gbmInteractionPairListTitle" class="gbm-interaction-pair-section-title">${escapeHtml(featureInteractionPairListLabel(pairs.length))}</div>
             <div id="gbmInteractionPairRows" class="gbm-interaction-pair-rows">
@@ -1153,13 +1154,18 @@ export function createGbmTool({
   }
 
   function normaliseActiveFeatureInteractionConstraints(activeConstraints) {
-    if (!activeConstraints || typeof activeConstraints !== "object") return { mode: "", groups: [], features: [], pairs: [] };
+    if (!activeConstraints || typeof activeConstraints !== "object") {
+      return { mode: "", groups: [], features: [], pairs: [], uncoveredPolicy: "", policyInferred: false };
+    }
     const groups = Array.isArray(activeConstraints.groups) ? activeConstraints.groups : [];
     const pairs = normaliseFeatureInteractionPairs(activeConstraints.pairs);
+    const uncoveredPolicy = String(activeConstraints.uncovered_policy || "").trim().toLowerCase();
     return {
       mode: String(activeConstraints.mode || "").trim().toLowerCase(),
       features: scenarioFeatureList(activeConstraints.features),
       pairs,
+      uncoveredPolicy: ["singletons", "remainder", "unknown"].includes(uncoveredPolicy) ? uncoveredPolicy : "",
+      policyInferred: Boolean(activeConstraints.policy_inferred),
       groups: groups
         .map((group) => {
           const grouping = String(group?.grouping || "").trim();
@@ -1473,6 +1479,8 @@ export function createGbmTool({
       button.textContent = featureInteractionPairButtonLabel(pairs.length);
       button.classList.toggle("has-constraints", pairs.length > 0);
     }
+    const policySummary = el("gbmInteractionPairPolicySummary");
+    if (policySummary) policySummary.textContent = pairInteractionPolicySummary(features, pairs);
     syncFeatureInteractionPairAddState();
   }
 
@@ -1617,11 +1625,111 @@ export function createGbmTool({
     return locked;
   }
 
+  function featureConstraintRowsEdited(features = [], data = config) {
+    const baseline = new Map((data?.features || []).map((feature) => [feature.name, feature]));
+    const activeExplicit = new Set(
+      normaliseActiveFeatureInteractionConstraints(data?.active_feature_interaction_constraints).features
+    );
+    for (const feature of features || []) {
+      const stored = baseline.get(feature?.name);
+      if (!stored) continue;
+      if (Boolean(feature?.include) !== Boolean(stored?.include)) return true;
+      if (String(feature?.monotonicity || "") !== String(stored?.monotonicity || "")) return true;
+      if (Boolean(feature?.feature_interaction_locked) !== activeExplicit.has(feature.name)) return true;
+    }
+    return false;
+  }
+
+  function renderedPairConstraintUsesStrictPolicy(features = []) {
+    const active = normaliseActiveFeatureInteractionConstraints(config?.active_feature_interaction_constraints);
+    if (active.uncoveredPolicy === "singletons") return true;
+    const draft = featureDraftForData(config);
+    return Boolean(
+      draft
+      && (
+        draft.interactionPairsEdited
+        || draft.interactionGroupingsEdited
+        || featureConstraintRowsEdited(draft.features || features)
+      )
+    );
+  }
+
+  function selectedPairConstraintUsesStrictPolicy(features = currentFeatureRows(), pairs = currentFeatureInteractionPairs()) {
+    const active = normaliseActiveFeatureInteractionConstraints(config?.active_feature_interaction_constraints);
+    if (active.uncoveredPolicy === "singletons") return true;
+    return (
+      featureInteractionPairsUserEdited(config)
+      || featureInteractionPairsEdited(pairs, config)
+      || featureInteractionGroupingsEdited(currentFeatureInteractionGroupings(), config)
+      || featureConstraintRowsEdited(features, config)
+    );
+  }
+
+  function automaticSingletonFeatureNames(features, featureLocked, pairLocked, groupMembership, strict) {
+    const automatic = new Set();
+    if (!strict) return automatic;
+    for (const feature of features || []) {
+      if (
+        !feature?.include
+        || !isFeatureSelectable(feature)
+        || featureLocked.has(feature.name)
+        || pairLocked.has(feature.name)
+        || groupMembership.has(feature.name)
+      ) continue;
+      automatic.add(feature.name);
+    }
+    return automatic;
+  }
+
+  function pairInteractionPolicySummary(features, pairs, { rendered = false } = {}) {
+    const normalisedPairs = normaliseFeatureInteractionPairs(pairs);
+    if (!normalisedPairs.length) {
+      return "Pair mode is a strict allowlist and requires at most three leaves (num_leaves <= 3).";
+    }
+    const active = normaliseActiveFeatureInteractionConstraints(config?.active_feature_interaction_constraints);
+    const featureLocked = rendered
+      ? (featureDraftForData(config) ? selectedFeatureInteractionFeatureNames(features) : activeFeatureInteractionFeatureNames())
+      : selectedFeatureInteractionFeatureNames(features);
+    const pairLocked = featureInteractionPairFeatureNames(normalisedPairs);
+    const groupMembership = rendered
+      ? renderedInteractionGroupMembership(features, featureLocked, pairLocked)
+      : selectedInteractionGroupMembership(features, featureLocked, pairLocked);
+    const strict = rendered
+      ? renderedPairConstraintUsesStrictPolicy(features)
+      : selectedPairConstraintUsesStrictPolicy(features, normalisedPairs);
+    if (strict) {
+      const count = automaticSingletonFeatureNames(
+        features,
+        featureLocked,
+        pairLocked,
+        groupMembership,
+        true,
+      ).size;
+      const noun = count === 1 ? "feature is" : "features are";
+      return `Strict allowlist: ${count.toLocaleString()} unlisted selected ${noun} main-effect-only. Pair mode requires at most three leaves (num_leaves <= 3).`;
+    }
+    if (active.uncoveredPolicy === "remainder") {
+      return "This saved model used the legacy open remainder, so unlisted features could interact. Retraining uses strict singletons and requires at most three leaves (num_leaves <= 3).";
+    }
+    return "This saved model's uncovered-feature policy could not be classified. Retraining uses strict singletons and requires at most three leaves (num_leaves <= 3).";
+  }
+
   function applyInteractionLocksToFeatures(features) {
     const draft = featureDraftForData(config);
     const featureLocked = draft ? selectedFeatureInteractionFeatureNames(features) : activeFeatureInteractionFeatureNames();
     const pairLocked = renderedPairInteractionFeatureNames(features);
     const groupMembership = renderedInteractionGroupMembership(features, featureLocked, pairLocked);
+    const automaticSingletons = automaticSingletonFeatureNames(
+      features,
+      featureLocked,
+      pairLocked,
+      groupMembership,
+      pairLocked.size > 0 && renderedPairConstraintUsesStrictPolicy(features),
+    );
+    return interactionLockedFeatureRows(features, featureLocked, pairLocked, groupMembership, automaticSingletons);
+  }
+
+  function interactionLockedFeatureRows(features, featureLocked, pairLocked, groupMembership, automaticSingletons) {
     return (features || []).map((feature) => {
       const group = groupMembership.get(feature.name);
       return {
@@ -1631,6 +1739,7 @@ export function createGbmTool({
         interaction_grouping: group?.grouping || "",
         feature_interaction_locked: featureLocked.has(feature.name),
         pair_interaction_locked: !featureLocked.has(feature.name) && pairLocked.has(feature.name),
+        automatic_singleton_locked: automaticSingletons.has(feature.name),
       };
     });
   }
@@ -1639,6 +1748,13 @@ export function createGbmTool({
     const featureLocked = selectedFeatureInteractionFeatureNames(features);
     const pairLocked = selectedPairInteractionFeatureNames(features);
     const groupMembership = selectedInteractionGroupMembership(features, featureLocked, pairLocked);
+    const automaticSingletons = automaticSingletonFeatureNames(
+      features,
+      featureLocked,
+      pairLocked,
+      groupMembership,
+      pairLocked.size > 0 && selectedPairConstraintUsesStrictPolicy(features),
+    );
     if (featureTable) {
       for (const row of featureTable.getRows()) {
         const data = row.getData();
@@ -1646,12 +1762,14 @@ export function createGbmTool({
         const interactionLocked = Boolean(interactionGroup);
         const featureInteractionLocked = featureLocked.has(data.name);
         const pairInteractionLocked = !featureInteractionLocked && pairLocked.has(data.name);
+        const automaticSingletonLocked = automaticSingletons.has(data.name);
         const update = {};
         if (Boolean(data.interaction_locked) !== interactionLocked) update.interaction_locked = interactionLocked;
         if ((data.interaction_group_size || null) !== (interactionGroup?.size || null)) update.interaction_group_size = interactionGroup?.size || null;
         if (String(data.interaction_grouping || "") !== String(interactionGroup?.grouping || "")) update.interaction_grouping = interactionGroup?.grouping || "";
         if (Boolean(data.feature_interaction_locked) !== featureInteractionLocked) update.feature_interaction_locked = featureInteractionLocked;
         if (Boolean(data.pair_interaction_locked) !== pairInteractionLocked) update.pair_interaction_locked = pairInteractionLocked;
+        if (Boolean(data.automatic_singleton_locked) !== automaticSingletonLocked) update.automatic_singleton_locked = automaticSingletonLocked;
         if (Object.keys(update).length) row.update(update);
         const featureCell = typeof row.getCell === "function" ? row.getCell("name") : null;
         const groupingCell = typeof row.getCell === "function" ? row.getCell("grouping") : null;
@@ -1660,6 +1778,7 @@ export function createGbmTool({
             ...data,
             feature_interaction_locked: featureInteractionLocked,
             pair_interaction_locked: pairInteractionLocked,
+            automatic_singleton_locked: automaticSingletonLocked,
           });
         }
         if (groupingCell) {
@@ -1674,7 +1793,15 @@ export function createGbmTool({
       return;
     }
     if (el("gbmFeatureFallback")) {
-      renderFeatureFallback(applyInteractionLocksToFeatures(features));
+      renderFeatureFallback(
+        interactionLockedFeatureRows(
+          features,
+          featureLocked,
+          pairLocked,
+          groupMembership,
+          automaticSingletons,
+        )
+      );
     }
   }
 
@@ -2381,7 +2508,9 @@ export function createGbmTool({
       ? `<span class="gbm-interaction-lock gbm-feature-interaction-lock" title="Main effect only — cannot interact with other features" aria-label="Main effect only — cannot interact with other features">&#128274;<sub class="gbm-interaction-lock-subscript">1</sub></span>`
       : feature?.pair_interaction_locked
         ? `<span class="gbm-interaction-lock gbm-pair-interaction-lock" title="Feature participates in an allowed pair interaction (2D)" aria-label="Feature participates in an allowed pair interaction (2D)">&#128274;<sub class="gbm-interaction-lock-subscript">2</sub></span>`
-      : "";
+        : feature?.automatic_singleton_locked
+          ? `<span class="gbm-interaction-lock gbm-automatic-singleton-lock" title="Main effect only — automatic because pair mode uses a strict allowlist" aria-label="Main effect only — automatic because pair mode uses a strict allowlist">&#128274;<sub class="gbm-interaction-lock-subscript">1</sub></span>`
+          : "";
     return `
       <span class="gbm-feature-name-line">
         <span class="gbm-feature-name-main">${escapeHtml(feature.name)}${lock}</span>
@@ -2667,6 +2796,7 @@ export function createGbmTool({
       .filter((pair) => pair.left === featureName || pair.right === featureName);
     const paired = featurePairs.length > 0;
     const mainEffectOnly = Boolean(feature.feature_interaction_locked);
+    const automaticMainEffectOnly = Boolean(feature.automatic_singleton_locked) && !mainEffectOnly;
     const mainEffectReason = paired ? "Remove this feature's pair interactions first" : "";
     const pairReason = featurePairs.length ? "" : featurePairActionConflict(featureName);
     const pairActions = featurePairs.length
@@ -2681,12 +2811,19 @@ export function createGbmTool({
           disabledReason: pairReason,
         }];
     return [
-      {
-        label: mainEffectOnly ? "Remove main-effect-only constraint" : "Constrain to main effect only (1D)",
-        run: () => toggleMainEffectOnlyConstraint(featureName),
-        disabled: !mainEffectOnly && Boolean(mainEffectReason),
-        disabledReason: mainEffectReason,
-      },
+      automaticMainEffectOnly
+        ? {
+            label: "Main effect only (automatic)",
+            run: () => {},
+            disabled: true,
+            disabledReason: "Add an allowed pair to let this feature interact",
+          }
+        : {
+            label: mainEffectOnly ? "Remove main-effect-only constraint" : "Constrain to main effect only (1D)",
+            run: () => toggleMainEffectOnlyConstraint(featureName),
+            disabled: !mainEffectOnly && Boolean(mainEffectReason),
+            disabledReason: mainEffectReason,
+          },
       ...pairActions,
       ...(navigationActions.length ? [{ divider: true }, ...navigationActions] : []),
     ];
