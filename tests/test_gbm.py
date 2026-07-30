@@ -4318,6 +4318,36 @@ COPY (
         self.assertIn("4 leaves", warning_text)
         self.assertIn("uses 3 features", warning_text)
 
+    def test_tabulation_config_discovers_first_ebm_without_glm_models(self) -> None:
+        tree_sql = """
+  SELECT 0 AS tree_index, 1 AS node_depth, '0-S0' AS node_index, '0-L0' AS left_child, '0-L1' AS right_child,
+         NULL AS parent_index, 'Age' AS split_feature, 1.0 AS split_gain, '35' AS threshold,
+         NULL AS threshold_label, '<=' AS decision_type, 'right' AS missing_direction, 'None' AS missing_type,
+         0.0 AS value, 3.0 AS weight, 3 AS count
+  UNION ALL SELECT 0, 2, '0-L0', NULL, NULL, '0-S0', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 1.0, 1.0, 1
+  UNION ALL SELECT 0, 2, '0-L1', NULL, NULL, '0-S0', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 2.0, 2.0, 2
+"""
+        gbm_store = self.write_gbm_tabulation_artifacts(
+            model_id="first-ebm",
+            tree_sql=tree_sql,
+            predictions=[1.0, 2.0, 2.0],
+        )
+        manifest_path = gbm_store.model_dir("first-ebm") / "manifest.json"
+        manifest = gbm_store.read_json(manifest_path)
+        manifest["training_mode"] = "ebm"
+        gbm_store.write_json(manifest_path, manifest)
+        glm_store = GlmModelStore(self.data_path)
+
+        config = tabulation_config(glm_store, {"model_refs": []}, gbm_store=gbm_store)
+
+        self.assertEqual(glm_store.list_models(), [])
+        self.assertEqual([model["model_ref"] for model in config["models"]], ["gbm:first-ebm"])
+        self.assertEqual([model["model_ref"] for model in config["all_models"]], ["gbm:first-ebm"])
+        self.assertEqual(config["models"][0]["model_kind"], "gbm")
+        self.assertTrue(config["models"][0]["active"])
+        self.assertTrue(config["models"][0]["tabulatable"])
+        self.assertFalse(config["models"][0]["tabulated"])
+
     def test_gbm_tabulation_source_and_mixed_glm_table_payload(self) -> None:
         tree_sql = """
   SELECT 0 AS tree_index, 1 AS node_depth, '0-S0' AS node_index, '0-L0' AS left_child, '0-L1' AS right_child,

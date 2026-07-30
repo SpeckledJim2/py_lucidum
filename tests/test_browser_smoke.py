@@ -13214,6 +13214,86 @@ COPY (
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_glm_tabulations_discovers_first_ebm_built_after_boot(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "sample.csv"
+            data_path.write_text(
+                "actualNumerator,denominator,Age,Segment,SAMPLE\n"
+                "10,1,30,A,training\n"
+                "20,1,40,B,test\n"
+                "30,1,50,A,training\n",
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                tools=["line_bar", "glm", "gbm"],
+                defaults={"x": "Age", "actual": "actualNumerator", "denominator": "denominator"},
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page()
+                    page_errors: list[str] = []
+                    tabulation_config_requests: list[dict[str, Any]] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+
+                    def capture_tabulation_config_request(request: Any) -> None:
+                        if request.url.endswith("/api/glm/tabulations/config"):
+                            tabulation_config_requests.append(json.loads(request.post_data or "{}"))
+
+                    page.on("request", capture_tabulation_config_request)
+                    page.goto(base_url, wait_until="networkidle")
+                    self.assertEqual(page.locator("#glmModelCountBadge:not([hidden])").text_content(), "0")
+                    self.assertEqual(page.locator("#gbmModelCountBadge:not([hidden])").text_content(), "0")
+
+                    gbm_store = GbmModelStore(data_path)
+                    self.write_gbm_prediction_model(
+                        gbm_store,
+                        "first-ebm",
+                        "First EBM",
+                        "2026-07-30T00:00:00Z",
+                        [10.0, 20.0, 30.0],
+                    )
+                    self.write_gbm_tabulation_artifacts(gbm_store, "first-ebm", tabulated=False)
+                    manifest_path = gbm_store.model_dir("first-ebm") / "manifest.json"
+                    manifest = gbm_store.read_json(manifest_path)
+                    manifest["training_mode"] = "ebm"
+                    gbm_store.write_json(manifest_path, manifest)
+                    gbm_store.activate_model("first-ebm")
+
+                    page.locator("#glmTool").click()
+                    page.locator(".glm-tool").wait_for(timeout=10_000)
+                    page.get_by_role("tab", name="Tabulations").click()
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const row = document.querySelector("#glmTabulationModelGrid .tabulator-row");
+                          return row?.classList.contains("tabulator-selected")
+                            && row.textContent.includes("First EBM")
+                            && row.textContent.includes("GBM")
+                            && row.textContent.includes("not tabulated")
+                            && !document.querySelector("#glmBuildTabulationsBtn")?.disabled;
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+
+                    self.assertEqual(
+                        [request["model_refs"] for request in tabulation_config_requests],
+                        [[], ["gbm:first-ebm"]],
+                    )
+                    self.assertEqual(page.locator("#glmTabulationModelGrid .tabulator-row").count(), 1)
+                    self.assertEqual(page.locator("#glmTabulationModelGrid .tabulator-row.tabulator-selected").count(), 1)
+                    self.assertFalse(page.locator("#glmBuildTabulationsBtn").is_disabled())
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_dataset_viewer_preview_transpose_keeps_stop_app_responsive(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "preview.csv"

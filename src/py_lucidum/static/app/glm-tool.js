@@ -1589,21 +1589,28 @@ export function createGlmTool({
   }
 
   async function refreshTabulationConfig(options = {}) {
-    const model_ids = tabulationSelectedModelIds();
+    let model_ids = tabulationSelectedModelIds();
     const previousKey = tabulationSelectionKey(model_ids, selectedTabulationTableId);
     selectedTabulationModelIds = new Set(model_ids);
     tabulationPayload = null;
-    if (!model_ids.length) {
-      tabulationConfig = { models: [], all_models: [], tables: [], warnings: [] };
-      resetTabulationCrosstabDefault();
-      const shellRebuilt = ensureTabulationShell();
-      if (!shellRebuilt) {
-        await renderTabulationSelectorTables({ force: Boolean(options.force) });
-        syncTabulationControls();
-      }
-      return;
-    }
     try {
+      if (!model_ids.length) {
+        tabulationConfig = await api("/api/glm/tabulations/config", { method: "POST", body: JSON.stringify({ model_refs: [] }) });
+        const discoveredModels = Array.isArray(tabulationConfig?.all_models) ? tabulationConfig.all_models : [];
+        const defaultModel = discoveredModels.find((model) => model.active) || discoveredModels[0] || null;
+        const defaultModelRef = defaultModel ? tabulationModelRef(defaultModel) : "";
+        if (!defaultModelRef) {
+          resetTabulationCrosstabDefault();
+          const shellRebuilt = ensureTabulationShell();
+          if (!shellRebuilt) {
+            await renderTabulationSelectorTables({ force: Boolean(options.force) });
+            syncTabulationControls();
+          }
+          return;
+        }
+        model_ids = [defaultModelRef];
+        selectedTabulationModelIds = new Set(model_ids);
+      }
       tabulationConfig = await api("/api/glm/tabulations/config", { method: "POST", body: JSON.stringify({ model_refs: model_ids }) });
       tabulationCrosstabDefaultCache.clear();
       const tables = Array.isArray(tabulationConfig?.tables) ? tabulationConfig.tables : [];
