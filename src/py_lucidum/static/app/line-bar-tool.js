@@ -129,6 +129,188 @@ export function createLineBarTool({
   let chartLayoutFrame = null;
   let chartResizeObserver = null;
   let lastRenderedPlotType = "";
+  let lineBarIntentSeq = 0;
+  let chartAbortController = null;
+  let tableAbortController = null;
+
+  function freezeLineBarSnapshotValue(value) {
+    if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+    Object.values(value).forEach(freezeLineBarSnapshotValue);
+    return Object.freeze(value);
+  }
+
+  function cloneLineBarRequest(request) {
+    return request ? freezeLineBarSnapshotValue(JSON.parse(JSON.stringify(request))) : null;
+  }
+
+  function createLineBarRequestSnapshot(request, requestKey, intent, view = state.view) {
+    return Object.freeze({
+      intentId: intent?.id || lineBarIntentSeq,
+      requestKey: requestKey || stableRequestKey(request),
+      request: cloneLineBarRequest(request),
+      sourceRevision: Number(state.lineBarSourceRevision || 0),
+      view,
+      presentation: Object.freeze({
+        labels: String(state.labels || "none"),
+        transform: String(state.transform || "none"),
+        sigma: Number(state.sigma) || 0,
+        activeKpiFormat: state.activeKpiFormat
+          ? Object.freeze({ ...state.activeKpiFormat })
+          : null,
+        twoFeaturePlotMetric: String(state.twoFeaturePlotMetric || "resp0"),
+        heatmapLabels: String(state.heatmapLabels || "none"),
+      }),
+    });
+  }
+
+  function attachLineBarRequestSnapshot(data, snapshot) {
+    if (data && typeof data === "object") data._lineBarRequestSnapshot = snapshot;
+    return data;
+  }
+
+  function lineBarDataPresentation(data) {
+    return data?._lineBarRequestSnapshot?.presentation || {};
+  }
+
+  function selectMetricOptionFromRequest(select, value, sourceId = "") {
+    if (!select || !value) return false;
+    const targetSource = sourceId || "dataset";
+    const option = [...select.options].find((candidate) => (
+      candidate.value === value
+      && (candidate.dataset.sourceId || "dataset") === targetSource
+    ));
+    if (!option) return false;
+    select.value = option.value;
+    return true;
+  }
+
+  function restoreCommittedLineBarControls(data = state.lastData) {
+    const snapshot = data?._lineBarRequestSnapshot;
+    const request = snapshot?.request;
+    if (
+      !request
+      || snapshot.sourceRevision !== Number(state.lineBarSourceRevision || 0)
+    ) return false;
+    state.source = request.source || "dataset";
+    if (Array.isArray(request.groupings) && request.groupings.length) {
+      const [first, second] = request.groupings;
+      state.x = first.feature;
+      state.xSource = first.source || state.source;
+      state.bandWidth = String(first.bandWidth ?? 0);
+      state.quantileMode = first.quantileMode || "off";
+      state.dateBucket = first.dateBucket || "none";
+      state.xAsFactor = Boolean(first.asFactor);
+      state.tailPercent = String(first.tailPercent ?? 0);
+      state.missings = normaliseMissings(first.missings);
+      if (second) {
+        state.x2 = second.feature;
+        state.x2Source = second.source || state.source;
+        state.bandWidth2 = String(second.bandWidth ?? 0);
+        state.quantileMode2 = second.quantileMode || "off";
+        state.dateBucket2 = second.dateBucket || "none";
+        state.x2AsFactor = Boolean(second.asFactor);
+        state.tailPercent2 = String(second.tailPercent ?? 0);
+        state.missings2 = normaliseMissings(second.missings);
+      } else {
+        clearSecondGroupingFeature();
+      }
+    } else {
+      state.x = request.x;
+      state.xSource = request.xSource || state.source;
+      state.bandWidth = String(request.bandWidth ?? 0);
+      state.quantileMode = request.quantileMode || "off";
+      state.dateBucket = request.dateBucket || "none";
+      state.tailPercent = String(request.tailPercent ?? 0);
+      state.missings = normaliseMissings(request.missings);
+      clearSecondGroupingFeature();
+    }
+    state.sort = request.sort || "alpha";
+    state.lowGroup = String(request.lowGroup ?? "0");
+    state.labels = String(request.labels || "none");
+    state.emptyPeriods = normaliseEmptyPeriods(request.emptyPeriods);
+    state.transform = String(request.transform || "none");
+    state.partialDependence = request.partialDependence?.mode || "none";
+    state.sigma = String(request.sigma ?? 0);
+    state.bandFeature = currentBandFeatureKey();
+    state.dateBucketFeature = currentDateBucketFeatureKey();
+    if (state.x2) {
+      state.bandFeature2 = currentSecondBandFeatureKey();
+      state.dateBucketFeature2 = currentSecondDateBucketFeatureKey();
+    }
+    state.expectedSelections = (request.responses || []).slice(1).map((response) => ({
+      value: response.numerator,
+      sourceId: response.source || "dataset",
+      metricKind: response.source ? "prediction" : "metric",
+    }));
+    const actual = request.responses?.[0] || null;
+    selectMetricOptionFromRequest(el("actualNumerator"), actual?.numerator, actual?.source);
+    selectMetricOptionFromRequest(
+      el("denominator"),
+      request.denominator || "__none__",
+      request.denominatorSource || "dataset",
+    );
+    if (Object.prototype.hasOwnProperty.call(request, "tableSearch")) {
+      state.lineBarTableSearch = request.tableSearch || "";
+      state.tablePage = Number(request.tablePage) || 1;
+    }
+    renderExpectedNumerators();
+    renderFeatures({ preserveScroll: true });
+    updateAxisControls();
+    renderTableShell();
+    return true;
+  }
+
+  function lineBarIntentIsCurrent(intent) {
+    return Boolean(
+      intent
+      && intent.id === lineBarIntentSeq
+      && intent.sourceRevision === Number(state.lineBarSourceRevision || 0)
+    );
+  }
+
+  function abortLineBarController(controller) {
+    if (!controller) return;
+    try {
+      controller.abort();
+    } catch (_) {
+    }
+  }
+
+  function beginLineBarIntent(options = {}) {
+    lineBarIntentSeq += 1;
+    state.chartRequestSeq += 1;
+    tableRequestSeq += 1;
+    tableRenderToken += 1;
+    state.bandSuggestionRequestSeq = (state.bandSuggestionRequestSeq || 0) + 1;
+    state.bandSuggestionRequestSeq2 = (state.bandSuggestionRequestSeq2 || 0) + 1;
+    state.dateBucketSuggestionRequestSeq = (state.dateBucketSuggestionRequestSeq || 0) + 1;
+    state.dateBucketSuggestionRequestSeq2 = (state.dateBucketSuggestionRequestSeq2 || 0) + 1;
+    state.bandSuggestionPendingKey = null;
+    state.bandSuggestionPendingKey2 = null;
+    state.dateBucketSuggestionPendingKey = null;
+    state.dateBucketSuggestionPendingKey2 = null;
+    pendingChartRender = null;
+    abortLineBarController(chartAbortController);
+    abortLineBarController(tableAbortController);
+    chartAbortController = null;
+    tableAbortController = null;
+    const view = options.view || state.view;
+    const intent = Object.freeze({
+      id: lineBarIntentSeq,
+      chartRequestSeq: state.chartRequestSeq,
+      tableRequestSeq,
+      sourceRevision: Number(state.lineBarSourceRevision || 0),
+      view,
+    });
+    if (options.pending !== false && state.tool === "line_bar") {
+      setGroupMeta("line_bar", view === "table" ? "Loading table..." : "Computing...");
+    }
+    return intent;
+  }
+
+  function isAbortedRequest(error) {
+    return error?.name === "AbortError";
+  }
 
   function isNumericKind(kind) {
     return kind === "numeric" || kind === "integer";
@@ -148,7 +330,7 @@ export function createLineBarTool({
     const columns = sourceColumns();
     return columns.find((column) => (
       column.name === state.x2 && (column.source_id || state.source || "dataset") === sourceId
-    )) || columns.find((column) => column.name === state.x2) || null;
+    )) || null;
   }
 
   function groupingIdentity(feature, sourceId) {
@@ -878,22 +1060,6 @@ export function createLineBarTool({
       if (!isDateKind(firstColumn?.kind)) state.dateBucket = "none";
       if (!isDateKind(secondColumn?.kind)) state.dateBucket2 = "none";
       renderTwoFeatureControls();
-      const firstBandKey = currentBandFeatureKey();
-      const secondBandKey = currentSecondBandFeatureKey();
-      const firstDateKey = currentDateBucketFeatureKey();
-      const secondDateKey = currentSecondDateBucketFeatureKey();
-      if (isNumericKind(firstColumn?.kind) && state.quantileMode !== "quantile" && state.tool === "line_bar" && state.bandFeature !== firstBandKey) {
-        requestBandSuggestionForSelectedColumn(firstBandKey);
-      }
-      if (isNumericKind(secondColumn?.kind) && state.quantileMode2 !== "quantile" && state.tool === "line_bar" && state.bandFeature2 !== secondBandKey) {
-        requestBandSuggestionForSecondColumn(secondBandKey);
-      }
-      if (isDateKind(firstColumn?.kind) && state.tool === "line_bar" && state.dateBucketManualKey !== firstDateKey && state.dateBucketFeature !== firstDateKey) {
-        requestDateBucketSuggestionForSelectedColumn(firstDateKey);
-      }
-      if (isDateKind(secondColumn?.kind) && state.tool === "line_bar" && state.dateBucketManualKey2 !== secondDateKey && state.dateBucketFeature2 !== secondDateKey) {
-        requestDateBucketSuggestionForSecondColumn(secondDateKey);
-      }
       return;
     }
     const kind = selectedColumn()?.kind;
@@ -929,12 +1095,6 @@ export function createLineBarTool({
     if (isNumeric && state.quantileMode === "quantile" && state.bandFeature !== bandFeatureKey) {
       state.bandFeature = bandFeatureKey;
       clearPendingBandSuggestion();
-    }
-    if (isNumeric && state.quantileMode !== "quantile" && state.tool === "line_bar" && state.bandFeature !== bandFeatureKey) {
-      requestBandSuggestionForSelectedColumn(bandFeatureKey);
-    }
-    if (isDate && state.tool === "line_bar" && state.dateBucketManualKey !== dateBucketKey && state.dateBucketFeature !== dateBucketKey) {
-      requestDateBucketSuggestionForSelectedColumn(dateBucketKey);
     }
     if (isNumeric && state.quantileMode === "quantile") {
       normalizeBandWidthForQuantiles();
@@ -1771,8 +1931,10 @@ export function createLineBarTool({
     if (!data || !currentChartCanAddGlmOverlay(request)) {
       return refreshChart({ force: true });
     }
-    const requestSeq = state.chartRequestSeq + 1;
-    state.chartRequestSeq = requestSeq;
+    const intent = beginLineBarIntent({ view: "chart" });
+    const requestSeq = intent.chartRequestSeq;
+    const controller = new AbortController();
+    chartAbortController = controller;
     setStatus("");
     setChartMessage("");
     setGroupMeta("line_bar", "Computing...");
@@ -1785,8 +1947,9 @@ export function createLineBarTool({
           chart_context: data.glm_overlay_context,
         }),
         clientTiming: true,
+        signal: controller.signal,
       });
-      if (requestSeq !== state.chartRequestSeq) return null;
+      if (!lineBarIntentIsCurrent(intent) || requestSeq !== state.chartRequestSeq) return null;
       const previousWarnings = new Set(Array.isArray(data._lineBarOverlayWarnings) ? data._lineBarOverlayWarnings : []);
       const overlayWarnings = Array.isArray(overlay.warnings) ? overlay.warnings.filter(Boolean) : [];
       data.warnings = [
@@ -1808,9 +1971,15 @@ export function createLineBarTool({
       }
       lineBarChartDirty = false;
       return data;
-    } catch (_error) {
-      if (requestSeq !== state.chartRequestSeq) return null;
+    } catch (error) {
+      if (
+        isAbortedRequest(error)
+        || !lineBarIntentIsCurrent(intent)
+        || requestSeq !== state.chartRequestSeq
+      ) return null;
       return refreshChart({ force: true });
+    } finally {
+      if (chartAbortController === controller) chartAbortController = null;
     }
   }
 
@@ -1824,6 +1993,7 @@ export function createLineBarTool({
     ) {
       return false;
     }
+    beginLineBarIntent({ pending: false, view: "chart" });
     const overlayWarnings = new Set(data._lineBarOverlayWarnings);
     data.warnings = Array.isArray(data.warnings)
       ? data.warnings.filter((warning) => !overlayWarnings.has(warning))
@@ -1844,6 +2014,10 @@ export function createLineBarTool({
   }
 
   async function refreshChart(options = {}) {
+    if (state.view === "table") {
+      lineBarChartDirty = true;
+      return refreshLineBarTable(options);
+    }
     return refreshLineBar(options);
   }
 
@@ -1857,43 +2031,56 @@ export function createLineBarTool({
     return refreshChart(options);
   }
 
-  async function fetchChartData(request, requestKey) {
-    const requestSeq = state.chartRequestSeq + 1;
-    state.chartRequestSeq = requestSeq;
+  async function fetchChartData(request, requestKey, options = {}) {
+    const intent = options.intent && lineBarIntentIsCurrent(options.intent)
+      ? options.intent
+      : beginLineBarIntent(options);
+    const requestSeq = intent.chartRequestSeq;
+    const snapshot = createLineBarRequestSnapshot(request, requestKey, intent, "chart");
+    const controller = new AbortController();
+    chartAbortController = controller;
     setStatus("");
     setChartMessage("");
     setGroupMeta("line_bar", "Computing...");
     startToolTiming("line_bar");
     updateAxisControls();
     try {
-      const data = await api("/api/chart", { method: "POST", body: JSON.stringify(request), clientTiming: true });
-      if (requestSeq !== state.chartRequestSeq) return;
+      const data = await api("/api/chart", {
+        method: "POST",
+        body: JSON.stringify(request),
+        clientTiming: true,
+        signal: controller.signal,
+      });
+      if (!lineBarIntentIsCurrent(intent) || requestSeq !== state.chartRequestSeq) return null;
+      attachLineBarRequestSnapshot(data, snapshot);
       data._lineBarBaseRequestKey = baseChartRequestKey(request);
       const cache = toolCache("line_bar");
       cache.requestKey = requestKey;
+      cache.requestSnapshot = snapshot;
       cache.data = data;
       syncDuckDbTimingFromData("line_bar", data);
       syncClientTimingFromData("line_bar", data);
-      if (lineBarChartReady()) {
-        queueChartRender(data, { resetTablePage: true }, requestSeq);
-      } else {
-        prepareChartData(data, { resetTablePage: true });
-        queueChartRender(data, { prepared: true }, requestSeq);
-      }
+      queueChartRender(data, { resetTablePage: true }, requestSeq);
       return data;
     } catch (error) {
-      if (requestSeq !== state.chartRequestSeq) return;
+      if (
+        isAbortedRequest(error)
+        || !lineBarIntentIsCurrent(intent)
+        || requestSeq !== state.chartRequestSeq
+      ) return null;
+      restoreCommittedLineBarControls();
       setToolTimingFailed("line_bar");
       setGroupMeta("line_bar", "Query failed");
       setChartMessage("");
       setStatus(error.message, true);
+      return null;
+    } finally {
+      if (chartAbortController === controller) chartAbortController = null;
     }
   }
 
   function cancelLineBarRequests() {
-    state.chartRequestSeq += 1;
-    tableRequestSeq += 1;
-    pendingChartRender = null;
+    return beginLineBarIntent({ pending: false });
   }
 
   function lineBarExclusionWarnings(data) {
@@ -1916,7 +2103,8 @@ export function createLineBarTool({
     const groupCount = Math.max(0, Number(tableMeta.group_count ?? data?.rows?.length ?? 0) || 0);
     const matchCount = Math.max(0, Number(tableMeta.match_count ?? groupCount) || 0);
     const rowMeta = formatRowMeta(data?.row_count, data?.filtered_row_count);
-    const groupLabel = state.lineBarTableSearch && matchCount !== groupCount
+    const tableSearch = normaliseLineBarTableSearch(tableMeta.search);
+    const groupLabel = tableSearch && matchCount !== groupCount
       ? `${matchCount.toLocaleString()} of ${groupCount.toLocaleString()} groups`
       : `${groupCount.toLocaleString()} groups`;
     const groupMeta = lineBarGroupMetaWithExclusions(groupLabel, rowMeta, data);
@@ -2017,17 +2205,17 @@ export function createLineBarTool({
   }
 
   function renderChartData(data, options = {}) {
-    if (!options.prepared) prepareChartData(data, options);
     if (!lineBarChartReady()) {
-      queueChartRender(data, { ...options, prepared: true });
+      queueChartRender(data, options);
       return;
     }
+    if (!options.prepared) commitChartData(data, options);
     setChartPendingHidden(false);
     const labelMessage = renderChart(data);
     updateChartDataPresentation(data, labelMessage);
   }
 
-  function prepareChartData(data, options = {}) {
+  function commitChartData(data, options = {}) {
     state.lastData = data;
     if (options.resetTablePage) {
       state.tablePage = 1;
@@ -2036,7 +2224,6 @@ export function createLineBarTool({
     updateMetricTitles(data);
     renderTableShell();
     if (state.view === "table") refreshLineBarTable({ force: true });
-    updateChartDataPresentation(data);
   }
 
   function updateChartDataPresentation(data, labelMessage = "") {
@@ -2053,25 +2240,36 @@ export function createLineBarTool({
   }
 
   function deferChartData(data, options = {}) {
-    prepareChartData(data, options);
-    queueChartRender(data, { ...options, prepared: true });
+    queueChartRender(data, options);
   }
 
   function useCachedChartData(cache, options = {}) {
+    const intent = options.intent && lineBarIntentIsCurrent(options.intent)
+      ? options.intent
+      : beginLineBarIntent(options);
+    if (!lineBarIntentIsCurrent(intent)) return null;
+    const snapshot = createLineBarRequestSnapshot(
+      options.request || cache.requestSnapshot?.request,
+      options.requestKey || cache.requestKey,
+      intent,
+      "chart",
+    );
+    attachLineBarRequestSnapshot(cache.data, snapshot);
+    cache.requestSnapshot = snapshot;
     if (state.lastData !== cache.data) {
-      prepareChartData(cache.data);
-      queueChartRender(cache.data, { prepared: true });
-      return;
+      queueChartRender(cache.data, {}, intent.chartRequestSeq);
+      return cache.data;
     }
     if (pendingChartRender || options.renderIfCached) {
-      queueChartRender(cache.data, { prepared: true });
-      return;
+      queueChartRender(cache.data, { prepared: true }, intent.chartRequestSeq);
+      return cache.data;
     }
     measureToolRender("line_bar", () => {
       updateMetricTitles(cache.data);
       applyToolPresentation("line_bar");
       scheduleChartLayout();
     });
+    return cache.data;
   }
 
   function selectedTwoFeatureMetric(data) {
@@ -2305,10 +2503,14 @@ export function createLineBarTool({
     }
     currentHeatmapLabelConfig = null;
     heatmapAxisContext = null;
+    const presentation = lineBarDataPresentation(data);
     const labels = data.rows.map((r) => formatChartXLabel(r, data));
-    const labelMode = state.labels;
-    const renderTransform = String(state.transform || "none");
-    const formatChartResponseValue = chartResponseFormatter(renderTransform);
+    const labelMode = String(presentation.labels || state.labels || "none");
+    const renderTransform = String(data?.transform?.mode || presentation.transform || state.transform || "none");
+    const formatChartResponseValue = chartResponseFormatter(
+      renderTransform,
+      presentation.activeKpiFormat || state.activeKpiFormat,
+    );
     const rawXValues = data.rows.map((r) => r.x);
     const dateBucket = normaliseDateBucket(data.date_bucket);
     const displayKind = data.x_group_kind || data.x_kind;
@@ -2390,7 +2592,7 @@ export function createLineBarTool({
     const upliftBaseline = upliftBaselineSeries(data, renderTransform);
 
     const customSeries = [];
-    if (Number(state.sigma) > 0 && data.responses.length >= 2) {
+    if (Number(presentation.sigma ?? state.sigma) > 0 && data.responses.length >= 2) {
       customSeries.push({
         name: "sigma",
         type: "custom",
@@ -2919,26 +3121,40 @@ export function createLineBarTool({
     orderRows(data.partial_dependence);
   }
 
+  function clientSortRequestKey(request) {
+    if (!request) return "";
+    return stableRequestKey({ ...request, sort: "__client_sort__" });
+  }
+
   function applyClientLineBarSort(options = {}) {
     const cache = toolCache("line_bar");
     const data = state.lastData || cache.data;
     if (Array.isArray(data?.groupings) && data.groupings.length === 2) return false;
     if (!data || data.x_group_kind !== "categorical") return false;
+    const request = buildChartRequest();
+    const committedRequest = data?._lineBarRequestSnapshot?.request || null;
+    if (
+      !request
+      || !committedRequest
+      || clientSortRequestKey(request) !== clientSortRequestKey(committedRequest)
+    ) return false;
+    const intent = options.intent && lineBarIntentIsCurrent(options.intent)
+      ? options.intent
+      : beginLineBarIntent({ ...options, view: "chart" });
     if (!data.groups_truncated) {
       data.rows = [...(data.rows || [])].sort(compareLineBarRowsForSort(state.sort, shapMedianMap(data)));
       orderPartialDependenceRowsForChart(data);
     }
-    const request = buildChartRequest();
-    if (request) {
-      cache.requestKey = stableRequestKey(request);
-      cache.data = data;
-    }
+    cache.requestKey = stableRequestKey(request);
+    cache.requestSnapshot = createLineBarRequestSnapshot(request, cache.requestKey, intent, "chart");
+    attachLineBarRequestSnapshot(data, cache.requestSnapshot);
+    cache.data = data;
     state.lastData = data;
     if (options.render !== false) {
       if (lineBarChartReady()) {
         measureToolRender("line_bar", () => renderChartData(data, { resetTablePage: true }));
       } else {
-        queueChartRender(data, { resetTablePage: true });
+        queueChartRender(data, { resetTablePage: true }, intent.chartRequestSeq);
       }
       lineBarChartDirty = false;
     } else {
@@ -2991,7 +3207,8 @@ export function createLineBarTool({
     if (request) tableCacheKey = stableRequestKey(request);
     tableCacheData = data;
     rememberCompleteLineBarTableSource(data);
-    measureToolRender("line_bar", () => renderLineBarTableContents(data));
+    const intent = beginLineBarIntent({ view: "table" });
+    void renderLineBarTableContents(data, { intent });
     return true;
   }
 
@@ -3160,10 +3377,17 @@ export function createLineBarTool({
     const request = buildTableRequest();
     if (!request) return false;
     const data = filteredLineBarTableDataFromSource(completeTableCacheData, state.lineBarTableSearch);
+    const intent = options.intent && lineBarIntentIsCurrent(options.intent)
+      ? options.intent
+      : beginLineBarIntent({ ...options, view: "table" });
     tableCacheKey = options.requestKey || stableRequestKey(request);
+    attachLineBarRequestSnapshot(
+      data,
+      createLineBarRequestSnapshot(request, tableCacheKey, intent, "table"),
+    );
     tableCacheData = data;
     state.tablePage = 1;
-    measureToolRender("line_bar", () => renderLineBarTableContents(data));
+    void renderLineBarTableContents(data, { intent });
     return true;
   }
 
@@ -3233,13 +3457,18 @@ export function createLineBarTool({
   }
 
   function updateMetricTitles(data) {
+    const presentation = lineBarDataPresentation(data);
+    const responseFormatter = chartResponseFormatter(
+      data?.transform?.mode || presentation.transform || state.transform,
+      presentation.activeKpiFormat || state.activeKpiFormat,
+    );
     const summaries = data.response_summaries || [];
     renderMetricTitle(el("expectedMetricTitle"), "Expected", summaries[1]?.value);
     el("expectedMetricTitle").querySelector(".metric-value")?.classList.add("metric-value--first-expected");
     if (summaries[2]?.value === null || summaries[2]?.value === undefined) return;
     const valueSpan = document.createElement("span");
     valueSpan.className = "metric-value metric-value--second-expected";
-    valueSpan.textContent = formatResponseValue(summaries[2].value);
+    valueSpan.textContent = responseFormatter(summaries[2].value);
     el("expectedMetricTitle").append(valueSpan);
   }
 
@@ -3770,7 +3999,6 @@ export function createLineBarTool({
     tableCacheData = null;
     completeTableCacheKey = "";
     completeTableCacheData = null;
-    clearLineBarTable();
     if (tableSearchTimer) {
       window.clearTimeout(tableSearchTimer);
       tableSearchTimer = null;
@@ -4193,37 +4421,77 @@ export function createLineBarTool({
 
   async function refreshLineBarTable(options = {}) {
     if (state.tool !== "line_bar" || state.view !== "table") return null;
+    const intent = options.intent && lineBarIntentIsCurrent(options.intent)
+      ? options.intent
+      : beginLineBarIntent({ ...options, view: "table" });
     renderTableShell();
     const request = buildTableRequest();
     if (!request) return null;
     const requestKey = stableRequestKey(request);
+    const snapshot = createLineBarRequestSnapshot(request, requestKey, intent, "table");
     if (!options.force && tableCacheData && tableCacheKey === requestKey) {
-      measureToolRender("line_bar", () => renderLineBarTableContents(tableCacheData));
+      attachLineBarRequestSnapshot(tableCacheData, snapshot);
+      await renderLineBarTableContents(tableCacheData, { intent });
       return tableCacheData;
     }
     if (!options.forceServer && applyClientLineBarTableFilter({ requestKey })) return tableCacheData;
-    const requestSeq = tableRequestSeq + 1;
-    tableRequestSeq = requestSeq;
-    renderLineBarTableLoading();
+    const requestSeq = intent.tableRequestSeq;
+    const controller = new AbortController();
+    tableAbortController = controller;
+    const content = document.getElementById("lineBarTableContent");
+    if (!lineBarTable && !tableCacheData && !content?.children.length) renderLineBarTableLoading();
     try {
-      const data = await api("/api/line-bar/table", { method: "POST", body: JSON.stringify(request), clientTiming: true });
-      if (requestSeq !== tableRequestSeq) return null;
+      const data = await api("/api/line-bar/table", {
+        method: "POST",
+        body: JSON.stringify(request),
+        clientTiming: true,
+        signal: controller.signal,
+      });
+      if (!lineBarIntentIsCurrent(intent) || requestSeq !== tableRequestSeq) return null;
+      attachLineBarRequestSnapshot(data, snapshot);
+      syncDuckDbTimingFromData("line_bar", data);
+      syncClientTimingFromData("line_bar", data);
+      const rendered = await renderLineBarTableContents(data, { intent });
+      if (!rendered || !lineBarIntentIsCurrent(intent)) return null;
       tableCacheKey = requestKey;
       tableCacheData = data;
       rememberCompleteLineBarTableSource(data, request);
-      syncDuckDbTimingFromData("line_bar", data);
-      syncClientTimingFromData("line_bar", data);
-      measureToolRender("line_bar", () => renderLineBarTableContents(data));
       return data;
     } catch (error) {
-      if (requestSeq !== tableRequestSeq) return null;
-      renderLineBarTableError(error.message);
+      if (
+        isAbortedRequest(error)
+        || !lineBarIntentIsCurrent(intent)
+        || requestSeq !== tableRequestSeq
+      ) return null;
+      restoreCommittedLineBarControls(tableCacheData);
+      if (!lineBarTable && !tableCacheData) renderLineBarTableError(error.message);
+      setGroupMeta("line_bar", "Query failed");
       setStatus(error.message, true);
       return null;
+    } finally {
+      if (tableAbortController === controller) tableAbortController = null;
     }
   }
 
-  function renderLineBarTableContents(data) {
+  async function renderLineBarTableContents(data, options = {}) {
+    const intent = options.intent || null;
+    let Tabulator;
+    try {
+      Tabulator = await loadTabulator();
+    } catch (error) {
+      if (!intent || lineBarIntentIsCurrent(intent)) {
+        if (!lineBarTable && !tableCacheData) renderLineBarTableError(error.message || String(error));
+        setGroupMeta("line_bar", "Query failed");
+        setStatus(error.message || String(error), true);
+      }
+      return false;
+    }
+    if (intent && !lineBarIntentIsCurrent(intent)) return false;
+    const presentation = lineBarDataPresentation(data);
+    const responseFormatter = chartResponseFormatter(
+      data?.transform?.mode || presentation.transform || state.transform,
+      presentation.activeKpiFormat || state.activeKpiFormat,
+    );
     const rowsData = Array.isArray(data.rows) ? data.rows : [];
     const twoFeatureMode = Array.isArray(data.groupings) && data.groupings.length === 2;
     const groupingColumns = twoFeatureMode
@@ -4242,9 +4510,6 @@ export function createLineBarTool({
     const pageSize = Math.max(1, Number(tableMeta.page_size) || TABLE_PAGE_SIZE);
     const pageCount = Math.max(1, Number(tableMeta.page_count) || 1);
     const matchCount = Math.max(0, Number(tableMeta.match_count) || 0);
-    state.tablePage = page;
-    updateMetricTitles(data);
-    syncLineBarTablePresentation(data);
     const start = matchCount ? (page - 1) * pageSize + 1 : 0;
     const end = matchCount ? Math.min((page - 1) * pageSize + rowsData.length, matchCount) : 0;
     const pager = `<div class="table-pagination">
@@ -4257,18 +4522,6 @@ export function createLineBarTool({
     if (!content) return;
     const renderToken = tableRenderToken + 1;
     tableRenderToken = renderToken;
-    clearLineBarTable();
-    content.innerHTML = `<div id="lineBarTableGrid" class="line-bar-table-grid"></div>${pager}`;
-    document.getElementById("tablePrevBtn")?.addEventListener("click", () => {
-      if (state.tablePage <= 1) return;
-      state.tablePage -= 1;
-      refreshLineBarTable({ force: true });
-    });
-    document.getElementById("tableNextBtn")?.addEventListener("click", () => {
-      if (state.tablePage >= pageCount) return;
-      state.tablePage += 1;
-      refreshLineBarTable({ force: true });
-    });
     const tableRows = rowsData.map((row, index) => {
       const rowCount = finiteNumberOrNull(row.row_count);
       const displayRow = {
@@ -4283,25 +4536,25 @@ export function createLineBarTool({
         displayRow.x = formatTableXLabel(row, data);
       }
       data.responses.forEach((_, responseIndex) => {
-        displayRow[`resp${responseIndex}`] = formatResponseValue(row[`resp${responseIndex}`]);
+        displayRow[`resp${responseIndex}`] = responseFormatter(row[`resp${responseIndex}`]);
       });
       return displayRow;
     });
-    lineBarTableCopyRows = tableRows.map((row) => ({ ...row }));
-    lineBarTableCopyColumns = [
+    const nextTableCopyRows = tableRows.map((row) => ({ ...row }));
+    const nextTableCopyColumns = [
       ...groupingColumns,
       ...(weightedMode ? [{ title: "Row count", field: "row_count" }] : []),
       { title: weightLabel, field: "volume" },
       ...data.responses.map((response, responseIndex) => ({ title: response.label, field: `resp${responseIndex}` })),
     ];
-    lineBarTableCopyFooterRow = {
+    const nextTableCopyFooterRow = {
       [groupingColumns[0].field]: "Total",
       ...(twoFeatureMode ? { [groupingColumns[1].field]: "" } : {}),
       ...(weightedMode ? { row_count: formatNumber(summaryRowCount) } : {}),
       volume: formatNumber(summaryVolume),
     };
     data.responses.forEach((_, responseIndex) => {
-      lineBarTableCopyFooterRow[`resp${responseIndex}`] = formatResponseValue(summaryResponses[responseIndex]);
+      nextTableCopyFooterRow[`resp${responseIndex}`] = responseFormatter(summaryResponses[responseIndex]);
     });
     const columns = [
       ...groupingColumns.map((grouping, index) => ({
@@ -4342,41 +4595,58 @@ export function createLineBarTool({
         hozAlign: "right",
         minWidth: lineBarTableHeaderMinWidth(response.label, 110),
         widthGrow: 0.8,
-        bottomCalc: () => formatResponseValue(summaryResponses[responseIndex]),
+        bottomCalc: () => responseFormatter(summaryResponses[responseIndex]),
       })),
     ];
-    loadTabulator().then((Tabulator) => {
-      if (renderToken !== tableRenderToken) return;
-      const target = document.getElementById("lineBarTableGrid");
-      if (!target) return;
-      const maxHeight = syncLineBarTableMaxHeight();
-      lineBarTable = new Tabulator(target, {
-        data: tableRows,
-        index: "__id",
-        maxHeight,
-        layout: "fitColumns",
-        placeholder: "No matching rows",
-        reactiveData: false,
-        selectableRows: true,
-        renderVertical: "virtual",
-        rowHeight: 22,
-        columnDefaults: {
-          resizable: false,
-          headerSort: false,
-          headerWordWrap: true,
-          formatter: (cell) => escapeHtml(cell.getValue() ?? ""),
-        },
-        columns,
-      });
-      target.addEventListener("contextmenu", handleLineBarTableContextMenu);
-    }).catch((error) => {
-      if (renderToken !== tableRenderToken) return;
-      renderLineBarTableError(error.message || String(error));
+    if (renderToken !== tableRenderToken || (intent && !lineBarIntentIsCurrent(intent))) return false;
+    clearLineBarTable();
+    content.innerHTML = `<div id="lineBarTableGrid" class="line-bar-table-grid"></div>${pager}`;
+    document.getElementById("tablePrevBtn")?.addEventListener("click", () => {
+      if (state.tablePage <= 1) return;
+      state.tablePage -= 1;
+      refreshLineBarTable({ force: true });
     });
+    document.getElementById("tableNextBtn")?.addEventListener("click", () => {
+      if (state.tablePage >= pageCount) return;
+      state.tablePage += 1;
+      refreshLineBarTable({ force: true });
+    });
+    const target = document.getElementById("lineBarTableGrid");
+    if (!target) return false;
+    const maxHeight = syncLineBarTableMaxHeight();
+    lineBarTable = new Tabulator(target, {
+      data: tableRows,
+      index: "__id",
+      maxHeight,
+      layout: "fitColumns",
+      placeholder: "No matching rows",
+      reactiveData: false,
+      selectableRows: true,
+      renderVertical: "virtual",
+      rowHeight: 22,
+      columnDefaults: {
+        resizable: false,
+        headerSort: false,
+        headerWordWrap: true,
+        formatter: (cell) => escapeHtml(cell.getValue() ?? ""),
+      },
+      columns,
+    });
+    target.addEventListener("contextmenu", handleLineBarTableContextMenu);
+    lineBarTableCopyRows = nextTableCopyRows;
+    lineBarTableCopyColumns = nextTableCopyColumns;
+    lineBarTableCopyFooterRow = nextTableCopyFooterRow;
+    state.tablePage = page;
+    updateMetricTitles(data);
+    syncLineBarTablePresentation(data);
+    return true;
   }
 
   function setView(view, options = {}) {
     const shouldRefresh = options.refresh !== false;
+    const viewChanged = state.view !== view;
+    if (viewChanged) beginLineBarIntent({ pending: false, view });
+    if (viewChanged && view === "table") lineBarChartDirty = true;
     state.view = view;
     if (state.tool !== "line_bar") return;
     el("chartTab").classList.toggle("active", view === "chart");
@@ -4396,6 +4666,7 @@ export function createLineBarTool({
         if (!applyClientLineBarSort()) refreshChart();
         return;
       }
+      applyToolPresentation("line_bar");
       scheduleChartLayout();
     } else {
       renderTableShell();
@@ -4412,11 +4683,12 @@ export function createLineBarTool({
     if (view === "table") {
       setGroupMeta("line_bar", "Loading table...");
       renderTableShell();
-      renderLineBarTableLoading();
+      const content = document.getElementById("lineBarTableContent");
+      if (!lineBarTable && !tableCacheData && !content?.children.length) renderLineBarTableLoading();
       return;
     }
     setGroupMeta("line_bar", "Computing...");
-    setChartPendingHidden(true);
+    setChartPendingHidden(!state.lastData);
   }
 
   function twoFeatureStateKey(index, primary, secondary) {
@@ -4446,6 +4718,7 @@ export function createLineBarTool({
     const action = button.dataset.twoAction || "";
     const index = Number(button.dataset.featureIndex || 0);
     if (control === "plotMetric") {
+      beginLineBarIntent({ pending: false, view: "chart" });
       const previous = state.twoFeaturePlotMetric;
       state.twoFeaturePlotMetric = button.dataset.value || "resp0";
       renderTwoFeatureControls();
@@ -4460,6 +4733,7 @@ export function createLineBarTool({
       return;
     }
     if (control === "heatmapLabels") {
+      beginLineBarIntent({ pending: false, view: "chart" });
       const previous = normaliseHeatmapLabels();
       state.heatmapLabels = normaliseHeatmapLabels(button.dataset.value);
       if (previous !== state.heatmapLabels) clearActiveFavouriteSelection();
@@ -4759,6 +5033,9 @@ export function createLineBarTool({
   }
 
   return {
+    beginIntent: beginLineBarIntent,
+    intentIsCurrent: lineBarIntentIsCurrent,
+    invalidate: beginLineBarIntent,
     buildRequest: buildChartRequest,
     fetchData: fetchChartData,
     useCached: useCachedChartData,

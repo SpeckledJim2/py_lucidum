@@ -130,6 +130,7 @@ export function createGlmTool({
   updateAxisControls,
   refreshActiveTool,
   reloadSchema,
+  invalidateLineBar = () => {},
   getDenominatorSelection = () => ({ value: "__none__", sourceId: "dataset", metricKind: "dataset" }),
 }) {
   const tool = "glm";
@@ -151,6 +152,8 @@ export function createGlmTool({
   let tabulationOperationId = "";
   let modelListRefreshSeq = 0;
   let modelListLastRefreshAt = 0;
+  let queuedActivationModelId = "";
+  let activationPromise = null;
   let isBuilding = false;
   let buildElapsedStartedAt = null;
   let isTabulating = false;
@@ -2875,12 +2878,29 @@ export function createGlmTool({
 
   async function activateModel(modelId) {
     if (isBuilding || !modelId) return;
-    try {
-      const result = await api(`/api/glm/models/${encodeURIComponent(modelId)}/activate`, { method: "POST", body: "{}" });
-      await applyModelMutationResult(result, { activationOnly: true });
-    } catch (error) {
-      setGlmNotice(error.message);
-    }
+    queuedActivationModelId = modelId;
+    invalidateLineBar({ pending: state.tool === "line_bar" });
+    if (activationPromise) return activationPromise;
+    activationPromise = (async () => {
+      while (queuedActivationModelId) {
+        const targetModelId = queuedActivationModelId;
+        queuedActivationModelId = "";
+        try {
+          const result = await api(`/api/glm/models/${encodeURIComponent(targetModelId)}/activate`, {
+            method: "POST",
+            body: "{}",
+          });
+          if (queuedActivationModelId) continue;
+          await applyModelMutationResult(result, { activationOnly: true });
+        } catch (error) {
+          if (!queuedActivationModelId) setGlmNotice(error.message);
+        }
+      }
+    })().finally(() => {
+      activationPromise = null;
+      if (queuedActivationModelId) void activateModel(queuedActivationModelId);
+    });
+    return activationPromise;
   }
 
   async function activateSelectedModel() {
@@ -2896,6 +2916,7 @@ export function createGlmTool({
     if (newModelId === null) return;
     const trimmed = newModelId.trim();
     if (!trimmed || trimmed === modelId) return;
+    invalidateLineBar({ pending: state.tool === "line_bar" });
     try {
       const result = await api(`/api/glm/models/${encodeURIComponent(modelId)}/rename`, {
         method: "POST",
@@ -2914,6 +2935,7 @@ export function createGlmTool({
     const label = modelIds.length === 1 ? `GLM model "${modelIds[0]}"` : `${modelIds.length} GLM models`;
     const confirmed = confirm(`Delete ${label}? This deletes the selected .lucidum model folder${modelIds.length === 1 ? "" : "s"}.`);
     if (!confirmed) return;
+    invalidateLineBar({ pending: state.tool === "line_bar" });
     let result = null;
     let deletedCount = 0;
     try {
@@ -2974,6 +2996,7 @@ export function createGlmTool({
   }
 
   async function applyModelMutationResult(result, options = {}) {
+    invalidateLineBar({ pending: state.tool === "line_bar" });
     formulaBuilder.captureDraft();
     const nextConfig = result.config || config || {};
     const renamedFrom = String(options?.renamedFrom || "");
@@ -2981,7 +3004,8 @@ export function createGlmTool({
     if (renamedFrom && renamedTo && builderDraftSourceModelId === renamedFrom) {
       builderDraftSourceModelId = renamedTo;
     }
-    await reloadSchema(preferredModelSource(result, nextConfig), { modelKind: "glm" });
+    const schemaApplied = await reloadSchema(preferredModelSource(result, nextConfig), { modelKind: "glm" });
+    if (schemaApplied === false) return;
     const preserveProfile = clearCachesAfterGlmModelSourceChange();
     if (!currentActiveModelId(nextConfig)) builderDraftSourceModelId = "";
     activeDetail = null;

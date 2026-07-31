@@ -131,6 +131,7 @@ export function createGbmTool({
   updateAxisControls,
   refreshActiveTool,
   reloadSchema,
+  invalidateLineBar = () => {},
   getDenominatorSelection = () => ({ value: "__none__", sourceId: "dataset", metricKind: "dataset" }),
   onExternalModelActivation = async () => false,
 }) {
@@ -150,6 +151,8 @@ export function createGbmTool({
   let trainingOperationId = "";
   let modelListRefreshSeq = 0;
   let modelListLastRefreshAt = 0;
+  let queuedActivationModelId = "";
+  let activationPromise = null;
   let isTraining = false;
   let trainingElapsedStartedAt = null;
   let liveProgress = null;
@@ -3593,12 +3596,29 @@ export function createGbmTool({
   async function activateModel(modelId) {
     if (isTraining) return;
     if (!modelId) return;
-    try {
-      const result = await api(`/api/gbm/models/${encodeURIComponent(modelId)}/activate`, { method: "POST", body: "{}" });
-      await applyModelMutationResult(result, { activationOnly: true });
-    } catch (error) {
-      setGbmNotice(error.message);
-    }
+    queuedActivationModelId = modelId;
+    invalidateLineBar({ pending: state.tool === "line_bar" });
+    if (activationPromise) return activationPromise;
+    activationPromise = (async () => {
+      while (queuedActivationModelId) {
+        const targetModelId = queuedActivationModelId;
+        queuedActivationModelId = "";
+        try {
+          const result = await api(`/api/gbm/models/${encodeURIComponent(targetModelId)}/activate`, {
+            method: "POST",
+            body: "{}",
+          });
+          if (queuedActivationModelId) continue;
+          await applyModelMutationResult(result, { activationOnly: true });
+        } catch (error) {
+          if (!queuedActivationModelId) setGbmNotice(error.message);
+        }
+      }
+    })().finally(() => {
+      activationPromise = null;
+      if (queuedActivationModelId) void activateModel(queuedActivationModelId);
+    });
+    return activationPromise;
   }
 
   async function activateSelectedModel() {
@@ -3616,6 +3636,7 @@ export function createGbmTool({
     if (newModelId === null) return;
     const trimmed = newModelId.trim();
     if (!trimmed || trimmed === modelId) return;
+    invalidateLineBar({ pending: state.tool === "line_bar" });
     try {
       const result = await api(`/api/gbm/models/${encodeURIComponent(modelId)}/rename`, {
         method: "POST",
@@ -3634,6 +3655,7 @@ export function createGbmTool({
     const label = modelIds.length === 1 ? `GBM model "${modelIds[0]}"` : `${modelIds.length} GBM models`;
     const confirmed = confirm(`Delete ${label}? This deletes the selected .lucidum model folder${modelIds.length === 1 ? "" : "s"}.`);
     if (!confirmed) return;
+    invalidateLineBar({ pending: state.tool === "line_bar" });
     let result = null;
     let deletedCount = 0;
     try {
@@ -3655,8 +3677,10 @@ export function createGbmTool({
   }
 
   async function applyModelMutationResult(result, options = {}) {
+    invalidateLineBar({ pending: state.tool === "line_bar" });
     const nextConfig = result.config || config || {};
-    await reloadSchema(preferredModelSource(result, nextConfig), { modelKind: "gbm" });
+    const schemaApplied = await reloadSchema(preferredModelSource(result, nextConfig), { modelKind: "gbm" });
+    if (schemaApplied === false) return;
     const preserveProfile = clearCachesAfterGbmModelSourceChange();
     syncGbmModelCountFromConfig(nextConfig);
     const currentModelId = featureDraftModelId(config);

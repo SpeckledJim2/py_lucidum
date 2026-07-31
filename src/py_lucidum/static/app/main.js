@@ -241,6 +241,8 @@
         profileRequestSeq: 0,
         profileDetailRequestSeq: 0,
         chartRequestSeq: 0,
+        lineBarSourceRevision: 0,
+        lineBarSchemaRequestSeq: 0,
         histogramRequestSeq: 0,
         mapRequestSeq: 0,
         datasetViewerRequestSeq: 0,
@@ -509,6 +511,7 @@
         updateAxisControls: () => lineBarTool.updateAxisControls(),
         refreshActiveTool,
         reloadSchema: reloadSchemaAfterModelMutation,
+        invalidateLineBar: (options = {}) => lineBarTool.invalidate(options),
         getDenominatorSelection: denominatorSelection,
       });
       const gbmTool = createGbmTool({
@@ -541,6 +544,7 @@
         refreshActiveTool,
         setGbmModelCount,
         reloadSchema: reloadSchemaAfterModelMutation,
+        invalidateLineBar: (options = {}) => lineBarTool.invalidate(options),
         getDenominatorSelection: denominatorSelection,
         onExternalModelActivation: (modelKind) => glmTool.handleExternalModelActivation(modelKind),
       });
@@ -1075,9 +1079,9 @@
       function selectedLineBarColumn() {
         const sourceId = state.xSource || state.source || "dataset";
         const columns = lineBarFeatureColumns();
-        return columns.find((column) => column.name === state.x && lineBarColumnSourceId(column) === sourceId)
-          || columns.find((column) => column.name === state.x)
-          || null;
+        return columns.find((column) => (
+          column.name === state.x && lineBarColumnSourceId(column) === sourceId
+        )) || null;
       }
 
       function lineBarColumnExists(name, sourceId = "") {
@@ -1092,10 +1096,22 @@
         const columnName = String(name || "");
         const columns = lineBarFeatureColumns();
         const preferred = String(preferredSource || "");
-        const match = columns.find((column) => (
-          column.name === columnName && (!preferred || lineBarColumnSourceId(column) === preferred)
-        )) || columns.find((column) => column.name === columnName);
-        return match ? lineBarColumnSourceId(match) : "";
+        const exact = preferred
+          ? columns.find((column) => (
+              column.name === columnName && lineBarColumnSourceId(column) === preferred
+            ))
+          : null;
+        if (exact) return lineBarColumnSourceId(exact);
+        if (columnName === LINE_BAR_RATIO_COLUMN) {
+          return activeModelRatioColumns().find((column) => column.name === columnName)?.source_id || "";
+        }
+        const modelKind = modelKindForPredictionColumn(columnName);
+        if (modelKind) {
+          const source = activePredictionSourceForModelKind(modelKind);
+          if (source?.id && lineBarColumnExists(columnName, source.id)) return source.id;
+          return "";
+        }
+        return lineBarColumnExists(columnName, "dataset") ? "dataset" : "";
       }
 
       function syncLineBarXFallback() {
@@ -1423,8 +1439,9 @@
         }
         if (tool === "line_bar") {
           return {
+            beginIntent: (options) => lineBarTool.beginIntent(options),
             buildRequest: () => lineBarTool.buildRequest(),
-            fetch: (request, requestKey) => lineBarTool.fetchData(request, requestKey),
+            fetch: (request, requestKey, options) => lineBarTool.fetchData(request, requestKey, options),
             useCached: (cache, options) => lineBarTool.useCached(cache, options),
           };
         }
@@ -1465,8 +1482,13 @@
       }
 
       async function refreshTool(tool, options = {}) {
+        const earlyIntent = tool === "line_bar"
+          ? lineBarTool.beginIntent(options)
+          : null;
         const handler = await toolHandler(tool);
         if (!handler) return null;
+        if (earlyIntent && !lineBarTool.intentIsCurrent(earlyIntent)) return null;
+        const intent = earlyIntent || handler.beginIntent?.(options) || null;
         const request = handler.buildRequest();
         if (!request) {
           handler.handleMissingRequest?.();
@@ -1476,21 +1498,29 @@
         const cache = toolCache(tool);
         if (!options.force && cache.data && cache.requestKey === requestKey) {
           const themeChanged = cache.themeKey !== currentThemeKey();
-          await handler.useCached(cache, { ...options, renderIfCached: options.renderIfCached || themeChanged });
+          await handler.useCached(cache, {
+            ...options,
+            intent,
+            request,
+            requestKey,
+            renderIfCached: options.renderIfCached || themeChanged,
+          });
           markToolCacheThemeSynced(tool);
           return cache.data;
         }
-        const data = await handler.fetch(request, requestKey, options);
+        const data = await handler.fetch(request, requestKey, { ...options, intent });
         if (data && toolCache(tool).requestKey === requestKey) markToolCacheThemeSynced(tool);
         return data;
       }
 
       function refreshActiveTool(options = {}) {
         if (state.tool === "specs") return specificationsTool.refresh(options);
+        if (state.tool === "line_bar") return refreshLineBar(options);
         return refreshTool(state.tool, options);
       }
 
       function refreshLineBar(options = {}) {
+        if (state.view === "table") return lineBarTool.refreshTable(options);
         return refreshTool("line_bar", options);
       }
 
@@ -2738,16 +2768,22 @@
       }
 
       async function reloadSchemaAfterModelMutation(preferredSource, options = {}) {
+        const modelKind = String(options?.modelKind || "");
+        const requestSeq = (state.lineBarSchemaRequestSeq || 0) + 1;
+        state.lineBarSchemaRequestSeq = requestSeq;
+        state.lineBarSourceRevision = (state.lineBarSourceRevision || 0) + 1;
+        lineBarTool.invalidate({ pending: state.tool === "line_bar" });
         const previousX = state.x;
         const previousXSource = state.xSource;
         const previousActual = el("actualNumerator").value;
         const previousActualSource = actualSelectionSourceId();
         const previousExpectedSelections = expectedSelectionsSnapshot();
         const previousDenominator = denominatorSelection();
-        state.schema = await api("/api/schema");
+        const schema = await api("/api/schema");
+        if (requestSeq !== state.lineBarSchemaRequestSeq) return false;
+        state.schema = schema;
         state.datasetViewerColumnCount = null;
         renderSidebarVersion();
-        const modelKind = String(options?.modelKind || "");
         if (preferredSource) state.source = preferredSource;
         state.x = previousX;
         state.xSource = previousXSource;
@@ -2781,6 +2817,7 @@
           setStatus(`The selected ${denominatorSelection().modelKind.toUpperCase()} prediction Denominator is unavailable because there is no active model.`, true);
         }
         await refreshMetricSummary({ force: true });
+        return true;
       }
 
       async function reloadSchemaAfterSpecsSave() {

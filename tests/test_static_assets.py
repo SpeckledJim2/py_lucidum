@@ -2147,6 +2147,48 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn("delete data.partial_dependence;", line_bar)
         self.assertNotIn("glmOverlayCache", line_bar)
 
+    def test_line_bar_latest_intent_and_stable_pending_output_contract(self) -> None:
+        static_root = Path(__file__).resolve().parents[1] / "src/py_lucidum/static"
+        main = (static_root / "app/main.js").read_text(encoding="utf-8")
+        line_bar = (static_root / "app/line-bar-tool.js").read_text(encoding="utf-8")
+        glm = (static_root / "app/glm-tool.js").read_text(encoding="utf-8")
+        gbm = (static_root / "app/gbm-tool.js").read_text(encoding="utf-8")
+        index = (static_root / "index.html").read_text(encoding="utf-8")
+
+        self.assertIn("function beginLineBarIntent(options = {})", line_bar)
+        self.assertIn("function freezeLineBarSnapshotValue(value)", line_bar)
+        self.assertIn("Object.values(value).forEach(freezeLineBarSnapshotValue);", line_bar)
+        self.assertIn("abortLineBarController(chartAbortController);", line_bar)
+        self.assertIn("abortLineBarController(tableAbortController);", line_bar)
+        self.assertIn("function lineBarIntentIsCurrent(intent)", line_bar)
+        self.assertIn("cache.requestSnapshot = snapshot;", line_bar)
+        self.assertIn("data._lineBarRequestSnapshot = snapshot", line_bar)
+        self.assertIn("if (!lineBarTable && !tableCacheData && !content?.children.length)", line_bar)
+        self.assertNotIn("setChartPendingHidden(true);", line_bar)
+        refresh_start = main.index("async function refreshTool(tool, options = {})")
+        self.assertLess(
+            main.index('const earlyIntent = tool === "line_bar"', refresh_start),
+            main.index("const handler = await toolHandler(tool);", refresh_start),
+        )
+        self.assertLess(
+            main.index("const intent = earlyIntent || handler.beginIntent?.(options) || null;", refresh_start),
+            main.index("const request = handler.buildRequest();", refresh_start),
+        )
+        self.assertIn("if (earlyIntent && !lineBarTool.intentIsCurrent(earlyIntent)) return null;", main)
+        self.assertIn("lineBarTool.invalidate({ pending: state.tool === \"line_bar\" });", main)
+        self.assertIn("lineBarSchemaRequestSeq: 0", main)
+        self.assertIn("if (requestSeq !== state.lineBarSchemaRequestSeq) return false;", main)
+        self.assertNotIn(
+            "|| columns.find((column) => column.name === state.x)",
+            main,
+        )
+        self.assertEqual(index.count('id="lineBarGroupMeta"'), 1)
+        self.assertNotIn("lineBarPending", index)
+        for model_tool in (glm, gbm):
+            self.assertIn('let queuedActivationModelId = "";', model_tool)
+            self.assertIn("while (queuedActivationModelId)", model_tool)
+            self.assertIn("if (queuedActivationModelId) continue;", model_tool)
+
     def test_gbm_parameter_json_is_lightgbm_compatible(self) -> None:
         module = Path("src/py_lucidum/static/app/gbm-feature-parameter-controls.js").resolve().as_uri()
         script = f"""

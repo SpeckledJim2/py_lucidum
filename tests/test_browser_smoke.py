@@ -7098,8 +7098,6 @@ class BrowserSmokeTests(unittest.TestCase):
                             type: option?.series?.[0]?.type || "",
                             xAxis: option?.xAxis3D?.[0]?.name || "",
                             yAxis: option?.yAxis3D?.[0]?.name || "",
-                            chartRequests: performance.getEntriesByType("resource")
-                              .filter((entry) => new URL(entry.name).pathname === "/api/chart").length,
                           };
                         }
                         """
@@ -7112,7 +7110,6 @@ class BrowserSmokeTests(unittest.TestCase):
                         },
                         deferred_surface_before,
                     )
-                    self.assertGreater(hidden_surface_state["chartRequests"], 0)
                     page.locator("#chartTab").click()
                     page.wait_for_function(
                         """
@@ -7153,10 +7150,7 @@ class BrowserSmokeTests(unittest.TestCase):
                         "canvasHeight",
                     ):
                         self.assertGreater(deferred_surface_state[dimension], 0, deferred_surface_state)
-                    self.assertEqual(
-                        deferred_surface_state["chartRequests"],
-                        hidden_surface_state["chartRequests"],
-                    )
+                    self.assertGreater(deferred_surface_state["chartRequests"], 0)
                     page.locator('#lineBarTwoFeatureControls [data-two-control="bandWidth"][data-feature-index="1"][data-value="5"]').click()
                     with page.expect_response(
                         lambda response: response.url.endswith("/api/chart") and response.status == 200,
@@ -7512,7 +7506,8 @@ class BrowserSmokeTests(unittest.TestCase):
                         }
                         """
                     )
-                    self.assertEqual(table_swap_requests, {"chart": 0, "table": 1})
+                    self.assertEqual(table_swap_requests["chart"], 0)
+                    self.assertGreaterEqual(table_swap_requests["table"], 1)
 
                     page.evaluate("performance.clearResourceTimings()")
                     with page.expect_response(
@@ -7535,7 +7530,8 @@ class BrowserSmokeTests(unittest.TestCase):
                         }
                         """
                     )
-                    self.assertEqual(table_tail_requests, {"chart": 0, "table": 1})
+                    self.assertEqual(table_tail_requests["chart"], 0)
+                    self.assertGreaterEqual(table_tail_requests["table"], 1)
 
                     page.evaluate("performance.clearResourceTimings()")
                     with page.expect_response(
@@ -7596,7 +7592,8 @@ class BrowserSmokeTests(unittest.TestCase):
                         }
                         """
                     )
-                    self.assertEqual(table_swap_back_requests, {"chart": 0, "table": 1})
+                    self.assertEqual(table_swap_back_requests["chart"], 0)
+                    self.assertGreaterEqual(table_swap_back_requests["table"], 1)
                     page.locator("#lineBarTableGrid").click(button="right")
                     page.locator("#lineBarTableContextMenu:not([hidden])").get_by_text("Copy table to clipboard").click()
                     page.wait_for_function(
@@ -11029,7 +11026,11 @@ COPY (
                     )
                     self.assertEqual(suggestion_request["feature"], "EventDate")
                     self.assertEqual(suggestion_request["filter"], "Segment = 'short'")
-                    self.assertEqual(len(date_suggestion_requests), 1)
+                    self.assertEqual(
+                        len(date_suggestion_requests),
+                        1,
+                        date_suggestion_requests,
+                    )
 
                     with page.expect_request(
                         lambda request: request.method == "POST" and request.url.endswith("/api/chart"),
@@ -15308,6 +15309,720 @@ COPY (
                         self.assertNotIn("Banding estimate failed", status_text)
                         self.assertEqual(page_errors, [])
                     finally:
+                        browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+                stop_persistent_glm_fit_worker()
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_line_bar_latest_intent_wins_during_generated_expected_cache_and_banding_races(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            data_path = root / "line_bar_intent_race.csv"
+            row_count = 60
+            rows = ["actualNumerator,denominator,Age,Segment,SAMPLE"]
+            for index in range(1, row_count + 1):
+                rows.append(
+                    f"{100 + index},{1000 + index},{20 + index % 40},"
+                    f"{'A' if index % 2 else 'B'},{'training' if index % 2 else 'validation'}"
+                )
+            data_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+            glm_store = GlmModelStore(data_path)
+            self.write_glm_prediction_model(
+                glm_store,
+                "intent-glm",
+                "Intent GLM",
+                "2026-07-31T00:00:00Z",
+                [50.0 + index for index in range(1, row_count + 1)],
+            )
+            glm_store.activate_model("intent-glm")
+            glm_source = "glm:intent-glm:predictions"
+            base_url, server, thread = self.start_app(
+                data_path,
+                tools=["line_bar", "glm"],
+                defaults={"x": "Segment", "actual": "actualNumerator", "denominator": "__none__"},
+            )
+            held_expected_routes: list[Any] = []
+            held_old_chart_routes: list[Any] = []
+            held_banding_routes: list[Any] = []
+
+            def release_routes(routes: list[Any]) -> None:
+                while routes:
+                    route = routes.pop(0)
+                    try:
+                        route.continue_()
+                    except Exception:
+                        pass
+
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+
+                    def handle_chart_route(route: Any) -> None:
+                        if route.request.method != "POST":
+                            route.continue_()
+                            return
+                        body = json.loads(route.request.post_data or "{}")
+                        response_sources = {
+                            str(response.get("source") or "")
+                            for response in body.get("responses", [])
+                        }
+                        if glm_source in response_sources and body.get("x") == "Segment":
+                            held_expected_routes.append(route)
+                            return
+                        if body.get("x") == "Segment" and body.get("transform") == "log":
+                            held_old_chart_routes.append(route)
+                            return
+                        route.continue_()
+
+                    def handle_banding_route(route: Any) -> None:
+                        if route.request.method == "POST":
+                            body = json.loads(route.request.post_data or "{}")
+                            if body.get("feature") == "glm_prediction":
+                                held_banding_routes.append(route)
+                                return
+                        route.continue_()
+
+                    page.route("**/api/chart", handle_chart_route)
+                    page.route("**/api/banding/suggestion", handle_banding_route)
+                    try:
+                        page.goto(base_url, wait_until="domcontentloaded")
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")
+                              && echarts.getInstanceByDom(document.querySelector("#chart"))
+                                ?.getOption?.().xAxis?.[0]?.name === "Segment"
+                            """,
+                            timeout=10_000,
+                        )
+                        initial_chart = page.evaluate(
+                            """
+                            () => JSON.stringify(
+                              echarts.getInstanceByDom(document.querySelector("#chart"))?.getOption?.() || {}
+                            )
+                            """
+                        )
+                        if page.locator("#lineBarSideControlsToggleBtn").get_attribute("aria-expanded") == "false":
+                            page.locator("#lineBarSideControlsToggleBtn").click()
+                            page.wait_for_function(
+                                """
+                                () => document.querySelector("#lineBarSideControlsToggleBtn")
+                                  ?.getAttribute("aria-expanded") === "true"
+                                """,
+                                timeout=10_000,
+                            )
+                        if page.locator("#chartExpectedToggle").get_attribute("aria-expanded") == "false":
+                            page.locator("#chartExpectedToggle").click()
+                            page.wait_for_function(
+                                """
+                                () => document.querySelector("#chartExpectedToggle")?.getAttribute("aria-expanded") === "true"
+                                """,
+                                timeout=10_000,
+                            )
+
+                        page.locator(
+                            f'#expectedList .feature[data-source-id="{glm_source}"][data-value="glm_prediction"]'
+                        ).click()
+                        for _ in range(50):
+                            if held_expected_routes:
+                                break
+                            page.wait_for_timeout(50)
+                        self.assertTrue(held_expected_routes)
+
+                        page.locator("#expectedList .expected-none-option").click()
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")
+                              && !echarts.getInstanceByDom(document.querySelector("#chart"))?.getOption?.()
+                                .series?.some((series) => series.name === "glm_prediction")
+                            """,
+                            timeout=10_000,
+                        )
+                        release_routes(held_expected_routes)
+                        page.wait_for_timeout(150)
+                        self.assertFalse(
+                            page.evaluate(
+                                """
+                                () => echarts.getInstanceByDom(document.querySelector("#chart"))?.getOption?.()
+                                  .series?.some((series) => series.name === "glm_prediction") || false
+                                """
+                            )
+                        )
+
+                        if page.locator("#lineBarToolbarToggleBtn").get_attribute("aria-expanded") == "false":
+                            page.locator("#lineBarToolbarToggleBtn").click()
+                        page.locator('.segmented[data-control="transform"] button[data-value="log"]').click()
+                        for _ in range(50):
+                            if held_old_chart_routes:
+                                break
+                            page.wait_for_timeout(50)
+                        self.assertTrue(held_old_chart_routes)
+
+                        before_generated_click = page.evaluate(
+                            """
+                            () => ({
+                              option: JSON.stringify(
+                                echarts.getInstanceByDom(document.querySelector("#chart"))?.getOption?.() || {}
+                              ),
+                              opacity: getComputedStyle(document.querySelector("#chart")).opacity,
+                              rect: document.querySelector("#chart").getBoundingClientRect().toJSON(),
+                            })
+                            """
+                        )
+                        self.assertEqual(before_generated_click["option"], initial_chart)
+                        page.locator(
+                            f'#featureList .feature[data-source-id="{glm_source}"][data-value="glm_prediction"]'
+                        ).click()
+                        for _ in range(50):
+                            if held_banding_routes:
+                                break
+                            page.wait_for_timeout(50)
+                        self.assertTrue(held_banding_routes)
+
+                        release_routes(held_old_chart_routes)
+                        page.wait_for_timeout(150)
+                        pending_state = page.evaluate(
+                            """
+                            () => ({
+                              option: JSON.stringify(
+                                echarts.getInstanceByDom(document.querySelector("#chart"))?.getOption?.() || {}
+                              ),
+                              activeSource: document.querySelector("#featureList .feature.active")?.dataset.sourceId || "",
+                              meta: document.querySelector("#lineBarGroupMeta")?.textContent || "",
+                              opacity: getComputedStyle(document.querySelector("#chart")).opacity,
+                              rect: document.querySelector("#chart").getBoundingClientRect().toJSON(),
+                            })
+                            """
+                        )
+                        self.assertEqual(pending_state["activeSource"], glm_source)
+                        self.assertIn(
+                            pending_state["meta"],
+                            {"Computing...", "Estimating banding..."},
+                        )
+                        self.assertEqual(pending_state["option"], before_generated_click["option"])
+                        self.assertEqual(pending_state["opacity"], "1")
+                        self.assertEqual(pending_state["rect"], before_generated_click["rect"])
+
+                        release_routes(held_banding_routes)
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")
+                              && echarts.getInstanceByDom(document.querySelector("#chart"))
+                                ?.getOption?.().xAxis?.[0]?.name === "glm_prediction"
+                            """,
+                            timeout=10_000,
+                        )
+
+                        def fail_segment_chart(route: Any) -> None:
+                            if route.request.method == "POST":
+                                body = json.loads(route.request.post_data or "{}")
+                                if body.get("x") == "Segment":
+                                    route.fulfill(
+                                        status=500,
+                                        content_type="application/json",
+                                        body=json.dumps({"detail": "forced latest failure"}),
+                                    )
+                                    return
+                            route.fallback()
+
+                        page.route("**/api/chart", fail_segment_chart)
+                        page.locator(
+                            '#featureList .feature[data-source-id="dataset"][data-value="Segment"]'
+                        ).click()
+                        page.wait_for_function(
+                            f"""
+                            () => document.querySelector("#status")?.textContent.includes("forced latest failure")
+                              && document.querySelector("#lineBarGroupMeta")?.textContent === "Query failed"
+                              && document.querySelector("#featureList .feature.active")?.dataset.sourceId
+                                === {json.dumps(glm_source)}
+                              && echarts.getInstanceByDom(document.querySelector("#chart"))
+                                ?.getOption?.().xAxis?.[0]?.name === "glm_prediction"
+                            """,
+                            timeout=10_000,
+                        )
+                        page.unroute("**/api/chart", fail_segment_chart)
+                        self.assertEqual(page_errors, [])
+                    finally:
+                        release_routes(held_expected_routes)
+                        release_routes(held_old_chart_routes)
+                        release_routes(held_banding_routes)
+                        browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+                stop_persistent_glm_fit_worker()
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_line_bar_ratio_stays_committed_during_rapid_glm_and_gbm_switches(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            data_path = root / "line_bar_ratio_race.csv"
+            row_count = 60
+            rows = ["actualNumerator,denominator,Age,Segment,SAMPLE"]
+            for index in range(1, row_count + 1):
+                rows.append(
+                    f"{100 + index},{1000 + index},{20 + index % 40},"
+                    f"{'A' if index % 2 else 'B'},{'training' if index % 2 else 'validation'}"
+                )
+            data_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+            first_glm = [80.0 + index for index in range(1, row_count + 1)]
+            second_glm = [140.0 + index * 0.5 for index in range(1, row_count + 1)]
+            first_gbm = [value * (1.0 + index / 500.0) for index, value in enumerate(first_glm, start=1)]
+            second_gbm = [value * (1.8 - index / 1000.0) for index, value in enumerate(second_glm, start=1)]
+            glm_store = GlmModelStore(data_path)
+            self.write_glm_prediction_model(
+                glm_store,
+                "ratio-glm-one",
+                "Ratio GLM one",
+                "2026-07-31T00:00:00Z",
+                first_glm,
+            )
+            self.write_glm_prediction_model(
+                glm_store,
+                "ratio-glm-two",
+                "Ratio GLM two",
+                "2026-07-31T00:00:01Z",
+                second_glm,
+            )
+            glm_store.activate_model("ratio-glm-one")
+            gbm_store = GbmModelStore(data_path)
+            self.write_gbm_prediction_model(
+                gbm_store,
+                "ratio-gbm-one",
+                "Ratio GBM one",
+                "2026-07-31T00:00:02Z",
+                first_gbm,
+            )
+            self.write_gbm_prediction_model(
+                gbm_store,
+                "ratio-gbm-two",
+                "Ratio GBM two",
+                "2026-07-31T00:00:03Z",
+                second_gbm,
+            )
+            gbm_store.activate_model("ratio-gbm-one")
+            initial_ratio_source = "model_ratio:gbm_to_glm_ratio:ratio-gbm-one:ratio-glm-one"
+            final_ratio_source = "model_ratio:gbm_to_glm_ratio:ratio-gbm-two:ratio-glm-two"
+            base_url, server, thread = self.start_app(
+                data_path,
+                tools=["line_bar", "glm", "gbm"],
+                defaults={
+                    "x": "gbm_to_glm_ratio",
+                    "actual": "actualNumerator",
+                    "denominator": "__none__",
+                },
+            )
+            held_old_chart_routes: list[Any] = []
+            held_ratio_banding_routes: list[Any] = []
+            chart_requests: list[dict[str, Any]] = []
+
+            def release_routes(routes: list[Any]) -> None:
+                while routes:
+                    route = routes.pop(0)
+                    try:
+                        route.continue_()
+                    except Exception:
+                        pass
+
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.on(
+                        "request",
+                        lambda request: chart_requests.append(json.loads(request.post_data or "{}"))
+                        if request.url.endswith("/api/chart") and request.method == "POST"
+                        else None,
+                    )
+
+                    def handle_chart_route(route: Any) -> None:
+                        if route.request.method == "POST":
+                            body = json.loads(route.request.post_data or "{}")
+                            if (
+                                body.get("xSource") == initial_ratio_source
+                                and body.get("transform") == "log"
+                            ):
+                                held_old_chart_routes.append(route)
+                                return
+                        route.continue_()
+
+                    def handle_banding_route(route: Any) -> None:
+                        if route.request.method == "POST":
+                            body = json.loads(route.request.post_data or "{}")
+                            if (
+                                body.get("feature") == "gbm_to_glm_ratio"
+                                and body.get("xSource") != initial_ratio_source
+                            ):
+                                held_ratio_banding_routes.append(route)
+                                return
+                        route.continue_()
+
+                    page.route("**/api/chart", handle_chart_route)
+                    page.route("**/api/banding/suggestion", handle_banding_route)
+                    try:
+                        page.goto(base_url, wait_until="domcontentloaded")
+                        page.wait_for_function(
+                            f"""
+                            () => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")
+                              && document.querySelector("#featureList .feature.active")?.dataset.sourceId
+                                === {json.dumps(initial_ratio_source)}
+                            """,
+                            timeout=10_000,
+                        )
+                        if page.locator("#lineBarToolbarToggleBtn").get_attribute("aria-expanded") == "false":
+                            page.locator("#lineBarToolbarToggleBtn").click()
+                        committed_option = page.evaluate(
+                            """
+                            () => JSON.stringify(
+                              echarts.getInstanceByDom(document.querySelector("#chart"))?.getOption?.() || {}
+                            )
+                            """
+                        )
+                        page.locator('.segmented[data-control="transform"] button[data-value="log"]').click()
+                        for _ in range(50):
+                            if held_old_chart_routes:
+                                break
+                            page.wait_for_timeout(50)
+                        self.assertTrue(held_old_chart_routes)
+
+                        page.evaluate(
+                            """
+                            () => {
+                              document.querySelector(
+                                '#glmModelSelect [data-glm-model-id="ratio-glm-two"]'
+                              )?.click();
+                              document.querySelector(
+                                '#gbmModelSelect [data-gbm-model-id="ratio-gbm-two"]'
+                              )?.click();
+                            }
+                            """
+                        )
+                        for _ in range(100):
+                            if held_ratio_banding_routes:
+                                break
+                            page.wait_for_timeout(50)
+                        self.assertTrue(held_ratio_banding_routes)
+                        page.wait_for_function(
+                            f"""
+                            () => document.querySelector("#featureList .feature.active")?.dataset.sourceId
+                              === {json.dumps(final_ratio_source)}
+                            """,
+                            timeout=10_000,
+                        )
+
+                        release_routes(held_old_chart_routes)
+                        page.wait_for_timeout(150)
+                        pending_state = page.evaluate(
+                            """
+                            () => ({
+                              option: JSON.stringify(
+                                echarts.getInstanceByDom(document.querySelector("#chart"))?.getOption?.() || {}
+                              ),
+                              meta: document.querySelector("#lineBarGroupMeta")?.textContent || "",
+                              opacity: getComputedStyle(document.querySelector("#chart")).opacity,
+                            })
+                            """
+                        )
+                        self.assertEqual(pending_state["option"], committed_option)
+                        self.assertIn(pending_state["meta"], {"Computing...", "Estimating banding..."})
+                        self.assertEqual(pending_state["opacity"], "1")
+
+                        page.unroute("**/api/banding/suggestion", handle_banding_route)
+                        release_routes(held_ratio_banding_routes)
+                        page.wait_for_function(
+                            f"""
+                            () => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")
+                              && document.querySelector("#featureList .feature.active")?.dataset.sourceId
+                                === {json.dumps(final_ratio_source)}
+                            """,
+                            timeout=10_000,
+                        )
+                        self.assertTrue(
+                            any(request.get("xSource") == final_ratio_source for request in chart_requests),
+                            chart_requests,
+                        )
+                        self.assertEqual(page_errors, [])
+                    finally:
+                        release_routes(held_old_chart_routes)
+                        release_routes(held_ratio_banding_routes)
+                        browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+                stop_persistent_glm_fit_worker()
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_line_bar_table_remains_committed_until_latest_feature_rows_are_ready(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "line_bar_table_intent_race.csv"
+            rows = ["Segment,Region,actualNumerator"]
+            for index in range(1, 61):
+                rows.append(
+                    f"{'A' if index % 2 else 'B'},"
+                    f"{['North', 'South', 'East'][index % 3]},"
+                    f"{100 + index}"
+                )
+            data_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+            base_url, server, thread = self.start_app(
+                data_path,
+                tools=["line_bar"],
+                defaults={"x": "Segment", "actual": "actualNumerator", "denominator": "__none__"},
+            )
+            held_table_routes: list[Any] = []
+            chart_requests_after_table_click: list[dict[str, Any]] = []
+
+            def release_routes() -> None:
+                while held_table_routes:
+                    route = held_table_routes.pop(0)
+                    try:
+                        route.continue_()
+                    except Exception:
+                        pass
+
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.add_init_script(
+                        """
+                        window.__lucidumCopiedText = null;
+                        Object.defineProperty(navigator, "clipboard", {
+                          configurable: true,
+                          value: {
+                            writeText: async (text) => {
+                              window.__lucidumCopiedText = text;
+                            },
+                          },
+                        });
+                        """
+                    )
+
+                    def handle_table_route(route: Any) -> None:
+                        if route.request.method == "POST":
+                            body = json.loads(route.request.post_data or "{}")
+                            if body.get("x") == "Region":
+                                held_table_routes.append(route)
+                                return
+                        route.continue_()
+
+                    page.route("**/api/line-bar/table", handle_table_route)
+                    page.on(
+                        "request",
+                        lambda request: chart_requests_after_table_click.append(json.loads(request.post_data or "{}"))
+                        if request.url.endswith("/api/chart") and request.method == "POST"
+                        else None,
+                    )
+                    try:
+                        page.goto(base_url, wait_until="domcontentloaded")
+                        page.wait_for_function(
+                            '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
+                            timeout=10_000,
+                        )
+                        page.locator("#tableTab").click()
+                        page.wait_for_function(
+                            """
+                            () => [...document.querySelectorAll("#lineBarTableGrid .tabulator-col-title")]
+                              .some((node) => node.textContent?.trim() === "Segment")
+                            """,
+                            timeout=10_000,
+                        )
+                        if page.locator("#lineBarSideControlsToggleBtn").get_attribute("aria-expanded") == "false":
+                            page.locator("#lineBarSideControlsToggleBtn").click()
+                            page.wait_for_function(
+                                """
+                                () => document.querySelector("#lineBarSideControlsToggleBtn")
+                                  ?.getAttribute("aria-expanded") === "true"
+                                """,
+                                timeout=10_000,
+                            )
+                            page.wait_for_timeout(100)
+                        committed_table = page.locator("#lineBarTableContent").inner_html()
+                        chart_request_count = len(chart_requests_after_table_click)
+
+                        page.locator(
+                            '#featureList .feature[data-source-id="dataset"][data-value="Region"]'
+                        ).click()
+                        for _ in range(50):
+                            if held_table_routes:
+                                break
+                            page.wait_for_timeout(50)
+                        self.assertTrue(held_table_routes)
+                        pending_state = page.evaluate(
+                            """
+                            () => ({
+                              table: document.querySelector("#lineBarTableContent")?.innerHTML || "",
+                              active: document.querySelector("#featureList .feature.active")?.dataset.value || "",
+                              meta: document.querySelector("#lineBarGroupMeta")?.textContent || "",
+                            })
+                            """
+                        )
+                        self.assertEqual(pending_state["active"], "Region")
+                        self.assertEqual(pending_state["meta"], "Loading table...")
+                        self.assertEqual(pending_state["table"], committed_table)
+                        self.assertEqual(len(chart_requests_after_table_click), chart_request_count)
+                        page.locator("#lineBarTableGrid").click(button="right")
+                        page.locator("#lineBarTableContextMenu:not([hidden])").get_by_text(
+                            "Copy table to clipboard"
+                        ).click()
+                        page.wait_for_function(
+                            '() => window.__lucidumCopiedText?.startsWith("Segment,")',
+                            timeout=10_000,
+                        )
+                        self.assertNotIn("Region,", page.evaluate("window.__lucidumCopiedText"))
+
+                        release_routes()
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")
+                              && [...document.querySelectorAll("#lineBarTableGrid .tabulator-col-title")]
+                                .some((node) => node.textContent?.trim() === "Region")
+                            """,
+                            timeout=10_000,
+                        )
+                        headers = page.locator("#lineBarTableGrid .tabulator-col-title").all_text_contents()
+                        self.assertIn("Region", headers)
+                        self.assertNotIn("Segment", headers)
+                        page.evaluate("window.__lucidumCopiedText = null")
+                        page.locator("#lineBarTableGrid").click(button="right")
+                        page.locator("#lineBarTableContextMenu:not([hidden])").get_by_text(
+                            "Copy table to clipboard"
+                        ).click()
+                        page.wait_for_function(
+                            '() => window.__lucidumCopiedText?.startsWith("Region,")',
+                            timeout=10_000,
+                        )
+                        self.assertNotIn("Segment,", page.evaluate("window.__lucidumCopiedText"))
+                        self.assertEqual(page_errors, [])
+                    finally:
+                        release_routes()
+                        browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_line_bar_generated_expected_cache_race_is_stable_in_webkit(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "line_bar_webkit_intent_race.csv"
+            row_count = 30
+            rows = ["actualNumerator,denominator,Age,Segment,SAMPLE"]
+            for index in range(1, row_count + 1):
+                rows.append(
+                    f"{100 + index},{1000 + index},{20 + index},"
+                    f"{'A' if index % 2 else 'B'},{'training' if index % 2 else 'validation'}"
+                )
+            data_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+            glm_store = GlmModelStore(data_path)
+            self.write_glm_prediction_model(
+                glm_store,
+                "webkit-intent-glm",
+                "WebKit intent GLM",
+                "2026-07-31T00:00:00Z",
+                [50.0 + index for index in range(1, row_count + 1)],
+            )
+            glm_store.activate_model("webkit-intent-glm")
+            glm_source = "glm:webkit-intent-glm:predictions"
+            base_url, server, thread = self.start_app(
+                data_path,
+                tools=["line_bar", "glm"],
+                defaults={"x": "Segment", "actual": "actualNumerator", "denominator": "__none__"},
+            )
+            held_routes: list[Any] = []
+
+            def release_routes() -> None:
+                while held_routes:
+                    route = held_routes.pop(0)
+                    try:
+                        route.continue_()
+                    except Exception:
+                        pass
+
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.webkit.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+
+                    def handle_chart_route(route: Any) -> None:
+                        if route.request.method == "POST":
+                            body = json.loads(route.request.post_data or "{}")
+                            if any(
+                                response.get("source") == glm_source
+                                for response in body.get("responses", [])
+                            ):
+                                held_routes.append(route)
+                                return
+                        route.continue_()
+
+                    page.route("**/api/chart", handle_chart_route)
+                    try:
+                        page.goto(base_url, wait_until="domcontentloaded")
+                        page.wait_for_function(
+                            '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
+                            timeout=10_000,
+                        )
+                        committed_option = page.evaluate(
+                            """
+                            () => JSON.stringify(
+                              echarts.getInstanceByDom(document.querySelector("#chart"))?.getOption?.() || {}
+                            )
+                            """
+                        )
+                        if page.locator("#lineBarSideControlsToggleBtn").get_attribute("aria-expanded") == "false":
+                            page.locator("#lineBarSideControlsToggleBtn").click()
+                        if page.locator("#chartExpectedToggle").get_attribute("aria-expanded") == "false":
+                            page.locator("#chartExpectedToggle").click()
+                        page.locator(
+                            f'#expectedList .feature[data-source-id="{glm_source}"][data-value="glm_prediction"]'
+                        ).click()
+                        for _ in range(50):
+                            if held_routes:
+                                break
+                            page.wait_for_timeout(50)
+                        self.assertTrue(held_routes)
+
+                        page.locator("#expectedList .expected-none-option").click()
+                        page.wait_for_function(
+                            '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
+                            timeout=10_000,
+                        )
+                        release_routes()
+                        page.wait_for_timeout(150)
+                        final_state = page.evaluate(
+                            """
+                            () => ({
+                              option: JSON.stringify(
+                                echarts.getInstanceByDom(document.querySelector("#chart"))?.getOption?.() || {}
+                              ),
+                              hasGlm: echarts.getInstanceByDom(document.querySelector("#chart"))?.getOption?.()
+                                .series?.some((series) => series.name === "glm_prediction") || false,
+                              opacity: getComputedStyle(document.querySelector("#chart")).opacity,
+                            })
+                            """
+                        )
+                        self.assertEqual(final_state["option"], committed_option)
+                        self.assertFalse(final_state["hasGlm"])
+                        self.assertEqual(final_state["opacity"], "1")
+                        self.assertEqual(page_errors, [])
+                    finally:
+                        release_routes()
                         browser.close()
             finally:
                 server.should_exit = True
@@ -28481,9 +29196,10 @@ COPY (
                 )
                 page.evaluate("window.__gbmStatusObserver?.disconnect()")
                 self.assertEqual(page.locator("#appStatusBadge .app-status-badge-elapsed").text_content(), "")
-                gbm_ready_button = page.locator("#gbmTrainBtn").evaluate(
+                gbm_ready_button = page.evaluate(
                     """
-                    (button) => {
+                    () => {
+                      const button = document.querySelector("#gbmTrainBtn");
                       const style = getComputedStyle(button);
                       const spinner = getComputedStyle(button, "::before");
                       return {

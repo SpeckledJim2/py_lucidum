@@ -326,9 +326,19 @@ class LineBarToolTests(unittest.TestCase):
             store.activate_model(model_id)
         return store
 
-    def write_prediction_parquet(self, path: Path, column: str, predictions: list[float | None]) -> None:
+    def write_prediction_parquet(
+        self,
+        path: Path,
+        column: str,
+        predictions: list[float | None],
+        *,
+        row_ids: list[int] | None = None,
+    ) -> None:
         selects = []
-        for index, value in enumerate(predictions, start=1):
+        prediction_row_ids = row_ids or list(range(1, len(predictions) + 1))
+        if len(prediction_row_ids) != len(predictions):
+            raise ValueError("row_ids must match predictions")
+        for index, value in zip(prediction_row_ids, predictions, strict=True):
             value_sql = "CAST(NULL AS DOUBLE)" if value is None else str(float(value))
             selects.append(f"SELECT {index} AS __lucidum_row_id, {value_sql} AS {column}")
         con = duckdb.connect(database=":memory:")
@@ -1947,6 +1957,119 @@ COPY (
         self.assertEqual(band_payload["feature"], RATIO_COLUMN)
         self.assertGreater(band_payload["band_suggestion"], 0)
         self.assertNotEqual(band_payload["band_suggestion"], 1)
+
+    def test_gbm_to_glm_ratio_source_identity_tracks_both_active_models_and_rejects_stale_sources(self) -> None:
+        gbm_store = self.write_simple_gbm_prediction_model(
+            [20.0, 30.0, 40.0, 400.0],
+            model_id="first-gbm",
+        )
+        self.write_simple_gbm_prediction_model(
+            [25.0, 35.0, 45.0, 450.0],
+            model_id="second-gbm",
+            active=False,
+        )
+        glm_store = self.write_simple_glm_prediction_model(
+            [10.0, 10.0, 10.0, 100.0],
+            model_id="first-glm",
+        )
+        self.write_simple_glm_prediction_model(
+            [5.0, 5.0, 5.0, 50.0],
+            model_id="second-glm",
+            active=False,
+        )
+        app = create_app(
+            self.data_path,
+            token="",
+            tools=["gbm", "glm", "line_bar"],
+            use_saved_filters=False,
+            use_kpis=False,
+        )
+
+        status, _, body = asgi_get(app, "/api/schema")
+        first_source = next(
+            source["id"]
+            for source in json.loads(body)["data_sources"]
+            if source.get("kind") == RATIO_KIND
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(first_source, "model_ratio:gbm_to_glm_ratio:first-gbm:first-glm")
+
+        glm_store.activate_model("second-glm")
+        status, _, body = asgi_get(app, "/api/schema")
+        second_source = next(
+            source["id"]
+            for source in json.loads(body)["data_sources"]
+            if source.get("kind") == RATIO_KIND
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(second_source, "model_ratio:gbm_to_glm_ratio:first-gbm:second-glm")
+
+        stale_request = self.request()
+        stale_request.update({"x": RATIO_COLUMN, "xSource": first_source, "bandWidth": 1})
+        stale_status, _, stale_body = asgi_post_json(app, "/api/chart", stale_request)
+        self.assertNotEqual(stale_status, 200)
+        self.assertIn("valid data source", json.loads(stale_body)["detail"])
+
+        gbm_store.activate_model("second-gbm")
+        status, _, body = asgi_get(app, "/api/schema")
+        third_source = next(
+            source["id"]
+            for source in json.loads(body)["data_sources"]
+            if source.get("kind") == RATIO_KIND
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(third_source, "model_ratio:gbm_to_glm_ratio:second-gbm:second-glm")
+
+    def test_gbm_to_glm_ratio_aligns_reordered_partial_prediction_rows_by_row_id(self) -> None:
+        gbm_store = self.write_simple_gbm_prediction_model(
+            [200.0, 800.0, 100.0],
+            model_id="aligned-gbm",
+        )
+        glm_store = self.write_simple_glm_prediction_model(
+            [40.0, 10.0, 40.0],
+            model_id="aligned-glm",
+        )
+        self.write_prediction_parquet(
+            gbm_store.source_path("aligned-gbm", "predictions"),
+            "gbm_prediction",
+            [200.0, 800.0, 100.0],
+            row_ids=[2, 4, 1],
+        )
+        self.write_prediction_parquet(
+            glm_store.source_path("aligned-glm", "predictions"),
+            "glm_prediction",
+            [40.0, 10.0, 40.0],
+            row_ids=[4, 1, 2],
+        )
+        app = create_app(
+            self.data_path,
+            token="",
+            tools=["gbm", "glm", "line_bar"],
+            use_saved_filters=False,
+            use_kpis=False,
+        )
+        status, _, body = asgi_get(app, "/api/schema")
+        ratio_source = next(
+            source["id"]
+            for source in json.loads(body)["data_sources"]
+            if source.get("kind") == RATIO_KIND
+        )
+        request = self.request()
+        request.update({
+            "x": RATIO_COLUMN,
+            "xSource": ratio_source,
+            "bandWidth": 1,
+            "responses": [{"label": "Actual", "numerator": "Actual"}],
+        })
+        chart_status, _, chart_body = asgi_post_json(app, "/api/chart", request)
+        rows = {row["x"]: row for row in json.loads(chart_body)["rows"]}
+
+        self.assertEqual(status, 200)
+        self.assertEqual(chart_status, 200)
+        self.assertNotIn("(missing)", rows)
+        self.assertAlmostEqual(rows["5"]["resp0"], 200.0)
+        self.assertAlmostEqual(rows["10"]["resp0"], 100.0)
+        self.assertAlmostEqual(rows["20"]["resp0"], 400.0)
 
     def test_saved_model_favourite_sources_validate_against_active_models(self) -> None:
         self.write_simple_gbm_prediction_model([20.0, 30.0, 40.0, 400.0], model_id="saved-gbm", active=False)
