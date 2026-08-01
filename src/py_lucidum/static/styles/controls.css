@@ -437,7 +437,7 @@
       }
 
       .kpi-list .kpi-option {
-        grid-template-columns: fit-content(80%) minmax(0, 1fr);
+        grid-template-columns: fit-content(100%) minmax(0, 1fr);
       }
 
       .favourites-list .saved-favourite-option.active,
@@ -917,7 +917,7 @@
 
       .saved-filter-list .feature {
         display: grid;
-        grid-template-columns: fit-content(52%) minmax(96px, 1fr);
+        grid-template-columns: fit-content(100%) minmax(0, 1fr);
         font-size: 12px;
         min-height: 22px;
         padding: 2px 6px;

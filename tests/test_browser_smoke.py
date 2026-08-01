@@ -12973,6 +12973,7 @@ COPY (
                 "DRIVER AGE,Young drivers,DRIVER_AGE < 30\n"
                 "DRIVER AGE,Middle aged drivers,DRIVER_AGE >= 30 AND DRIVER_AGE < 60\n"
                 "DRIVER AGE,Older drivers,DRIVER_AGE > 70\n"
+                "DRIVER AGE,Drivers with an unusually long saved filter name,DRIVER_AGE >= 0\n"
                 "POSTCODE AREA,Portsmouth,POSTCODE_AREA = 'PO'\n"
                 "POSTCODE AREA,Southampton,POSTCODE_AREA = 'SO'\n",
                 encoding="utf-8",
@@ -31944,6 +31945,68 @@ COPY (
                 self.assertTrue(driver_rows.first.is_visible())
                 self.assertTrue(postcode_rows.first.is_visible())
 
+                page.evaluate("() => document.documentElement.style.setProperty('--sidebar-width', '220px')")
+                page.evaluate("() => new Promise((resolve) => requestAnimationFrame(() => resolve()))")
+                narrow_filter_layout = page.evaluate(
+                    """
+                    () => {
+                      const rows = [...document.querySelectorAll('.saved-filter-option[data-filter-theme="DRIVER AGE"]')];
+                      const youngDrivers = rows.find((row) => row.dataset.filterName === "Young drivers");
+                      const longFilter = rows.find((row) => row.dataset.filterName.includes("unusually long"));
+                      const name = youngDrivers?.querySelector(".saved-filter-name");
+                      const expression = youngDrivers?.querySelector(".saved-filter-expression");
+                      const longName = longFilter?.querySelector(".saved-filter-name");
+                      const longExpression = longFilter?.querySelector(".saved-filter-expression");
+                      const rowStyle = longFilter ? getComputedStyle(longFilter) : null;
+                      const contentWidth = longFilter && rowStyle
+                        ? longFilter.clientWidth - parseFloat(rowStyle.paddingLeft) - parseFloat(rowStyle.paddingRight)
+                        : 0;
+                      const columnGap = rowStyle ? parseFloat(rowStyle.columnGap) : 0;
+                      return {
+                        nameText: name?.textContent.trim() || "",
+                        expressionText: expression?.textContent.trim() || "",
+                        nameFits: Boolean(name && name.scrollWidth <= name.clientWidth + 1),
+                        expressionTruncates: Boolean(expression && expression.scrollWidth > expression.clientWidth + 1),
+                        expressionWidth: expression?.getBoundingClientRect().width || 0,
+                        longNameTruncates: Boolean(longName && longName.scrollWidth > longName.clientWidth + 1),
+                        longNameWidth: longName?.getBoundingClientRect().width || 0,
+                        longExpressionWidth: longExpression?.getBoundingClientRect().width || 0,
+                        contentWidth,
+                        columnGap,
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(narrow_filter_layout["nameText"], "Young drivers")
+                self.assertEqual(narrow_filter_layout["expressionText"], "DRIVER_AGE < 30")
+                self.assertTrue(narrow_filter_layout["nameFits"])
+                self.assertTrue(narrow_filter_layout["expressionTruncates"])
+                self.assertGreater(narrow_filter_layout["expressionWidth"], 0)
+                self.assertTrue(narrow_filter_layout["longNameTruncates"])
+                self.assertAlmostEqual(
+                    narrow_filter_layout["longNameWidth"],
+                    narrow_filter_layout["contentWidth"] - narrow_filter_layout["columnGap"],
+                    delta=1,
+                )
+                self.assertEqual(narrow_filter_layout["longExpressionWidth"], 0)
+
+                page.evaluate("() => document.documentElement.style.setProperty('--sidebar-width', '400px')")
+                page.evaluate("() => new Promise((resolve) => requestAnimationFrame(() => resolve()))")
+                normal_filter_layout = driver_rows.first.evaluate(
+                    """
+                    row => {
+                      const name = row.querySelector(".saved-filter-name");
+                      const expression = row.querySelector(".saved-filter-expression");
+                      return {
+                        nameFits: Boolean(name && name.scrollWidth <= name.clientWidth + 1),
+                        expressionFits: Boolean(expression && expression.scrollWidth <= expression.clientWidth + 1),
+                      };
+                    }
+                    """
+                )
+                self.assertTrue(normal_filter_layout["nameFits"])
+                self.assertTrue(normal_filter_layout["expressionFits"])
+
                 def filter_control_state() -> dict[str, Any]:
                     return page.evaluate(
                         """
@@ -33052,10 +33115,12 @@ COPY (
                       const name = burningCost?.querySelector(".saved-filter-name");
                       const detail = burningCost?.querySelector(".kpi-detail");
                       const longName = longKpi?.querySelector(".saved-filter-name");
+                      const longDetail = longKpi?.querySelector(".kpi-detail");
                       const rowStyle = longKpi ? getComputedStyle(longKpi) : null;
                       const contentWidth = longKpi && rowStyle
                         ? longKpi.clientWidth - parseFloat(rowStyle.paddingLeft) - parseFloat(rowStyle.paddingRight)
                         : 0;
+                      const columnGap = rowStyle ? parseFloat(rowStyle.columnGap) : 0;
                       return {
                         nameText: name?.textContent.trim() || "",
                         detailText: detail?.textContent.trim() || "",
@@ -33064,7 +33129,9 @@ COPY (
                         detailWidth: detail?.getBoundingClientRect().width || 0,
                         longNameTruncates: Boolean(longName && longName.scrollWidth > longName.clientWidth + 1),
                         longNameWidth: longName?.getBoundingClientRect().width || 0,
+                        longDetailWidth: longDetail?.getBoundingClientRect().width || 0,
                         contentWidth,
+                        columnGap,
                       };
                     }
                     """
@@ -33078,10 +33145,12 @@ COPY (
                 self.assertTrue(narrow_kpi_layout["detailTruncates"])
                 self.assertGreater(narrow_kpi_layout["detailWidth"], 0)
                 self.assertTrue(narrow_kpi_layout["longNameTruncates"])
-                self.assertLessEqual(
+                self.assertAlmostEqual(
                     narrow_kpi_layout["longNameWidth"],
-                    narrow_kpi_layout["contentWidth"] * 0.8 + 1,
+                    narrow_kpi_layout["contentWidth"] - narrow_kpi_layout["columnGap"],
+                    delta=1,
                 )
+                self.assertEqual(narrow_kpi_layout["longDetailWidth"], 0)
 
                 page.evaluate("() => document.documentElement.style.setProperty('--sidebar-width', '400px')")
                 page.evaluate("() => new Promise((resolve) => requestAnimationFrame(() => resolve()))")

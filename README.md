@@ -292,7 +292,7 @@ DRIVER AGE,Young drivers,DRIVER_AGE < 30
 DRIVER AGE,Older drivers,DRIVER_AGE > 70
 ```
 
-Saved-filter rows can be used in `Single`, `Multi`, or `Grouped` mode. The generated expression is written to the footer expression box and applies to the active tool.
+Saved-filter rows can be used in `Single`, `Multi`, or `Grouped` mode. The generated expression is written to the footer expression box and applies to the active tool. In a narrow sidebar, the filter name can use the full row while the muted expression uses any remaining space and truncates first.
 
 When the Specifications tool opens a missing filter spec, it starts with one blank row and visual placeholder hints for `theme`, `name`, and `expression`; those hints are not saved as cell values.
 
@@ -309,7 +309,7 @@ FINANCIAL,Premium,PREMIUM,N,2,currency
 
 `denominator` accepts `N`, `Average row value`, an empty value, or `__none__` for average row value, or any numeric column name for weighted response values. `format` accepts `number`, `currency`, or `percent`.
 
-KPI rows appear as read-only presets in their own sidebar KPI accordion. They set Actual, Weight, decimals, and formatting only; filters and Line/Bar view state belong to saved favourites, not the KPI CSV. In a narrow sidebar, the KPI name can use up to 80% of its row while the muted numerator/denominator detail uses the remaining space and truncates first.
+KPI rows appear as read-only presets in their own sidebar KPI accordion. They set Actual, Weight, decimals, and formatting only; filters and Line/Bar view state belong to saved favourites, not the KPI CSV. In a narrow sidebar, the KPI name can use the full row while the muted numerator/denominator detail uses any remaining space and truncates first.
 
 When the Specifications tool opens a missing KPI spec, it starts with one blank row and visual placeholder hints for each field; those hints are not saved as cell values.
 
