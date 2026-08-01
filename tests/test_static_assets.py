@@ -2070,6 +2070,20 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn(".sidebar-control-pane .feature-list {", controls)
         self.assertIn("background: var(--tool-screen-nav-bg);", controls)
 
+    def test_sidebar_tool_icons_use_thin_shared_svg_strokes(self) -> None:
+        static_root = Path(__file__).resolve().parents[1] / "src/py_lucidum/static"
+        index = (static_root / "index.html").read_text(encoding="utf-8")
+        controls = (static_root / "styles/controls.css").read_text(encoding="utf-8")
+
+        tool_selector = index[
+            index.index('<div class="tool-selector">') : index.index(
+                '<div id="collapsedSidebarVersion"'
+            )
+        ]
+        self.assertIn("stroke-width: 1.25;", controls)
+        self.assertNotIn("stroke-width=", tool_selector)
+        self.assertIn('<img src="/tools/uk-map/static/icons/UK.png" alt="">', tool_selector)
+
     def test_sidebar_accordion_selected_rows_share_theme_token(self) -> None:
         static_root = Path(__file__).resolve().parents[1] / "src/py_lucidum/static"
         foundations = (static_root / "styles/foundations.css").read_text(encoding="utf-8")
