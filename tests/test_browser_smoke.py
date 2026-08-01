@@ -2085,6 +2085,24 @@ class BrowserSmokeTests(unittest.TestCase):
                         self.assertEqual(control_toggle.get_attribute("title"), "Expand map controls")
                         self.assertEqual(control_toggle.get_attribute("aria-label"), "Expand map controls")
                         self.assertEqual(control_toggle.get_attribute("aria-expanded"), "false")
+                        collapsed_toggle_style = control_toggle.evaluate(
+                            """
+                            (button) => {
+                              const style = getComputedStyle(button);
+                              const rect = button.getBoundingClientRect();
+                              return {
+                                background: style.backgroundColor,
+                                border: style.borderTopWidth,
+                                height: rect.height,
+                                width: rect.width,
+                              };
+                            }
+                            """
+                        )
+                        self.assertEqual(collapsed_toggle_style["background"], "rgba(0, 0, 0, 0)")
+                        self.assertEqual(collapsed_toggle_style["border"], "0px")
+                        self.assertAlmostEqual(collapsed_toggle_style["height"], 36, delta=0.5)
+                        self.assertAlmostEqual(collapsed_toggle_style["width"], 36, delta=0.5)
                         self.assertFalse(page.evaluate("() => window.__ukMapControlVisibleExpanded"))
                         page.evaluate("() => { window.__ukMapLegendMonitorActive = false; }")
 
@@ -2095,6 +2113,19 @@ class BrowserSmokeTests(unittest.TestCase):
                         self.assertEqual(control_toggle.get_attribute("title"), "Collapse map controls")
                         self.assertEqual(control_toggle.get_attribute("aria-label"), "Collapse map controls")
                         self.assertEqual(control_toggle.get_attribute("aria-expanded"), "true")
+                        expanded_toggle_style = control_toggle.evaluate(
+                            """
+                            (button) => {
+                              const style = getComputedStyle(button);
+                              return {
+                                background: style.backgroundColor,
+                                border: style.borderTopWidth,
+                              };
+                            }
+                            """
+                        )
+                        self.assertEqual(expanded_toggle_style["background"], "rgba(0, 0, 0, 0)")
+                        self.assertEqual(expanded_toggle_style["border"], "0px")
                         control_toggle.click()
                         page.wait_for_function(
                             '() => document.querySelector("#mapFloatingControl")?.classList.contains("collapsed")'
@@ -2140,11 +2171,11 @@ class BrowserSmokeTests(unittest.TestCase):
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "map_matches.csv"
             data_path.write_text(
-                "PostcodeArea,PostcodeSector,Actual\n"
-                "AB,AB10 1,10\n"
-                "AL,AL1 1,20\n"
-                "ZZ,ZZ1 1,999999999\n"
-                ",,30\n",
+                "PostcodeArea,PostcodeSector,Actual,PostcodeUnit,lat,long\n"
+                "AB,AB10 1,10,AB10 1AA,57.1,-2.1\n"
+                "AL,AL1 1,20,AL1 1AA,51.8,-0.3\n"
+                "ZZ,ZZ1 1,999999999,ZZ1 1AA,52.1,-1.5\n"
+                ",,30,,,\n",
                 encoding="utf-8",
             )
             base_url, server, thread = self.start_app(
@@ -2159,6 +2190,28 @@ class BrowserSmokeTests(unittest.TestCase):
                     page = browser.new_page(viewport={"width": 1280, "height": 800})
                     page_errors: list[str] = []
                     page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.add_init_script(
+                        """
+                        (() => {
+                          const originalFetch = window.fetch.bind(window);
+                          window.__lucidumReleaseDelayedMapSummary = null;
+                          window.__lucidumDelayNextMapSummary = false;
+                          window.fetch = async (...args) => {
+                            const input = args[0];
+                            const rawUrl = typeof input === "string" ? input : input?.url || "";
+                            const path = new URL(rawUrl, window.location.href).pathname;
+                            const responsePromise = originalFetch(...args);
+                            if (path === "/api/uk-map/summary" && window.__lucidumDelayNextMapSummary) {
+                              window.__lucidumDelayNextMapSummary = false;
+                              await new Promise((resolve) => {
+                                window.__lucidumReleaseDelayedMapSummary = resolve;
+                              });
+                            }
+                            return responsePromise;
+                          };
+                        })();
+                        """
+                    )
 
                     def warning_palette() -> dict[str, Any]:
                         return page.evaluate(
@@ -2205,6 +2258,55 @@ class BrowserSmokeTests(unittest.TestCase):
                         self.assertIn(
                             "1 row unmatched (33.3%)",
                             page.locator("#mapMatchLiveStatus").inner_text(),
+                        )
+                        inactive_filter_typography = page.evaluate(
+                            """
+                            () => {
+                              const typography = (selector) => {
+                                const style = getComputedStyle(document.querySelector(selector));
+                                return {
+                                  color: style.color,
+                                  fontFamily: style.fontFamily,
+                                  fontSize: style.fontSize,
+                                  fontStyle: style.fontStyle,
+                                  fontWeight: style.fontWeight,
+                                  letterSpacing: style.letterSpacing,
+                                  lineHeight: style.lineHeight,
+                                  opacity: style.opacity,
+                                };
+                              };
+                              return {
+                                filterText: document.querySelector("#mapControlFilterText")?.textContent.trim(),
+                                filter: typography("#mapControlFilterText"),
+                                rows: typography("#mapRowMeta"),
+                                metricBottom: document.querySelector("#mapControlMetric")?.getBoundingClientRect().bottom,
+                                lineTops: [
+                                  ".map-group-meta-count",
+                                  ".map-shapefile-match-status",
+                                  ".map-shapefile-missing-status",
+                                  "#mapRowMeta",
+                                  "#mapControlFilterText",
+                                ].map((selector) => document.querySelector(selector)?.getBoundingClientRect().top),
+                              };
+                            }
+                            """
+                        )
+                        self.assertEqual(inactive_filter_typography["filterText"], "no filter")
+                        self.assertEqual(inactive_filter_typography["filter"], inactive_filter_typography["rows"])
+                        line_tops = inactive_filter_typography["lineTops"]
+                        self.assertTrue(all(top is not None for top in line_tops), line_tops)
+                        self.assertAlmostEqual(
+                            line_tops[0] - inactive_filter_typography["metricBottom"],
+                            2,
+                            delta=0.5,
+                        )
+                        line_steps = [
+                            line_tops[index + 1] - line_tops[index]
+                            for index in range(len(line_tops) - 1)
+                        ]
+                        self.assertTrue(
+                            all(abs(step - line_steps[0]) <= 0.5 for step in line_steps[1:]),
+                            line_steps,
                         )
                         match_status_layout = page.evaluate(
                             """
@@ -2261,11 +2363,30 @@ class BrowserSmokeTests(unittest.TestCase):
                             timeout=10_000,
                         )
 
-                        with page.expect_response(
-                            lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200,
+                        area_panel_height = page.locator("#mapFloatingControl").evaluate(
+                            "node => node.getBoundingClientRect().height"
+                        )
+                        page.evaluate(
+                            """
+                            () => {
+                              window.__lucidumReleaseDelayedMapSummary = null;
+                              window.__lucidumDelayNextMapSummary = true;
+                            }
+                            """
+                        )
+                        page.locator('#mapLevelTiles input[name="mapLevel"][value="sector"]').check()
+                        page.wait_for_function(
+                            """
+                            () => (document.querySelector("#mapGroupMeta")?.textContent || "").trim() === "Computing map..."
+                              && typeof window.__lucidumReleaseDelayedMapSummary === "function"
+                            """,
                             timeout=10_000,
-                        ):
-                            page.locator('#mapLevelTiles input[name="mapLevel"][value="sector"]').check()
+                        )
+                        pending_panel_height = page.locator("#mapFloatingControl").evaluate(
+                            "node => node.getBoundingClientRect().height"
+                        )
+                        self.assertAlmostEqual(pending_panel_height, area_panel_height, delta=1)
+                        page.evaluate("() => window.__lucidumReleaseDelayedMapSummary()")
                         page.wait_for_function(
                             """
                             () => {
@@ -2277,7 +2398,138 @@ class BrowserSmokeTests(unittest.TestCase):
                             """,
                             timeout=20_000,
                         )
+                        sector_panel_height = page.locator("#mapFloatingControl").evaluate(
+                            "node => node.getBoundingClientRect().height"
+                        )
+                        self.assertAlmostEqual(sector_panel_height, area_panel_height, delta=1)
                         self.assertNotIn("999999999", page.locator("#mapLegendBody").inner_text())
+
+                        page.evaluate(
+                            """
+                            () => {
+                              window.__lucidumReleaseDelayedMapSummary = null;
+                              window.__lucidumDelayNextMapSummary = true;
+                              window.__lucidumDelayedUnitStartedAt = performance.now();
+                            }
+                            """
+                        )
+                        page.locator('#mapLevelTiles input[name="mapLevel"][value="unit"]').check()
+                        page.wait_for_function(
+                            """
+                            () => typeof window.__lucidumReleaseDelayedMapSummary === "function"
+                            """,
+                            timeout=10_000,
+                        )
+                        unit_grace_meta = page.locator("#mapGroupMeta").inner_text()
+                        self.assertIn("sectors matched", unit_grace_meta)
+                        self.assertNotIn("Computing map...", unit_grace_meta)
+                        page.wait_for_timeout(250)
+                        self.assertIn("sectors matched", page.locator("#mapGroupMeta").inner_text())
+                        self.assertNotIn("Computing map...", page.locator("#mapGroupMeta").inner_text())
+                        page.wait_for_function(
+                            """
+                            () => (document.querySelector("#mapGroupMeta")?.textContent || "").trim() === "Computing map..."
+                            """,
+                            timeout=2_000,
+                        )
+                        delayed_unit_elapsed = page.evaluate(
+                            "() => performance.now() - window.__lucidumDelayedUnitStartedAt"
+                        )
+                        self.assertGreaterEqual(delayed_unit_elapsed, 450)
+                        unit_pending_panel_height = page.locator("#mapFloatingControl").evaluate(
+                            "node => node.getBoundingClientRect().height"
+                        )
+                        self.assertAlmostEqual(unit_pending_panel_height, area_panel_height, delta=1)
+                        self.assertTrue(page.locator("#mapLabelControl").is_hidden())
+                        self.assertTrue(page.locator("#mapSmoothingControl").is_hidden())
+                        page.evaluate("() => window.__lucidumReleaseDelayedMapSummary()")
+                        page.wait_for_function(
+                            '() => document.querySelector("#mapGroupMeta")?.textContent.includes("units plotted")',
+                            timeout=20_000,
+                        )
+                        unit_panel_height = page.locator("#mapFloatingControl").evaluate(
+                            "node => node.getBoundingClientRect().height"
+                        )
+                        self.assertAlmostEqual(unit_panel_height, area_panel_height, delta=1)
+                        self.assertFalse(page.locator("#mapDotSizeControl").is_hidden())
+                        self.assertTrue(page.locator("#mapLabelControl").is_hidden())
+                        self.assertTrue(page.locator("#mapSmoothingControl").is_hidden())
+                        unit_statuses = page.locator("#mapGroupMeta .map-unit-status")
+                        self.assertEqual(unit_statuses.all_inner_texts(), [
+                            "No units missing KPI value",
+                            "No units missing coordinates",
+                        ])
+                        self.assertTrue(all(
+                            not status.evaluate(
+                                "node => node.classList.contains('map-shapefile-match-status--warning')"
+                            )
+                            for status in unit_statuses.all()
+                        ))
+                        unit_status_colours = unit_statuses.evaluate_all(
+                            "nodes => nodes.map((node) => getComputedStyle(node).color)"
+                        )
+                        self.assertEqual(
+                            unit_status_colours,
+                            [page.locator("#mapRowMeta").evaluate("node => getComputedStyle(node).color")] * 2,
+                        )
+                        self.assertIn(
+                            "No units missing coordinates",
+                            page.locator("#mapMatchLiveStatus").inner_text(),
+                        )
+
+                        page.evaluate(
+                            """
+                            () => {
+                              window.__lucidumMapMetaMutations = [];
+                              window.__lucidumMapMetaObserver?.disconnect();
+                              const meta = document.querySelector("#mapGroupMeta");
+                              window.__lucidumMapMetaObserver = new MutationObserver(() => {
+                                window.__lucidumMapMetaMutations.push((meta?.textContent || "").trim());
+                              });
+                              window.__lucidumMapMetaObserver.observe(meta, {
+                                childList: true,
+                                characterData: true,
+                                subtree: true,
+                              });
+                            }
+                            """
+                        )
+                        with page.expect_response(
+                            lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200,
+                            timeout=10_000,
+                        ):
+                            page.locator('#mapLevelTiles input[name="mapLevel"][value="area"]').check()
+                        page.wait_for_function(
+                            '() => document.querySelector("#mapGroupMeta")?.textContent.includes("areas matched")',
+                            timeout=20_000,
+                        )
+                        page.wait_for_timeout(550)
+                        fast_area_meta_mutations = page.evaluate(
+                            """
+                            () => {
+                              window.__lucidumMapMetaObserver?.disconnect();
+                              return window.__lucidumMapMetaMutations || [];
+                            }
+                            """
+                        )
+                        self.assertFalse(
+                            any("Computing map..." in mutation for mutation in fast_area_meta_mutations),
+                            fast_area_meta_mutations,
+                        )
+                        restored_area_panel_height = page.locator("#mapFloatingControl").evaluate(
+                            "node => node.getBoundingClientRect().height"
+                        )
+                        self.assertAlmostEqual(restored_area_panel_height, area_panel_height, delta=1)
+
+                        with page.expect_response(
+                            lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200,
+                            timeout=10_000,
+                        ):
+                            page.locator('#mapLevelTiles input[name="mapLevel"][value="sector"]').check()
+                        page.wait_for_function(
+                            '() => document.querySelector("#mapGroupMeta")?.textContent.includes("sectors matched")',
+                            timeout=20_000,
+                        )
 
                         page.locator("#filterInput").evaluate(
                             """
@@ -2299,11 +2551,22 @@ class BrowserSmokeTests(unittest.TestCase):
                               return meta.includes("0 /")
                                 && meta.includes("sectors matched")
                                 && meta.includes("1 row unmatched (100.0%)")
-                                && !meta.includes("missing sector")
+                                && meta.includes("No rows missing sector")
                                 && document.querySelector("#mapLegend")?.classList.contains("hidden");
                             }
                             """,
                             timeout=20_000,
+                        )
+                        zero_missing_status = page.locator("#mapGroupMeta .map-shapefile-missing-status")
+                        self.assertEqual(zero_missing_status.inner_text(), "No rows missing sector")
+                        self.assertFalse(
+                            zero_missing_status.evaluate(
+                                "node => node.classList.contains('map-shapefile-match-status--warning')"
+                            )
+                        )
+                        self.assertEqual(
+                            zero_missing_status.evaluate("node => getComputedStyle(node).color"),
+                            page.locator("#mapRowMeta").evaluate("node => getComputedStyle(node).color"),
                         )
                         rendered_sector_features = page.evaluate(
                             """
@@ -2662,6 +2925,10 @@ class BrowserSmokeTests(unittest.TestCase):
                             }
                             """
                         )
+                    page.wait_for_function(
+                        '() => document.querySelector("#mapGroupMeta .map-group-meta-count")?.textContent.trim() === "N2 sector smoothing"',
+                        timeout=10_000,
+                    )
                     self.assertEqual(page.locator(".map-popup > strong").inner_text(), "CA10 3")
                     self.assertEqual(
                         page.locator(".map-popup-section").all_inner_texts(),
@@ -2884,7 +3151,7 @@ class BrowserSmokeTests(unittest.TestCase):
                     )
                     self.assertEqual(len(map_requests), map_request_count + 1)
                     page.wait_for_function(
-                        '() => document.querySelector("#mapGroupMeta")?.textContent.includes("sectors matched")',
+                        '() => document.querySelector("#mapGroupMeta .map-group-meta-count")?.textContent.trim() === "N2 sector smoothing"',
                         timeout=10_000,
                     )
                     open_polygon("CA10 3")
@@ -14307,15 +14574,26 @@ COPY (
                     select_alt_kpi()
                     delay_path("/api/uk-map/summary")
                     reset_counts()
+                    page.evaluate("() => { window.__lucidumMapFavouriteStartedAt = performance.now(); }")
                     click_favourite("Map favourite")
                     page.wait_for_function(
                         """() => document.querySelector("#ukMapTool")?.classList.contains("active")
                           && document.querySelector("#actualNumerator")?.value === "price"
-                          && (document.querySelector("#mapGroupMeta")?.textContent || "") === "Computing map..." """,
+                          && window.__lucidumDelayedResolvers['/api/uk-map/summary'] """,
                         timeout=10_000,
                     )
+                    self.assertEqual(page.locator("#mapGroupMeta").inner_text(), "")
+                    page.wait_for_timeout(250)
+                    self.assertEqual(page.locator("#mapGroupMeta").inner_text(), "")
+                    page.wait_for_function(
+                        """() => (document.querySelector("#mapGroupMeta")?.textContent || "") === "Computing map..." """,
+                        timeout=2_000,
+                    )
+                    delayed_favourite_elapsed = page.evaluate(
+                        "() => performance.now() - window.__lucidumMapFavouriteStartedAt"
+                    )
+                    self.assertGreaterEqual(delayed_favourite_elapsed, 450)
                     assert_metric_pending()
-                    page.wait_for_function("() => window.__lucidumDelayedResolvers['/api/uk-map/summary']", timeout=10_000)
                     self.assertEqual(request_counts["/api/uk-map/summary"], 1)
                     self.assertEqual(request_counts["/api/chart"], 0)
                     self.assertEqual(request_counts["/api/line-bar/table"], 0)
@@ -14445,7 +14723,8 @@ COPY (
                         page.wait_for_function(
                             """() => document.querySelector("#mapLineWeight")?.value === "3"
                               && document.querySelector("#mapOpacity")?.value === "4"
-                              && document.querySelector("#mapSmoothing")?.value === "2" """,
+                              && document.querySelector("#mapSmoothing")?.value === "2"
+                              && document.querySelector("#mapGroupMeta .map-group-meta-count")?.textContent.trim() === "N2 sector smoothing" """,
                             timeout=10_000,
                         )
                         page.evaluate(
@@ -14552,7 +14831,7 @@ COPY (
                         page.wait_for_function(
                             """([id]) => document.querySelector(`.saved-favourite-option[data-favourite-id="${id}"]`)?.classList.contains("active")
                               && document.querySelector("#mapSmoothing")?.value === "2"
-                              && (document.querySelector("#mapGroupMeta")?.textContent || "").includes("sectors matched") """,
+                              && document.querySelector("#mapGroupMeta .map-group-meta-count")?.textContent.trim() === "N2 sector smoothing" """,
                             arg=[map_favourite_id],
                             timeout=10_000,
                         )
@@ -14650,7 +14929,7 @@ COPY (
                         page.locator(f'.saved-favourite-option[data-favourite-id="{map_favourite_id}"]').click()
                         page.wait_for_function(
                             """([id]) => document.querySelector("#ukMapTool")?.classList.contains("active")
-                              && document.querySelector("#mapGroupMeta")?.textContent.includes("sectors matched")
+                              && document.querySelector("#mapGroupMeta .map-group-meta-count")?.textContent.trim() === "N2 sector smoothing"
                               && document.querySelector(`.saved-favourite-option[data-favourite-id="${id}"]`)?.classList.contains("active")
                               && document.querySelector('#mapLevelTiles input[name="mapLevel"][value="sector"]')?.checked
                               && document.querySelector('#mapBaseLayerTiles input[name="baseMap"][value="grey"]')?.checked
@@ -22420,8 +22699,8 @@ COPY (
                     """
                 )
                 self.assertAlmostEqual(map_panel_layout["width"], 244, delta=2)
-                self.assertNotIn("rows", map_panel_layout["groupMeta"])
                 self.assertEqual(map_panel_layout["rowMeta"], "3 / 4 rows")
+                self.assertNotIn(map_panel_layout["rowMeta"], map_panel_layout["groupMeta"])
                 self.assertEqual(map_panel_layout["baseColumns"], 3)
                 self.assertEqual(map_panel_layout["levelColumns"], 3)
                 self.assertEqual(map_panel_layout["paletteColumns"], 3)
@@ -24980,7 +25259,10 @@ COPY (
                         }
                         """
                     )
-                page.wait_for_function('() => document.querySelector("#mapSmoothingValue")?.textContent === "N2"')
+                page.wait_for_function(
+                    '() => document.querySelector("#mapSmoothingValue")?.textContent === "N2"'
+                    ' && document.querySelector("#mapGroupMeta .map-group-meta-count")?.textContent.trim() === "N2 sector smoothing"'
+                )
                 wait_for_map_view(stable_map_view)
 
                 with page.expect_response(lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200, timeout=10_000):

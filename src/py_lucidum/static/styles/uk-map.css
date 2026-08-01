@@ -129,7 +129,7 @@
       .map-floating-header {
         display: grid;
         grid-template-columns: minmax(0, 1fr) 36px;
-        gap: 2px 8px;
+        gap: 0 8px;
         margin-bottom: 7px;
         font-size: 14px;
         cursor: move;
@@ -166,15 +166,22 @@
         white-space: nowrap;
       }
 
+      .map-floating-header #mapGroupMeta {
+        margin-top: 2px;
+        min-height: 3.3em;
+      }
+
       .map-group-meta-count,
       .map-shapefile-match-status,
-      .map-shapefile-missing-status {
+      .map-shapefile-missing-status,
+      .map-unit-status {
         display: block;
         min-height: 1.1em;
       }
 
       .map-shapefile-match-status,
-      .map-shapefile-missing-status {
+      .map-shapefile-missing-status,
+      .map-unit-status {
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -225,10 +232,14 @@
       }
 
       #mapControlFilter:not(.map-filter--applied) {
+        border-width: 0;
         justify-content: flex-start;
-        padding-left: 0;
-        padding-right: 0;
+        padding: 0;
         width: 100%;
+      }
+
+      #mapControlFilter:not(.map-filter--applied) .filter-badge-text {
+        color: inherit;
       }
 
       #mapControlFilter .filter-badge-text {
@@ -254,11 +265,12 @@
         grid-row: 1 / span 4;
         align-self: start;
         justify-self: end;
+        appearance: none;
         width: 36px;
         height: 36px;
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        background: var(--panel-2);
+        border: 0;
+        border-radius: 0;
+        background: transparent;
         color: var(--text);
         cursor: pointer;
         display: grid;
@@ -271,7 +283,13 @@
       }
 
       .map-control-reset:hover {
-        background: var(--panel);
+        background: transparent;
+        color: var(--accent);
+      }
+
+      .map-control-reset:focus-visible {
+        outline: 2px solid color-mix(in srgb, var(--accent) 72%, white);
+        outline-offset: 1px;
       }
 
       .map-control-reset svg {
@@ -549,6 +567,7 @@
       .map-slider-grid {
         display: grid;
         grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: repeat(4, minmax(26px, auto));
         gap: 7px;
       }
 

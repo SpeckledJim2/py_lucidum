@@ -962,7 +962,7 @@ if (allMatched.matchedRowCount !== 3
     || allMatched.unmatchedPercentageText !== "0.0"
     || allMatched.missingPercentageText !== "0.0"
     || allMatched.matchText !== "All areas matched"
-    || allMatched.missingText !== ""
+    || allMatched.missingText !== "No rows missing area"
     || allMatched.matchState !== "complete"
     || allMatched.matchedRows.length !== 2
     || allMatched.unmatchedRows.length !== 0) {{
@@ -1036,6 +1036,7 @@ if (smoothedSector.matchedRowCount !== 1
     || smoothedSector.missingRowCount !== 0
     || smoothedSector.unmatchedPercentageText !== "75.0"
     || smoothedSector.missingPercentageText !== "0.0"
+    || smoothedSector.missingText !== "No rows missing sector"
     || smoothedSector.matchedRows.length !== 2) {{
   throw new Error(`incorrect smoothed-sector summary: ${{JSON.stringify(smoothedSector)}}`);
 }}
