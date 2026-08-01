@@ -309,7 +309,7 @@ FINANCIAL,Premium,PREMIUM,N,2,currency
 
 `denominator` accepts `N`, `Average row value`, an empty value, or `__none__` for average row value, or any numeric column name for weighted response values. `format` accepts `number`, `currency`, or `percent`.
 
-KPI rows appear as read-only presets in their own sidebar KPI accordion. They set Actual, Weight, decimals, and formatting only; filters and Line/Bar view state belong to saved favourites, not the KPI CSV.
+KPI rows appear as read-only presets in their own sidebar KPI accordion. They set Actual, Weight, decimals, and formatting only; filters and Line/Bar view state belong to saved favourites, not the KPI CSV. In a narrow sidebar, the KPI name can use up to 80% of its row while the muted numerator/denominator detail uses the remaining space and truncates first.
 
 When the Specifications tool opens a missing KPI spec, it starts with one blank row and visual placeholder hints for each field; those hints are not saved as cell values.
 

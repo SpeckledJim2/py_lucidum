@@ -436,6 +436,10 @@
         align-items: center;
       }
 
+      .kpi-list .kpi-option {
+        grid-template-columns: fit-content(80%) minmax(0, 1fr);
+      }
+
       .favourites-list .saved-favourite-option.active,
       .kpi-list .kpi-option.active,
       .gbm-model-list .gbm-model-option.active,

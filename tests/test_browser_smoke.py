@@ -13092,16 +13092,17 @@ COPY (
             tmp_path = Path(tmp_dir)
             data_path = tmp_path / "sample.csv"
             data_path.write_text(
-                "PostcodeArea,PostcodeSector,vehicle_age,price,value,rate\n"
-                "AB,AB10 1,1,100,10,0.1\n"
-                "AB,AB10 1,2,200,20,0.2\n"
-                "AL,AL1 1,3,300,30,0.3\n",
+                "PostcodeArea,PostcodeSector,vehicle_age,net_incurred,earned_exposure_in_period,value,rate\n"
+                "AB,AB10 1,1,100,0.5,10,0.1\n"
+                "AB,AB10 1,2,200,1.0,20,0.2\n"
+                "AL,AL1 1,3,300,1.5,30,0.3\n",
                 encoding="utf-8",
             )
             kpis_path = tmp_path / "kpi_spec.csv"
             kpis_path.write_text(
                 "group,name,actual,denominator,decimals,format\n"
-                "PRICE,Price,price,N,2,currency\n"
+                "PRICE,Burning cost,net_incurred,earned_exposure_in_period,2,currency\n"
+                "PRICE,Burning cost with an unusually long KPI name,net_incurred,earned_exposure_in_period,2,currency\n"
                 "VALUE,Value,value,N,1,number\n"
                 "RATE,Rate,rate,N,1,percent\n",
                 encoding="utf-8",
@@ -33035,10 +33036,69 @@ COPY (
                     timeout=10_000,
                 )
                 page.locator("#kpiSelect .kpi-theme").first.wait_for(timeout=10_000)
-                price_row = page.locator('.kpi-option[data-kpi-group="PRICE"]')
-                self.assertEqual(page.locator("#actualNumerator").input_value(), "price")
-                self.assertEqual(page.locator("#denominator").input_value(), "__none__")
+                price_row = page.locator('.kpi-option[data-kpi-group="PRICE"]').first
+                self.assertEqual(page.locator("#actualNumerator").input_value(), "net_incurred")
+                self.assertEqual(page.locator("#denominator").input_value(), "earned_exposure_in_period")
                 self.assertEqual(price_row.get_attribute("aria-selected"), "true")
+
+                page.evaluate("() => document.documentElement.style.setProperty('--sidebar-width', '220px')")
+                page.evaluate("() => new Promise((resolve) => requestAnimationFrame(() => resolve()))")
+                narrow_kpi_layout = page.evaluate(
+                    """
+                    () => {
+                      const rows = [...document.querySelectorAll('.kpi-option[data-kpi-group="PRICE"]')];
+                      const burningCost = rows.find((row) => row.querySelector(".saved-filter-name")?.textContent.trim() === "Burning cost");
+                      const longKpi = rows.find((row) => row.querySelector(".saved-filter-name")?.textContent.trim().includes("unusually long"));
+                      const name = burningCost?.querySelector(".saved-filter-name");
+                      const detail = burningCost?.querySelector(".kpi-detail");
+                      const longName = longKpi?.querySelector(".saved-filter-name");
+                      const rowStyle = longKpi ? getComputedStyle(longKpi) : null;
+                      const contentWidth = longKpi && rowStyle
+                        ? longKpi.clientWidth - parseFloat(rowStyle.paddingLeft) - parseFloat(rowStyle.paddingRight)
+                        : 0;
+                      return {
+                        nameText: name?.textContent.trim() || "",
+                        detailText: detail?.textContent.trim() || "",
+                        nameFits: Boolean(name && name.scrollWidth <= name.clientWidth + 1),
+                        detailTruncates: Boolean(detail && detail.scrollWidth > detail.clientWidth + 1),
+                        detailWidth: detail?.getBoundingClientRect().width || 0,
+                        longNameTruncates: Boolean(longName && longName.scrollWidth > longName.clientWidth + 1),
+                        longNameWidth: longName?.getBoundingClientRect().width || 0,
+                        contentWidth,
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(narrow_kpi_layout["nameText"], "Burning cost")
+                self.assertEqual(
+                    narrow_kpi_layout["detailText"],
+                    "net_incurred / earned_exposure_in_period",
+                )
+                self.assertTrue(narrow_kpi_layout["nameFits"])
+                self.assertTrue(narrow_kpi_layout["detailTruncates"])
+                self.assertGreater(narrow_kpi_layout["detailWidth"], 0)
+                self.assertTrue(narrow_kpi_layout["longNameTruncates"])
+                self.assertLessEqual(
+                    narrow_kpi_layout["longNameWidth"],
+                    narrow_kpi_layout["contentWidth"] * 0.8 + 1,
+                )
+
+                page.evaluate("() => document.documentElement.style.setProperty('--sidebar-width', '400px')")
+                page.evaluate("() => new Promise((resolve) => requestAnimationFrame(() => resolve()))")
+                normal_kpi_layout = price_row.evaluate(
+                    """
+                    row => {
+                      const name = row.querySelector(".saved-filter-name");
+                      const detail = row.querySelector(".kpi-detail");
+                      return {
+                        nameFits: Boolean(name && name.scrollWidth <= name.clientWidth + 1),
+                        detailFits: Boolean(detail && detail.scrollWidth <= detail.clientWidth + 1),
+                      };
+                    }
+                    """
+                )
+                self.assertTrue(normal_kpi_layout["nameFits"])
+                self.assertTrue(normal_kpi_layout["detailFits"])
 
                 value_heading = page.locator('.kpi-theme[data-kpi-group="VALUE"]')
                 value_row = page.locator('.kpi-option[data-kpi-group="VALUE"]')
