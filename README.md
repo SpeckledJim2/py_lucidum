@@ -10,16 +10,16 @@ The app is designed for local analysis: your dataset stays on the machine runnin
 - **Column Profile**: review dataset columns, missing values, distinct counts, ranges, value counts, and numeric/date distributions. Large datasets open with a fast preview summary and can be recalculated on all rows. Right-click a column row to copy the feature name.
 - **Line and Bar**: plot grouped Actual and up to two optional Expected response values over one or two features in a full-bleed chart/table workspace. Its scrollbar-free settings strip uses edge fades to mark off-screen controls and supports horizontal trackpad/touch gestures, keyboard focus scrolling, and ordinary vertical mouse-wheel scrolling. One-feature views retain the existing line/bar controls, including sorting, transforms, sigma bars, SHAP ribbons, and GLM partial-dependence overlays. A plain feature click always makes that row the sole Feature 1; Command-click another feature on macOS, or Ctrl-click it on Windows/Linux, to add or remove Feature 2 without disabling the remaining rows. The double-ended arrow beside the x-axis heading swaps the two features together with their independent grouping controls in one refresh. Two untreated continuous numeric/date groupings render a surface whose axes use the exact plotted data ranges and whose 3D footprint expands responsively on wider chart areas, continuous/factor groupings render colour-matched response lines with stacked Weight/N bars, and factor/factor groupings render a heatmap whose category axes independently suppress tick labels that cannot fit at the 8px legibility floor while retaining axis titles and tooltips. Dates are continuous by default, use chronological date-aware line/surface axes, and expose `Treat as factor` alongside their independent calendar bucket so the same pair can switch to lines or a heatmap. Numeric features expose the same override alongside independent banding and quantile controls. A one-feature `Missings — Show / Hide` control, or one independent control per feature in two-feature mode, either retains missing groups or removes raw rows missing that feature from the Line/Bar analysis. Shown missing-volume bars use pale grey. Hide recalculates the Line/Bar chart, table totals, transforms, overlays, pagination, and displayed Line/Bar row count, but the shared sidebar Numerator and Denominator values remain based on the global filter so switching tools does not change their meaning. Numeric tails Winsorise fixed-width values at that feature's percentile cutoffs; categorical tails combine at least two marginal levels at or below the chosen share of filtered Weight/N into `Other`. In one-feature ordered low-weight grouping, shown missings stay separate and do not consume either tail, although percentage thresholds still use total included Weight/N. Quantile, date, and unbanded numeric groupings ignore two-feature Tail grouping. Mixed line/bar plots always show volume and offer a cached Plot chooser only when multiple response values are available; surfaces and heatmaps show one chosen response or Weight/N at a time. Factor/factor heatmaps accept up to 100,000 populated grouped cells; other Line/Bar charts retain the 10,000-group guard. Heatmaps offer cached `-`, `Actual`, `Weight`, and, where two lines fit, `Both` cell labels, using active-KPI response formatting, contrast-aware text colours, and responsive font sizing. Each label mode remains available at larger category counts whenever its formatted text still fits at the separate 7px cell-label floor. The server-backed table keeps both feature columns and every selected response. The tool also supports a shared Denominator, including the active primary GLM or GBM prediction joined by row identity, lazily estimated numeric banding, date buckets with optional empty-period display in one-feature mode, searchable/paginated tables, A-Z picker defaults, a launch-collapsed Expected picker, saved Favourites views, an active GBM/GLM prediction-ratio feature, and feature ordering by saved GBM/GLM importance.
 
-  ![lucidum line and bar tool](docs/assets/line_and_bar.png)
+  ![lucidum line and bar tool](https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/line_and_bar.png)
 
 - **Histogram**: plot the selected Actual value, or Actual divided by Weight, as a filtered distribution in a full-bleed workspace with a launch-collapsed borderless settings strip and a compact metrics table separated from the chart by a draggable divider. When a Denominator is selected, the x-axis title identifies the plotted calculation as `Numerator / Denominator`; Average row value shows only the Numerator. Histogram supports bin counts or explicit original-unit bin widths with boundaries anchored to rounded width multiples, integer-aware bins for discrete numeric Actuals, optional responsive values above bins, denser fit-aware x-axis labels, sampled 100k previews or exact all-row mode, cumulative/probability modes, log axes, mean/median reference lines, and saved Histogram view favourites.
 - **UK Mapping**: map postcode areas and sectors with bundled GeoJSON, including optional sector neighbour smoothing, or postcode units when unit and coordinate columns are available. Area and sector maps continue plotting valid geometry when some nonblank postcode values are absent from the bundled shapes, report the affected row count and percentage below the geometry match count, and report blank postcode counts and percentages separately. Colour legends and hotspot selection use only values attached to geometry that can actually be drawn. Right-click the map at any resolution to stage a postcode-region selection and apply it as one global area filter; postcode popups provide View rows, Zoom, Copy, and postcode filtering actions.
 
-  ![UK Postcode Area mapping tool](docs/assets/postcode_area.png)
+  ![UK Postcode Area mapping tool](https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/postcode_area.png)
 
-  ![UK Postcode Sector mapping tool](docs/assets/postcode_sector.png)
+  ![UK Postcode Sector mapping tool](https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/postcode_sector.png)
 
-  ![UK Postcode Unit mapping tool](docs/assets/postcode_unit.png)
+  ![UK Postcode Unit mapping tool](https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/postcode_unit.png)
 
 - **GLM**: optional `glum` model building with Formulaic formulas, coefficient tables, persisted tabulations/rating tables with XLSX export, and active `glm_prediction`, denominator-backed `glm_prediction_rate`, and `glm_tabulated_prediction` sources that can be plotted like other model predictions. The header status badge reports elapsed time from the build click through fitting and post-fit scoring, and separately times tabulation through row scoring.
 - **GBM**: optional LightGBM model building with persistent sidecar artifacts, predictions and denominator-backed prediction rates that can be plotted as chart/map data sources, evaluation plots, model navigation, tree viewing, SHAP plotting when SHAP rows are saved during training, and XLSX export for saved tabulations. The header status badge reports elapsed time through training, scoring, SHAP calculation, artifact saving, and final client refresh.
@@ -34,9 +34,11 @@ Unreadable dataset columns, such as Parquet strings with invalid UTF-8, are skip
 
 ## Installation
 
-Lucidum requires Python 3.13 or newer. For a user-level `lucidum` command,
-install the latest PyPI release with `pipx`. Choose the optional modelling
-extras you need at install time:
+Lucidum requires Python 3.13 or newer. Both `pip` and `pipx` download the same
+`py-lucidum` package from PyPI. For a user-level `lucidum` command, `pipx` is
+recommended because it gives Lucidum its own isolated environment and exposes
+the command on your `PATH`. Choose the optional modelling extras you need at
+install time:
 
 ```bash
 pipx install --python python3.13 py-lucidum
@@ -51,6 +53,38 @@ For a reproducible Lucidum version, pin the release explicitly:
 pipx install --python python3.13 "py-lucidum==0.4.59"
 pipx install --python python3.13 "py-lucidum[glm,gbm]==0.4.59"
 ```
+
+The `pip install py-lucidum` command shown at the top of the PyPI project page
+is also supported. `pip` installs into whichever Python environment is
+currently selected, so on a clean machine create and activate a virtual
+environment first. On macOS or Linux:
+
+```bash
+python3.13 -m venv lucidum-venv
+source lucidum-venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install "py-lucidum==0.4.59"
+```
+
+On Windows PowerShell:
+
+```powershell
+py -3.13 -m venv lucidum-venv
+.\lucidum-venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install "py-lucidum==0.4.59"
+```
+
+Omit `==0.4.59` to install the latest release. To include both optional
+modelling toolsets with plain `pip`, use:
+
+```bash
+python -m pip install "py-lucidum[glm,gbm]==0.4.59"
+```
+
+Once the virtual environment is active, `lucidum` is available in that
+terminal. Using `python -m pip` makes explicit which Python environment receives
+the installation; do not use `sudo pip` for Lucidum.
 
 Use the same requirement in another Python project's dependency metadata or
 requirements file:
@@ -120,10 +154,15 @@ pipx install --python python3.13 "/path/to/py_lucidum[glm,gbm]"
 Launch the bundled synthetic demo dataset:
 
 ```bash
-.venv/bin/lucidum --demo --port 8000
+lucidum --demo --port 8000
 ```
 
-Open the printed URL in your browser. Stop the server with `Ctrl+C` in the terminal. Pass `--buttons` when you want the browser header to show `Stop app` and `Open monitor` buttons.
+This command works after either the `pipx` installation or activation of the
+plain-`pip` virtual environment. From a source checkout whose development
+environment is not activated, use `.venv/bin/lucidum` instead. Open the printed
+URL in your browser. Stop the server with `Ctrl+C` in the terminal. Pass
+`--buttons` when you want the browser header to show `Stop app` and `Open
+monitor` buttons.
 
 Demo launches label the header as `Lucidum Demo Dataset · motor_premiums.parquet · ...` before the size, row count, and column count.
 
