@@ -34,22 +34,34 @@ Unreadable dataset columns, such as Parquet strings with invalid UTF-8, are skip
 
 ## Installation
 
-From the project root:
+Lucidum requires Python 3.13 or newer. For a user-level `lucidum` command,
+install the latest PyPI release with `pipx`. Choose the optional modelling
+extras you need at install time:
 
 ```bash
-python3.13 -m venv .venv
-.venv/bin/python -m pip install --upgrade pip
-.venv/bin/python -m pip install -e .
+pipx install --python python3.13 py-lucidum
+pipx install --python python3.13 "py-lucidum[glm]"
+pipx install --python python3.13 "py-lucidum[gbm]"
+pipx install --python python3.13 "py-lucidum[glm,gbm]"
 ```
 
-This installs the `lucidum` command inside the virtual environment.
-
-To enable GLM or GBM model training, install the relevant optional modelling extra:
+For a reproducible Lucidum version, pin the release explicitly:
 
 ```bash
-.venv/bin/python -m pip install -e ".[glm]"
-.venv/bin/python -m pip install -e ".[gbm]"
+pipx install --python python3.13 "py-lucidum==0.4.54"
+pipx install --python python3.13 "py-lucidum[glm,gbm]==0.4.54"
 ```
+
+Use the same requirement in another Python project's dependency metadata or
+requirements file:
+
+```bash
+py-lucidum==0.4.54
+```
+
+An exact Lucidum pin fixes Lucidum's code but does not pin DuckDB, FastAPI, or
+its other transitive dependencies. Use the consuming project's normal lock or
+constraints file when the complete environment must be reproducible.
 
 On macOS, LightGBM also needs the OpenMP runtime. This applies whether you
 install with a virtual environment or `pipx`. If training fails with a
@@ -59,33 +71,48 @@ install with a virtual environment or `pipx`. If training fails with a
 brew install libomp
 ```
 
-For a user-level command, install directly from GitHub with `pipx`. Choose the
-modelling extras you need at install time:
+Upgrade an existing PyPI installation with:
 
 ```bash
-pipx install --python python3.13 git+https://github.com/SpeckledJim2/py_lucidum.git
-pipx install --python python3.13 "py-lucidum[glm] @ git+https://github.com/SpeckledJim2/py_lucidum.git"
-pipx install --python python3.13 "py-lucidum[gbm] @ git+https://github.com/SpeckledJim2/py_lucidum.git"
-pipx install --python python3.13 "py-lucidum[glm,gbm] @ git+https://github.com/SpeckledJim2/py_lucidum.git"
+pipx upgrade py-lucidum
 ```
 
-Quote pipx package specs with extras exactly as shown, because shells treat
-spaces as separators and can interpret `[glm,gbm]` as a filename pattern.
+To change the installed extras, reinstall with the desired spec:
 
-When installing from a local checkout instead of GitHub, use the same extra
-names with the local path:
+```bash
+pipx uninstall py-lucidum
+pipx install --python python3.13 "py-lucidum[glm,gbm]"
+```
+
+If PyPI is unavailable, install the same immutable release from its Git tag:
+
+```bash
+pipx install --python python3.13 "py-lucidum @ git+https://github.com/SpeckledJim2/py_lucidum.git@v0.4.54"
+pipx install --python python3.13 "py-lucidum[glm,gbm] @ git+https://github.com/SpeckledJim2/py_lucidum.git@v0.4.54"
+```
+
+Quote package specifications containing extras exactly as shown, because shells
+can interpret `[glm,gbm]` as a filename pattern. The distribution name used by
+installers is `py-lucidum`, the Python import is `py_lucidum`, and the installed
+command is `lucidum`.
+
+For development from a source checkout, create an editable environment from
+the project root:
+
+```bash
+python3.13 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install -e .
+.venv/bin/python -m pip install -e ".[glm]"
+.venv/bin/python -m pip install -e ".[gbm]"
+```
+
+For a pipx command backed by a local checkout, use the same extra names with the
+local path:
 
 ```bash
 pipx install --python python3.13 /path/to/py_lucidum
 pipx install --python python3.13 "/path/to/py_lucidum[glm,gbm]"
-```
-
-If you already installed Lucidum with `pipx` without modelling extras, reinstall
-it with the extra spec you want:
-
-```bash
-pipx uninstall py-lucidum
-pipx install --python python3.13 "py-lucidum[glm,gbm] @ git+https://github.com/SpeckledJim2/py_lucidum.git"
 ```
 
 ## Quick Start

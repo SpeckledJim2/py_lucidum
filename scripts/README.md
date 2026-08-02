@@ -50,6 +50,29 @@ remains an explicit packaging/release command:
 .venv/bin/python scripts/run_tests.py pipx
 ```
 
+By default this installs the current checkout. Release automation can set
+`PY_LUCIDUM_PIPX_SPEC` to a built wheel or an exact index requirement and
+`PY_LUCIDUM_EXPECTED_VERSION` to require matching `lucidum --version` output.
+
+## Release Artifacts
+
+`release_artifacts.py` validates the wheel/sdist names, metadata, and required
+bundled assets, then writes `SHA256SUMS`:
+
+```bash
+.venv/bin/python scripts/release_artifacts.py inspect \
+  --dist-dir path/to/dist --version X.Y.Z
+```
+
+The release workflow uses the same helper to compare those local hashes with
+the files returned by TestPyPI and PyPI:
+
+```bash
+.venv/bin/python scripts/release_artifacts.py verify-index \
+  --dist-dir path/to/dist --version X.Y.Z \
+  --repository-url https://pypi.org/pypi
+```
+
 ## Browser Smoke Tests
 
 Use the canonical runner instead of running browser-enabled pytest directly

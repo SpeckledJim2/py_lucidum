@@ -6,6 +6,7 @@ This file gives future coding agents the shortest reliable path into `py_lucidum
 
 - Read `README.md` for user-facing installation, launch commands, and current tool behavior.
 - Read `DEVELOPMENT.md` before non-trivial changes. It is the durable maintainer context for architecture, behavior contracts, test commands, and commit rules.
+- Read the `Releasing` section in `DEVELOPMENT.md` before packaging, tagging, or publishing a release.
 - Current GBM product notes live in `docs/specs/gbm-tool.md`; `docs/specs/gbm-tool_plan.md` is historical implementation context only.
 
 ## Environment Notes
@@ -91,3 +92,24 @@ merely to save time.
 - Before every commit, unless the user explicitly says not to, run `.venv/bin/python scripts/bump_version.py patch`. Include `pyproject.toml` in the same commit and report the final version number.
 
 Keep local datasets, `.lucidum/`, virtualenvs, caches, build artifacts, and generated README previews out of git.
+
+## Before Releasing
+
+- Release only a clean `main` commit whose hosted `CI` workflow passed. Run the
+  release-only pipx/build checks before tagging; the tag workflow repeats the
+  artifact and installed-wheel checks.
+- Make all release-preparation changes in one commit when a specific next
+  version is required. Apply the normal version bump once before that commit,
+  then create an annotated `vMAJOR.MINOR.PATCH` tag whose value exactly matches
+  `project.version` in `pyproject.toml`.
+- Do not create or push a release tag, publish or approve a production
+  deployment, move a released tag, or yank a release without explicit user
+  authorization. Repository changes alone do not imply permission for those
+  external actions.
+- PyPI filenames and versions cannot be reused, and published immutable GitHub
+  release tags/assets cannot be edited. Fix a bad published release by yanking
+  it when appropriate and publishing a higher patch version; never rebuild or
+  repoint the old version.
+- `py-lucidum==X.Y.Z` pins Lucidum only. It does not lock transitive dependency
+  versions; consuming projects should use their own lock or constraints file
+  when they need a reproducible complete environment.

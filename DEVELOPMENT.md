@@ -468,6 +468,107 @@ The current test suite should cover:
 - GBM validation, sidecar model store behavior, optional dependency failures, native runtime dependency failures, live job progress, active-model feature/parameter refresh, model data-source publishing, interaction-group text-model extraction and metadata compaction, Gain ordering, SHAP row limits, SHAP plot aggregation routes, tree summary/detail routes, and chart/map use of prediction sources.
 - Browser smoke behavior for loading profile, chart, histogram, map, and GBM tools without unexpected extra API requests, stale active-model state, or leaked cross-tool focus/listener side effects, including live GBM progress, the GBM tree viewer, and the GBM SHAP screen.
 
+## Releasing
+
+Lucidum releases use annotated Git tags, immutable GitHub releases, and GitHub
+Actions Trusted Publishing. `.github/workflows/ci.yml` runs the complete test
+gate for `main` and pull requests. `.github/workflows/release.yml` accepts only
+an annotated `vMAJOR.MINOR.PATCH` tag that matches `pyproject.toml`, points to
+`main`, and has a successful hosted `CI` run. It builds one wheel/sdist pair and
+promotes those exact bytes through TestPyPI, PyPI, and the GitHub release.
+
+### One-time repository and index setup
+
+1. Create separate PyPI and TestPyPI accounts, enable the required two-factor
+   authentication, and store recovery codes safely. The two indexes do not
+   share accounts or trusted-publisher configuration.
+2. Create GitHub environments named `testpypi` and `pypi`. Restrict both to tag
+   deployments matching `v*`. Do not require approval for `testpypi`; require
+   a maintainer approval for `pypi`. A sole maintainer must leave prevention of
+   self-review disabled until another reviewer is available.
+3. Register a pending GitHub Actions publisher on each index with these exact
+   values:
+   - PyPI project: `py-lucidum`
+   - GitHub owner: `SpeckledJim2`
+   - GitHub repository: `py_lucidum`
+   - Workflow filename: `release.yml`
+   - Environment: `testpypi` on TestPyPI and `pypi` on PyPI
+4. In the GitHub repository's general settings, enable release immutability.
+   This applies when the draft release is published, after all artifacts have
+   been attached and verified.
+
+A pending publisher can create the project on first upload but does not reserve
+the project name. Complete the first release promptly after setup. The release
+workflow needs no stored PyPI token: only its publishing jobs receive
+`id-token: write`, and all other job permissions stay minimal.
+
+### Routine release checklist
+
+1. Start from a clean `main` synchronized with `origin/main`. Confirm the target
+   version does not already have a Git tag or PyPI release.
+2. Put all preparation for a specific release in one commit. Run the normal
+   patch/minor/major bump exactly once before committing, and do not hard-code a
+   different version in release assets or workflows.
+3. Run the packaging-specific local checks in addition to the normal commit
+   gate. `build` and `twine` may be installed in the development environment:
+
+```bash
+.venv/bin/python scripts/run_tests.py pipx
+release_dist=$(mktemp -d)
+.venv/bin/python -m build --outdir "$release_dist"
+.venv/bin/python -m twine check "$release_dist"/*
+.venv/bin/python scripts/release_artifacts.py inspect \
+  --dist-dir "$release_dist" --version X.Y.Z
+```
+
+4. Commit the release preparation. A normal push runs the local pre-push hook;
+   wait for the hosted `CI` workflow to pass on that exact `main` commit.
+5. Create and push the annotated tag without moving or replacing an existing
+   tag:
+
+```bash
+git tag -a vX.Y.Z -m "py-lucidum X.Y.Z"
+git push origin vX.Y.Z
+```
+
+6. The release workflow validates the tag and CI result, builds and pipx-smokes
+   the distributions, writes `SHA256SUMS`, creates a draft GitHub release, then
+   publishes and hash-verifies the artifacts on TestPyPI.
+7. While the `pypi` environment waits for approval, inspect TestPyPI and edit
+   the draft GitHub release notes. The notes should summarize user-visible
+   changes, Python compatibility, optional extras, and installation commands.
+8. Approve `pypi` only when the TestPyPI files and draft are correct. The
+   workflow publishes the same artifacts to PyPI, verifies their hashes,
+   installs the exact release through pipx, exercises the launcher health
+   check, and finally publishes the immutable GitHub release.
+9. Verify the public result and update consuming projects:
+
+```bash
+python3.13 -m pip install "py-lucidum==X.Y.Z"
+lucidum --version
+gh release view vX.Y.Z
+```
+
+An exact `py-lucidum` pin does not lock its transitive dependencies. Apply a
+lock or constraints file in each consuming project when the complete resolved
+environment must be reproducible.
+
+### Failures and recovery
+
+- For a transient workflow failure, rerun only failed jobs so successful index
+  uploads are not attempted again. Do not rerun the entire workflow after an
+  index has accepted an artifact.
+- Before production publication, reject the `pypi` deployment when validation
+  is doubtful. Fix the problem in a new commit, bump again, and use a new tag;
+  never repoint the pushed tag.
+- After PyPI accepts a version, its filenames cannot be reused even if files or
+  the project are later deleted. Yank a broken release with a clear reason and
+  publish the fix at a higher patch version.
+- A published immutable GitHub release locks its tag and attached assets. Do
+  not delete, replace, or work around that history; publish a new release.
+- Because every repository commit increments `project.version`, not every
+  version needs a tag. Gaps between published versions are expected and safe.
+
 ## Future Work
 
 - Reduce private-helper imports between modelling and chart code by formalizing shared modelling/chart contracts where reuse is stable, while preserving intentional Line/Bar consumption of GLM/GBM model outputs.

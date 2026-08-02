@@ -14,6 +14,8 @@ from urllib.request import urlopen
 
 
 RUN_PIPX_INSTALL_TESTS = os.environ.get("PY_LUCIDUM_RUN_PIPX_INSTALL_TESTS") == "1"
+PIPX_SPEC_ENV = "PY_LUCIDUM_PIPX_SPEC"
+EXPECTED_VERSION_ENV = "PY_LUCIDUM_EXPECTED_VERSION"
 
 
 class PipxInstallTests(unittest.TestCase):
@@ -49,6 +51,8 @@ class PipxInstallTests(unittest.TestCase):
 
         repo_root = Path(__file__).resolve().parents[1]
         install_python = os.environ.get("PY_LUCIDUM_PIPX_PYTHON", sys.executable)
+        install_spec = os.environ.get(PIPX_SPEC_ENV, str(repo_root))
+        expected_version = os.environ.get(EXPECTED_VERSION_ENV)
 
         with TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
@@ -72,7 +76,7 @@ class PipxInstallTests(unittest.TestCase):
             )
 
             install = subprocess.run(
-                [pipx, "install", "--force", "--python", install_python, str(repo_root)],
+                [pipx, "install", "--force", "--python", install_python, install_spec],
                 env=env,
                 text=True,
                 stdout=subprocess.PIPE,
@@ -88,6 +92,23 @@ class PipxInstallTests(unittest.TestCase):
 
             lucidum = pipx_bin / ("lucidum.exe" if os.name == "nt" else "lucidum")
             self.assertTrue(lucidum.exists(), f"Expected pipx to expose {lucidum}")
+
+            version = subprocess.run(
+                [str(lucidum), "--version"],
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=30,
+                check=False,
+            )
+            self.assertEqual(
+                version.returncode,
+                0,
+                f"lucidum --version failed\nSTDOUT:\n{version.stdout}\nSTDERR:\n{version.stderr}",
+            )
+            if expected_version:
+                self.assertEqual(version.stdout.strip(), f"lucidum {expected_version}")
 
             with socket.socket() as sock:
                 sock.bind(("127.0.0.1", 0))

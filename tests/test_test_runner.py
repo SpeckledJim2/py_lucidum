@@ -219,7 +219,12 @@ class TestRunnerTests(unittest.TestCase):
         )
 
     def test_pipx_command_enables_install_test_and_preserves_environment(self) -> None:
-        with patch.dict(os.environ, {"PY_LUCIDUM_PIPX_PYTHON": "python3.13"}, clear=False):
+        release_env = {
+            "PY_LUCIDUM_EXPECTED_VERSION": "1.2.3",
+            "PY_LUCIDUM_PIPX_PYTHON": "python3.13",
+            "PY_LUCIDUM_PIPX_SPEC": "/tmp/py_lucidum-1.2.3-py3-none-any.whl",
+        }
+        with patch.dict(os.environ, release_env, clear=False):
             with patch.object(run_tests, "run_process", return_value=0) as run_process:
                 with redirect_stdout(io.StringIO()):
                     code = run_tests.run_pipx(self.root)
@@ -227,7 +232,8 @@ class TestRunnerTests(unittest.TestCase):
         self.assertEqual(code, 0)
         env = run_process.call_args.kwargs["env"]
         self.assertEqual(env["PY_LUCIDUM_RUN_PIPX_INSTALL_TESTS"], "1")
-        self.assertEqual(env["PY_LUCIDUM_PIPX_PYTHON"], "python3.13")
+        for name, value in release_env.items():
+            self.assertEqual(env[name], value)
 
     def test_hooks_route_to_matching_runner_lanes(self) -> None:
         with TemporaryDirectory() as tmp_dir:
