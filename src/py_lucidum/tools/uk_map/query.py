@@ -72,16 +72,7 @@ COORDINATE_COLUMNS = {
     },
 }
 
-UNIT_POINT_FIELDS = (
-    "key",
-    "row_count",
-    "numerator",
-    "denominator",
-    "volume",
-    "value",
-    "latitude",
-    "longitude",
-)
+UNIT_POINT_GEOMETRY_FIELDS = ("key", "row_count", "latitude", "longitude")
 
 
 def summary(dataset: Dataset, request: dict[str, Any], defaults: dict[str, str] | None = None) -> dict[str, Any]:
@@ -103,6 +94,8 @@ def summary(dataset: Dataset, request: dict[str, Any], defaults: dict[str, str] 
         level = normalise_level(request.get("level"))
         smoothing_level = normalise_smoothing_level(request.get("smoothingLevel"))
         compact_unit_points = level == "unit" and bool(request.get("compactUnitPoints"))
+        reuse_unit_geometry = compact_unit_points and bool(request.get("reuseUnitGeometry"))
+        minimal_unit_metrics = compact_unit_points and str(request.get("compactUnitMetrics") or "").lower() == "minimal"
         response = normalise_response(request, columns)
         denominator = normalise_denominator(request.get("denominator", request.get("weight")), columns)
         app_defaults = defaults or {}
@@ -128,6 +121,8 @@ def summary(dataset: Dataset, request: dict[str, Any], defaults: dict[str, str] 
                 source_id=source_id,
                 relation=relation,
                 compact=compact_unit_points,
+                include_geometry=not reuse_unit_geometry,
+                minimal_metrics=minimal_unit_metrics,
             )
             smoothing = smoothing_metadata(0, smoothing_level, point_summary["plotted_count"])
             smoothing_warning = None
@@ -204,6 +199,10 @@ def summary(dataset: Dataset, request: dict[str, Any], defaults: dict[str, str] 
         }
         if compact_unit_points:
             payload["unit_points"] = rows_or_points
+            payload["unit_geometry"] = {
+                "included": not reuse_unit_geometry,
+                "point_count": len(rows_or_points["value"]),
+            }
         else:
             payload["rows"] = rows
         if point_summary:
@@ -503,6 +502,8 @@ def unit_rows(
     relation: str | None = None,
     *,
     compact: bool = False,
+    include_geometry: bool = True,
+    minimal_metrics: bool = False,
 ) -> tuple[list[dict[str, Any]] | dict[str, list[Any]], dict[str, int]]:
     sql = build_unit_summary_sql(
         relation or dataset.relation_sql_for_source(source_id),
@@ -518,7 +519,13 @@ def unit_rows(
     column_indexes = {name: index for index, name in enumerate(column_names)}
     raw_rows = cursor.fetchall()
     if compact:
-        return compact_unit_points(raw_rows, column_indexes)
+        return compact_unit_points(
+            raw_rows,
+            column_indexes,
+            include_geometry=include_geometry,
+            include_metric_components=not minimal_metrics or bool(denominator.get("column")),
+            include_volume=not minimal_metrics,
+        )
 
     raw_dicts = [dict(zip(column_names, row)) for row in raw_rows]
     rows: list[dict[str, Any]] = []
@@ -557,10 +564,22 @@ def unit_rows(
 def compact_unit_points(
     raw_rows: list[tuple[Any, ...]],
     column_indexes: dict[str, int],
+    *,
+    include_geometry: bool = True,
+    include_metric_components: bool = True,
+    include_volume: bool = False,
 ) -> tuple[dict[str, list[Any]], dict[str, int]]:
-    points: dict[str, list[Any]] = {field: [] for field in UNIT_POINT_FIELDS}
+    fields = ["value"]
+    if include_metric_components:
+        fields[0:0] = ["numerator", "denominator"]
+    if include_volume:
+        fields.insert(-1, "volume")
+    if include_geometry:
+        fields[0:0] = list(UNIT_POINT_GEOMETRY_FIELDS)
+    points: dict[str, list[Any]] = {field: [] for field in fields}
     missing_value_count = 0
     missing_coordinate_count = 0
+    plotted_count = 0
     key_index = column_indexes["key"]
     row_count_index = column_indexes["row_count"]
     latitude_index = column_indexes["latitude"]
@@ -574,22 +593,26 @@ def compact_unit_points(
         longitude = json_number(row[longitude_index])
         if value is None:
             missing_value_count += 1
-            continue
-        if latitude is None or longitude is None:
+        elif latitude is None or longitude is None:
             missing_coordinate_count += 1
+        else:
+            plotted_count += 1
+        if latitude is None or longitude is None:
             continue
-        denominator = json_number(row[denominator_index])
-        points["key"].append(row[key_index])
-        points["row_count"].append(json_number(row[row_count_index]))
-        points["numerator"].append(json_number(row[numerator_index]))
-        points["denominator"].append(denominator)
-        points["volume"].append(denominator)
+        if include_geometry:
+            points["key"].append(row[key_index])
+            points["row_count"].append(json_number(row[row_count_index]))
+            points["latitude"].append(latitude)
+            points["longitude"].append(longitude)
+        if include_metric_components:
+            points["numerator"].append(json_number(row[numerator_index]))
+            points["denominator"].append(json_number(row[denominator_index]))
+        if include_volume:
+            points["volume"].append(json_number(row[denominator_index]))
         points["value"].append(value)
-        points["latitude"].append(latitude)
-        points["longitude"].append(longitude)
     return points, {
         "summary_count": len(raw_rows),
-        "plotted_count": len(points["key"]),
+        "plotted_count": plotted_count,
         "missing_value_count": missing_value_count,
         "missing_coordinate_count": missing_coordinate_count,
     }

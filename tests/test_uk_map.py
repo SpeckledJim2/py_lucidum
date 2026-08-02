@@ -496,6 +496,7 @@ class UkMapToolTests(unittest.TestCase):
             "missing_value_count": 0,
             "missing_coordinate_count": 1,
         })
+        self.assertEqual(payload["unit_geometry"], {"included": True, "point_count": 3})
         self.assertEqual(points["key"], ["AB10 1AA", "AL1 1AA", "AL1 2AA"])
         self.assertEqual(points["row_count"], [2, 1, 1])
         self.assertEqual(points["numerator"], [300, 300, 400])
@@ -508,6 +509,47 @@ class UkMapToolTests(unittest.TestCase):
         self.assertEqual(lengths, {3})
         self.assertIsInstance(payload["timings"]["duckdb_ns"], int)
         self.assertGreaterEqual(payload["timings"]["duckdb_ns"], 0)
+
+    def test_compact_unit_summary_can_reuse_stable_geometry(self) -> None:
+        app = create_app(self.data_path, token="", tools=["uk_map"], use_saved_filters=False, use_kpis=False)
+        request = self.request(
+            level="unit",
+            denominator="Weight",
+            filter="PostcodeArea = 'AL'",
+            compactUnitPoints=True,
+            compactUnitMetrics="minimal",
+        )
+
+        status, _, body = asgi_post_json(app, "/api/uk-map/summary", request)
+        initial = json.loads(body)
+        points = initial["unit_points"]
+
+        self.assertEqual(status, 200)
+        self.assertEqual(initial["unit_geometry"], {"included": True, "point_count": 2})
+        self.assertEqual(points["key"], ["AL1 1AA", "AL1 2AA"])
+        self.assertEqual(points["row_count"], [1, 1])
+        self.assertEqual(points["latitude"], [51.7, 51.8])
+        self.assertEqual(points["longitude"], [-0.4, -0.3])
+        self.assertEqual(points["numerator"], [300, None])
+        self.assertEqual(points["denominator"], [30, 0])
+        self.assertEqual(points["value"], [10, None])
+        self.assertEqual(initial["point_summary"], {
+            "summary_count": 2,
+            "plotted_count": 1,
+            "missing_value_count": 1,
+            "missing_coordinate_count": 0,
+        })
+
+        request["reuseUnitGeometry"] = True
+        status, _, body = asgi_post_json(app, "/api/uk-map/summary", request)
+        reused = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(reused["unit_geometry"], {"included": False, "point_count": 2})
+        self.assertEqual(
+            reused["unit_points"],
+            {"numerator": [300, None], "denominator": [30, 0], "value": [10, None]},
+        )
 
     def test_unit_summary_applies_filter_and_weight(self) -> None:
         dataset = Dataset(self.data_path)
