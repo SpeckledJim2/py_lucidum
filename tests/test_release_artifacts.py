@@ -89,6 +89,23 @@ class ReleaseArtifactTests(unittest.TestCase):
                     interval=0,
                 )
 
+    def test_release_workflow_keeps_checksums_out_of_index_uploads(self) -> None:
+        workflow = (
+            Path(__file__).resolve().parents[1] / ".github" / "workflows" / "release.yml"
+        ).read_text(encoding="utf-8")
+        distribution_upload = workflow.split("- name: Store distributions", 1)[1].split(
+            "- name: Store checksums", 1
+        )[0]
+        checksum_upload = workflow.split("- name: Store checksums", 1)[1].split(
+            "draft-release:", 1
+        )[0]
+
+        self.assertIn("dist/*.whl", distribution_upload)
+        self.assertIn("dist/*.tar.gz", distribution_upload)
+        self.assertNotIn("dist/SHA256SUMS", distribution_upload)
+        self.assertIn("name: python-package-checksums", checksum_upload)
+        self.assertIn("path: dist/SHA256SUMS", checksum_upload)
+
 
 if __name__ == "__main__":
     unittest.main()

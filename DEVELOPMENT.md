@@ -541,7 +541,9 @@ git push origin vX.Y.Z
 
 6. The release workflow validates the tag and CI result, builds and pipx-smokes
    the distributions, writes `SHA256SUMS`, creates a draft GitHub release, then
-   publishes and hash-verifies the artifacts on TestPyPI.
+   publishes and hash-verifies the artifacts on TestPyPI. The wheel and sdist
+   use a package-only Actions artifact for index publishing; `SHA256SUMS` uses
+   a separate artifact and is combined with them only for the GitHub release.
 7. While the `pypi` environment waits for approval, inspect TestPyPI and edit
    the draft GitHub release notes. The notes should summarize user-visible
    changes, Python compatibility, optional extras, and installation commands.
