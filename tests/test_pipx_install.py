@@ -19,6 +19,16 @@ EXPECTED_VERSION_ENV = "PY_LUCIDUM_EXPECTED_VERSION"
 
 
 class PipxInstallTests(unittest.TestCase):
+    def test_gbm_extra_includes_lightgbm_arrow_runtime(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        pyproject = tomllib.loads((repo_root / "pyproject.toml").read_text(encoding="utf-8"))
+        requirements = pyproject["project"]["optional-dependencies"]["gbm"]
+
+        self.assertTrue(
+            any(requirement.startswith("cffi>=") for requirement in requirements),
+            "The GBM training path imports cffi directly, so the gbm extra must install it.",
+        )
+
     def test_wheel_force_include_does_not_duplicate_package_files(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         pyproject = tomllib.loads((repo_root / "pyproject.toml").read_text(encoding="utf-8"))
