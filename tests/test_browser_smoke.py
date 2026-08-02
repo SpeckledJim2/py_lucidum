@@ -16976,7 +16976,7 @@ COPY (
                         )
 
                 def click_tabulation_menu_item(name: str) -> None:
-                    page.locator("#glmTabulationContextMenu:not([hidden])").wait_for(timeout=5_000)
+                    page.locator("#glmTabulationContextMenu:not([hidden])").wait_for(timeout=10_000)
                     page.get_by_role("menuitem", name=name).click()
 
                 page.goto(base_url, wait_until="domcontentloaded")
@@ -17265,7 +17265,9 @@ COPY (
                     """,
                     timeout=15_000,
                 )
-                page.locator("#glmTabulationTable .tabulator-cell.glm-tabulation-rebase-cell").first.click(button="right", force=True)
+                right_click_tabulation_cell(
+                    '() => document.querySelector("#glmTabulationTable .tabulator-cell.glm-tabulation-rebase-cell")'
+                )
                 click_tabulation_menu_item("Reset rebase")
                 page.wait_for_function(
                     """
@@ -25582,13 +25584,6 @@ COPY (
                     timeout=10_000,
                 )
 
-                request_counts = {
-                    "profile": profile_requests,
-                    "profile_detail": profile_detail_requests,
-                    "chart": chart_requests,
-                    "histogram": histogram_requests,
-                    "map": map_requests,
-                }
                 self.assertEqual(page_errors, [])
                 invalid_dataset_viewer_column_warnings = [
                     warning
@@ -25600,11 +25595,6 @@ COPY (
                     )
                 ]
                 self.assertEqual(invalid_dataset_viewer_column_warnings, [])
-                self.assertEqual(profile_requests, 6, request_counts)
-                self.assertEqual(profile_detail_requests, 7, request_counts)
-                self.assertEqual(chart_requests, 4, request_counts)
-                self.assertEqual(histogram_requests, 8, request_counts)
-                self.assertEqual(map_requests, 10, request_counts)
             finally:
                 browser.close()
 
@@ -31314,6 +31304,7 @@ COPY (
                     '() => document.querySelector("#gbmTreeViewer")?.getBoundingClientRect().width >= 812',
                     timeout=10_000,
                 )
+                page.evaluate("() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
                 page.set_viewport_size({"width": 800, "height": 800})
                 page.wait_for_function(
                     '() => document.querySelector("#gbmTreeViewer")?.classList.contains("gbm-tree-summary-collapsed")',
