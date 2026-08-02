@@ -4,6 +4,10 @@
         --histogram-bin-outline: #4b5563;
       }
 
+      body.dark {
+        --histogram-bin-outline: #a8b3c7;
+      }
+
       .visual-area.histogram-mode {
         grid-template-columns: minmax(0, 1fr);
       }

@@ -714,6 +714,55 @@ class BrowserSmokeTests(unittest.TestCase):
                     self.assertEqual(chart_state["outlinedBins"], 50)
                     self.assertLessEqual(chart_state["maximumBoundaryDelta"], 1e-6)
 
+                    def histogram_outline_state() -> dict[str, Any]:
+                        return page.evaluate(
+                            """
+                            () => {
+                              const chart = echarts.getInstanceByDom(document.querySelector("#histogramChart"));
+                              const outlinedBin = chart.getZr().storage.getDisplayList(true).find((item) =>
+                                item.type === "rect" && Number(item.style?.lineWidth) === 0.5
+                              );
+                              return {
+                                dark: document.body.classList.contains("dark"),
+                                stroke: outlinedBin?.style?.stroke || "",
+                                token: getComputedStyle(document.body)
+                                  .getPropertyValue("--histogram-bin-outline").trim(),
+                              };
+                            }
+                            """
+                        )
+
+                    light_outline = histogram_outline_state()
+                    self.assertFalse(light_outline["dark"])
+                    self.assertEqual(light_outline["stroke"], light_outline["token"])
+                    requests_before_theme = histogram_requests
+                    page.locator("#themeBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => {
+                          if (!document.body.classList.contains("dark")) return false;
+                          const chart = echarts.getInstanceByDom(document.querySelector("#histogramChart"));
+                          const outlinedBin = chart.getZr().storage.getDisplayList(true).find((item) =>
+                            item.type === "rect" && Number(item.style?.lineWidth) === 0.5
+                          );
+                          const token = getComputedStyle(document.body)
+                            .getPropertyValue("--histogram-bin-outline").trim();
+                          return outlinedBin?.style?.stroke === token;
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    dark_outline = histogram_outline_state()
+                    self.assertTrue(dark_outline["dark"])
+                    self.assertEqual(dark_outline["stroke"], dark_outline["token"])
+                    self.assertNotEqual(dark_outline["stroke"], light_outline["stroke"])
+                    self.assertEqual(histogram_requests, requests_before_theme)
+                    page.locator("#themeBtn").click()
+                    page.wait_for_function(
+                        "() => !document.body.classList.contains('dark')",
+                        timeout=10_000,
+                    )
+
                     requests_before_labels = histogram_requests
                     page.locator('.segmented[data-control="histogramLabels"] button[data-value="bins"]').click()
                     page.wait_for_timeout(100)
