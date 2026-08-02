@@ -48,15 +48,15 @@ pipx install --python python3.13 "py-lucidum[glm,gbm]"
 For a reproducible Lucidum version, pin the release explicitly:
 
 ```bash
-pipx install --python python3.13 "py-lucidum==0.4.57"
-pipx install --python python3.13 "py-lucidum[glm,gbm]==0.4.57"
+pipx install --python python3.13 "py-lucidum==0.4.58"
+pipx install --python python3.13 "py-lucidum[glm,gbm]==0.4.58"
 ```
 
 Use the same requirement in another Python project's dependency metadata or
 requirements file:
 
 ```bash
-py-lucidum==0.4.57
+py-lucidum==0.4.58
 ```
 
 An exact Lucidum pin fixes Lucidum's code but does not pin DuckDB, FastAPI, or
@@ -87,8 +87,8 @@ pipx install --python python3.13 "py-lucidum[glm,gbm]"
 If PyPI is unavailable, install the same immutable release from its Git tag:
 
 ```bash
-pipx install --python python3.13 "py-lucidum @ git+https://github.com/SpeckledJim2/py_lucidum.git@v0.4.57"
-pipx install --python python3.13 "py-lucidum[glm,gbm] @ git+https://github.com/SpeckledJim2/py_lucidum.git@v0.4.57"
+pipx install --python python3.13 "py-lucidum @ git+https://github.com/SpeckledJim2/py_lucidum.git@v0.4.58"
+pipx install --python python3.13 "py-lucidum[glm,gbm] @ git+https://github.com/SpeckledJim2/py_lucidum.git@v0.4.58"
 ```
 
 Quote package specifications containing extras exactly as shown, because shells

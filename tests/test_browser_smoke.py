@@ -25615,6 +25615,12 @@ COPY (
                 lambda message: console_warnings.append(message.text) if message.type == "warning" else None,
             )
 
+            def settle_viewport(width: int, height: int) -> None:
+                page.set_viewport_size({"width": width, "height": height})
+                page.evaluate(
+                    "() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))"
+                )
+
             core_parameter_names = [
                 "init_score",
                 "objective",
@@ -25957,7 +25963,7 @@ COPY (
                 page.locator('[data-gbm-tab="features"][aria-selected="true"]:focus').wait_for(timeout=10_000)
                 page.locator("#gbmFeatureGrid").wait_for(timeout=10_000)
 
-                page.set_viewport_size({"width": 800, "height": 800})
+                settle_viewport(800, 800)
                 compact_nav_state = page.locator('[data-gbm-tab="features"]').evaluate(
                     """
                     (button) => ({
@@ -25974,7 +25980,7 @@ COPY (
                 self.assertEqual(compact_nav_state["labelDisplay"], "none")
                 self.assertEqual(compact_nav_state["ariaLabel"], "Features and parameters")
                 self.assertEqual(compact_nav_state["title"], "Features and parameters")
-                page.set_viewport_size({"width": 1280, "height": 800})
+                settle_viewport(1280, 800)
                 feature_setup_requests_before = len(gbm_layout_api_requests)
                 feature_setup_closed = page.evaluate(
                     """
@@ -27436,7 +27442,7 @@ COPY (
                 )
                 self.assertEqual(len(gbm_layout_api_requests), side_toggle_requests_before)
                 mobile_layout_requests_before = len(gbm_layout_api_requests)
-                page.set_viewport_size({"width": 800, "height": 800})
+                settle_viewport(800, 800)
                 page.wait_for_function(
                     """
                     () => {
@@ -27464,7 +27470,7 @@ COPY (
                 self.assertGreaterEqual(shap_mobile_layout["sideHeight"], 159)
                 self.assertTrue(shap_mobile_layout["resizerHidden"])
                 self.assertEqual(len(gbm_layout_api_requests), mobile_layout_requests_before)
-                page.set_viewport_size({"width": 1280, "height": 800})
+                settle_viewport(1280, 800)
                 page.wait_for_function(
                     """
                     (width) => {
@@ -28439,7 +28445,7 @@ COPY (
                 self.assertEqual(retained_tool_layout["sideExpanded"], "true")
                 self.assertAlmostEqual(retained_tool_layout["sideWidth"], retained_side_width, delta=1)
                 mobile_request_count = stacked_shap_requests
-                page.set_viewport_size({"width": 800, "height": 800})
+                settle_viewport(800, 800)
                 page.wait_for_timeout(100)
                 stacked_mobile_layout = page.evaluate(
                     """
@@ -28475,7 +28481,7 @@ COPY (
                     '() => getComputedStyle(document.querySelector("#gbmStackedShapControls")).display !== "none"',
                     timeout=10_000,
                 )
-                page.set_viewport_size({"width": 1280, "height": 800})
+                settle_viewport(1280, 800)
                 page.wait_for_timeout(100)
                 restored_desktop_layout = page.evaluate(
                     """
@@ -31143,7 +31149,7 @@ COPY (
                     }
                     """
                 )
-                page.set_viewport_size({"width": 1000, "height": 800})
+                settle_viewport(1000, 800)
                 page.wait_for_function(
                     """
                     () => document.querySelector("#gbmTreeViewer")?.getBoundingClientRect().width < 812
@@ -31179,7 +31185,7 @@ COPY (
                 self.assertEqual(len(window_resize_fit["transforms"]), 1)
                 self.assertNotEqual(window_resize_fit["before"], window_resize_fit["after"])
                 self.assertTrue(window_resize_fit["treeContained"])
-                page.set_viewport_size({"width": 420, "height": 800})
+                settle_viewport(420, 800)
                 page.wait_for_function(
                     """
                     () => document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") === "false"
@@ -31270,7 +31276,7 @@ COPY (
                 self.assertGreaterEqual(mobile_tree_geometry["detailBackdropGap"], 10 - 0.75)
                 self.assertGreater(mobile_tree_geometry["backdropBottomGap"], 0)
 
-                page.set_viewport_size({"width": 1280, "height": 800})
+                settle_viewport(1280, 800)
                 page.wait_for_function(
                     """
                     (expandedWidth) => document.querySelector("#gbmTreeViewer")?.getBoundingClientRect().width >= 812
@@ -31283,7 +31289,7 @@ COPY (
                     timeout=5_000,
                 )
 
-                page.set_viewport_size({"width": 800, "height": 800})
+                settle_viewport(800, 800)
                 page.wait_for_function(
                     '() => document.querySelector("#gbmTreeViewer")?.classList.contains("gbm-tree-summary-collapsed")',
                     timeout=10_000,
@@ -31299,29 +31305,28 @@ COPY (
                         'node => node.classList.contains("gbm-tree-summary-collapsed")'
                     )
                 )
-                page.set_viewport_size({"width": 1280, "height": 800})
+                settle_viewport(1280, 800)
                 page.wait_for_function(
                     '() => document.querySelector("#gbmTreeViewer")?.getBoundingClientRect().width >= 812',
                     timeout=10_000,
                 )
-                page.evaluate("() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
-                page.set_viewport_size({"width": 800, "height": 800})
+                settle_viewport(800, 800)
                 page.wait_for_function(
                     '() => document.querySelector("#gbmTreeViewer")?.classList.contains("gbm-tree-summary-collapsed")',
                     timeout=10_000,
                 )
-                page.set_viewport_size({"width": 1280, "height": 800})
+                settle_viewport(1280, 800)
                 page.wait_for_function(
                     '() => !document.querySelector("#gbmTreeViewer")?.classList.contains("gbm-tree-summary-collapsed")',
                     timeout=10_000,
                 )
                 page.locator("#gbmTreeSummaryToggle").click()
-                page.set_viewport_size({"width": 800, "height": 800})
+                settle_viewport(800, 800)
                 page.wait_for_function(
                     '() => document.querySelector("#gbmTreeViewer")?.classList.contains("gbm-tree-summary-collapsed")',
                     timeout=10_000,
                 )
-                page.set_viewport_size({"width": 1280, "height": 800})
+                settle_viewport(1280, 800)
                 page.evaluate("() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
                 self.assertTrue(
                     page.locator("#gbmTreeViewer").evaluate(
@@ -31718,7 +31723,7 @@ COPY (
                     timeout=10_000,
                 )
                 set_feature_setup_open(False)
-                page.set_viewport_size({"width": 1280, "height": 1000})
+                settle_viewport(1280, 1000)
                 layout = page.evaluate(
                     """
                     () => {
@@ -31848,6 +31853,7 @@ COPY (
                             sampleStatusText: sampleStatus ? sampleStatus.textContent.trim() : "",
                             sampleStatusTitleScrollWidth: sampleStatusTitle?.scrollWidth || 0,
                             sampleStatusTitleClientWidth: sampleStatusTitle?.clientWidth || 0,
+                            sampleStatusTitleWhiteSpace: sampleStatusTitle ? getComputedStyle(sampleStatusTitle).whiteSpace : "",
                             sampleStatusDetailWeight: sampleStatusDetail ? getComputedStyle(sampleStatusDetail).fontWeight : "",
                             sampleTop: sampleStatus ? Math.round(sampleStatus.getBoundingClientRect().top) : 0,
                             trainTop: train ? Math.round(train.getBoundingClientRect().top) : 0,
@@ -31982,6 +31988,7 @@ COPY (
                 self.assertTrue(layout["sampleParentInControls"])
                 self.assertTrue(layout["trainParentInControls"])
                 self.assertIn("SAMPLE column found", layout["sampleStatusText"])
+                self.assertEqual(layout["sampleStatusTitleWhiteSpace"], "normal")
                 self.assertLessEqual(layout["sampleStatusTitleScrollWidth"], layout["sampleStatusTitleClientWidth"])
                 self.assertEqual(layout["sampleStatusDetailWeight"], "400")
                 self.assertEqual(layout["controlTitleText"], "Control")
@@ -32278,14 +32285,14 @@ COPY (
                         self.assertTrue(all(width >= minimum_width for width in option_widths))
 
                 compact_request_count = len(gbm_layout_api_requests)
-                page.set_viewport_size({"width": 800, "height": 800})
+                settle_viewport(800, 800)
                 page.wait_for_function(
                     "() => getComputedStyle(document.querySelector('#gbmFeatureResizer')).display === 'none'",
                     timeout=10_000,
                 )
                 assert_compact_feature_layout(compact_feature_layout())
 
-                page.set_viewport_size({"width": 390, "height": 844})
+                settle_viewport(390, 844)
                 page.wait_for_function(
                     "() => document.body.classList.contains('sidebar-collapsed')",
                     timeout=10_000,
@@ -32349,7 +32356,7 @@ COPY (
                 )
                 self.assertEqual(len(gbm_layout_api_requests), compact_request_count)
 
-                page.set_viewport_size({"width": 1280, "height": 1000})
+                settle_viewport(1280, 1000)
                 page.locator("#sidebarToggleBtn").click()
                 page.wait_for_function(
                     """
