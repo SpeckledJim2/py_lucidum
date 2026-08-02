@@ -1251,6 +1251,34 @@
         width: 12px;
       }
 
+      .gbm-interaction-constraint-menu {
+        max-width: calc(100vw - 16px);
+        min-width: min(350px, calc(100vw - 16px));
+      }
+
+      .gbm-interaction-group-model-option {
+        font-weight: 600;
+      }
+
+      .gbm-interaction-constraint-divider {
+        border-top: 1px solid var(--line);
+        margin: 3px 2px;
+      }
+
+      .gbm-interaction-constraint-label {
+        flex: 1 1 auto;
+        min-width: 0;
+      }
+
+      .gbm-interaction-group-model-result {
+        color: var(--muted);
+        flex: 0 0 auto;
+        font-size: 10px;
+        font-weight: 600;
+        margin-left: auto;
+        padding-left: 12px;
+      }
+
       .gbm-interaction-constraint-row-trained,
       .gbm-feature-scenario-row-trained {
         color: var(--muted);

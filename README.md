@@ -239,9 +239,30 @@ py_lucidum.serve(
     line_bar_favourites_path="config/monthly_favourites.json",
     line_bar_favourite="Postcode view",
 )
+
+postcode_model = py_lucidum.extract_lightgbm_interaction_group(
+    "path/to/model.txt",
+    ["LATITUDE", "LONGITUDE", "POSTCODE_CATEGORY"],
+    "path/to/postcode_model.txt",
+)
 ```
 
 In notebook-style runtimes such as Positron or Jupyter, `serve()` starts the server in the background and returns the URL immediately. In a normal Python shell, it blocks until stopped.
+
+`extract_lightgbm_interaction_group()` is a standalone text-model operation: it
+does not start the app or import LightGBM. The requested feature names must
+exactly match one non-overlapping group in the source model's saved
+`interaction_constraints`. The function also verifies that every retained tree
+uses only that group, then compacts split indexes and rewrites feature metadata,
+tree sizes, iteration counts, categorical metadata, per-feature parameters, and
+feature importances. The resulting model can be loaded by LightGBM and predicts
+from a frame containing only the group features in their original model order.
+By default its raw scores are SHAP-centred, so they equal the source model's
+summed SHAP values for the group; for log-link objectives such as Gamma, normal
+response-scale prediction exponentiates that raw group contribution. Pass
+`shap_centered=False` to retain the selected trees' original uncentred leaf
+outputs instead.
+The source file cannot be used as the destination and is never overwritten.
 
 For ASGI usage:
 
@@ -368,6 +389,8 @@ The Features and parameters screen uses full-bleed Feature and Parameter grids b
 If a Feature Specification is loaded, the Feature table shows its `Grouping` values, and the Feature setup panel offers its scenario and multi-select interaction-constraint controls; choosing a scenario selects only that scenario's usable features.
 
 Choosing one or more interaction groups constrains the currently selected trainable features in each group so they can only interact with features in the same group, with all other selected features left together in a remainder constraint. Constrained Grouping cells show a numbered lock whose subscript is the effective selected group size; a feature constrained to its main effect is excluded from that group count.
+
+The Constraint groups menu also has an opt-in `Create constraint group LightGBM model .txt file(s)` checkbox. It is available only when at least one group and non-zero SHAP rows are selected. During training Lucidum writes one SHAP-centred sidecar beside the main `model.txt` for every selected group, using a safe name such as `model_POSTCODE.txt`. It reloads each sidecar with LightGBM and compares its raw predictions on the saved SHAP sample with the matching `<Grouping>_INTERACTION_GROUP` contribution. The menu then shows the maximum absolute difference as `Error …`; groups with no fitted trees show `No trees` and do not produce a file. These files stay in the model artifact folder and are not automatic browser downloads.
 
 Right-click an unconstrained Feature cell to choose `Constrain to main effect only (1D)` or `Add pair interaction (2D)…`. Main-effect-only features show a lock with subscript `1`; pair members show subscript `2`. The pair action opens the `Interaction pairs` control with the clicked feature preselected, and adding a pair also selects both features for training. Right-clicking a paired feature replaces the add action with one `Remove FeatureX × FeatureY pairwise interaction` action for each of its pairs. The pair manager separates `Add pair interaction` from `Allowed pair interactions (n)`, gives each saved `FeatureX × FeatureY` row an explicit `Remove` button, and summarizes the current strict-allowlist coverage.
 

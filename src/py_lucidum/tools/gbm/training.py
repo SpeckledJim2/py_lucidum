@@ -11,6 +11,11 @@ import duckdb
 from py_lucidum.core import Dataset, quote_ident, sql_literal
 from py_lucidum.tools.glm.store import GlmModelStore
 
+from .interaction_group_model import (
+    NoInteractionGroupTreesError,
+    extract_lightgbm_interaction_group,
+    interaction_group_model_filename,
+)
 from .sample import (
     SAMPLE_COLUMN,
     create_generated_sample,
@@ -23,6 +28,7 @@ from .validation import (
     INIT_SCORE_NONE,
     OFFSET_COLUMN,
     RESPONSE_COLUMN,
+    bool_parameter,
     detect_sample_column,
     display_monotonicity,
     feature_interaction_constraint_groups,
@@ -590,6 +596,7 @@ def train_model(
     if not validation.ok:
         raise ValueError("; ".join(validation.errors))
     timings["validation_seconds"] = elapsed_seconds(validation_started)
+    create_interaction_group_models = bool_parameter(payload, "create_feature_interaction_group_models")
 
     emit_preparing_progress(progress_callback, "Preparing GBM: resolving parameters...", 0, stage="resolving_parameters")
     params = normalise_parameters(payload.get("parameters"))
@@ -1003,8 +1010,10 @@ def train_model(
     feature_config = sorted(feature_config, key=lambda item: (-float(item["gain"]), str(item["name"]).lower()))
 
     shap_mode = str(payload.get("shap_rows") or "0").strip().lower()
+    shap_seed = shap_sampling_seed(params.get("seed"))
     shap_written_rows = 0
     shap_summary_rows: list[dict[str, Any]] = []
+    shap_frame = None
     timings["shap_seconds"] = 0.0
     if shap_mode not in {"zero", "0", "none"}:
         shap_started = time.perf_counter()
@@ -1029,7 +1038,7 @@ def train_model(
             feature_names=feature_names,
             model_id=model_id,
             shap_mode=shap_mode,
-            shap_seed=shap_sampling_seed(params.get("seed")),
+            shap_seed=shap_seed,
             best_iteration=best_iteration,
             shap_interaction_groups=interaction_group_constraints,
         )
@@ -1053,7 +1062,26 @@ def train_model(
         ),
     )
     artifact_write_started = time.perf_counter()
-    booster.save_model(str(store.artifact_path(model_id, "model")), num_iteration=best_iteration)
+    model_path = store.artifact_path(model_id, "model")
+    booster.save_model(str(model_path), num_iteration=best_iteration)
+    interaction_group_model_results: list[dict[str, Any]] = []
+    timings["interaction_group_model_seconds"] = 0.0
+    if create_interaction_group_models:
+        interaction_group_model_started = time.perf_counter()
+        interaction_group_model_results = create_and_verify_interaction_group_models(
+            lgb=lgb,
+            np=np,
+            pl=pl,
+            source_model=model_path,
+            output_dir=model_dir,
+            groups=interaction_group_constraints,
+            feature_frame=feature_frame,
+            feature_names=feature_names,
+            shap_frame=shap_frame,
+            shap_mode=shap_mode,
+            shap_seed=shap_seed,
+        )
+        timings["interaction_group_model_seconds"] = elapsed_seconds(interaction_group_model_started)
     write_dataframe_parquet(predictions, store.artifact_path(model_id, "predictions"))
     if saved_init_score_frame is not None:
         write_dataframe_parquet(saved_init_score_frame, store.artifact_path(model_id, "init_score"))
@@ -1084,6 +1112,11 @@ def train_model(
         manifest["feature_scenario"] = feature_scenario
     if feature_interaction_constraints:
         manifest["feature_interaction_constraints"] = feature_interaction_constraints
+    manifest["feature_interaction_group_models"] = {
+        "enabled": create_interaction_group_models,
+        "error_metric": "max_absolute_error",
+        "groups": interaction_group_model_results,
+    }
     if ebm_metadata:
         manifest["ebm"] = ebm_metadata
     if grid_search:
@@ -1665,6 +1698,100 @@ def unique_shap_group_column_name(base_name: str, used_names: set[str]) -> str:
     return candidate
 
 
+def create_and_verify_interaction_group_models(
+    *,
+    lgb: Any,
+    np: Any,
+    pl: Any,
+    source_model: Path,
+    output_dir: Path,
+    groups: list[dict[str, Any]],
+    feature_frame: Any,
+    feature_names: list[str],
+    shap_frame: Any,
+    shap_mode: str,
+    shap_seed: int,
+) -> list[dict[str, Any]]:
+    """Create selected interaction-group models and verify them against grouped SHAP."""
+
+    if shap_frame is None or shap_frame.is_empty():
+        raise ValueError("Constraint group model verification requires saved SHAP rows")
+    group_columns = {
+        str(group["grouping"]): group
+        for group in shap_interaction_group_columns(groups, feature_names)
+    }
+    positions = shap_sample_positions(
+        np,
+        mode=shap_mode,
+        row_count=feature_frame.height,
+        seed=shap_seed,
+    )
+    if len(positions) != shap_frame.height:
+        raise ValueError("Constraint group model verification rows do not match saved SHAP rows")
+    sampled_features = feature_frame.gather(positions)
+    results: list[dict[str, Any]] = []
+    used_filenames: list[str] = []
+    for group in groups:
+        grouping = str(group.get("grouping") or "").strip()
+        group_column = group_columns.get(grouping)
+        if not grouping or group_column is None:
+            raise ValueError(f"Saved SHAP values are missing for constraint group: {grouping or '<blank>'}")
+        filename = interaction_group_model_filename(grouping, used_filenames)
+        output_model = output_dir / filename
+        try:
+            extract_lightgbm_interaction_group(
+                source_model,
+                group_column["features"],
+                output_model,
+            )
+        except NoInteractionGroupTreesError:
+            results.append(
+                {
+                    "grouping": grouping,
+                    "status": "no_trees",
+                    "artifact": None,
+                    "tree_count": 0,
+                    "verified_rows": 0,
+                    "max_absolute_error": None,
+                }
+            )
+            continue
+
+        extracted = lgb.Booster(model_file=str(output_model))
+        extracted_features = list(extracted.feature_name())
+        if set(extracted_features) != set(group_column["features"]):
+            raise ValueError(f"Extracted constraint group model features are inconsistent for: {grouping}")
+        raw_prediction = np.asarray(
+            extracted.predict(
+                sampled_features.select(extracted_features).to_arrow(),
+                raw_score=True,
+            ),
+            dtype="float64",
+        )
+        if raw_prediction.ndim == 2:
+            raw_prediction = raw_prediction[:, 0]
+        if raw_prediction.ndim != 1 or raw_prediction.shape[0] != shap_frame.height:
+            raise ValueError(f"Extracted constraint group model prediction shape is invalid for: {grouping}")
+        expected = np.asarray(shap_frame.get_column(group_column["name"]).to_numpy(), dtype="float64")
+        if not bool(np.isfinite(raw_prediction).all()) or not bool(np.isfinite(expected).all()):
+            raise ValueError(f"Extracted constraint group model verification contains non-finite values for: {grouping}")
+        max_absolute_error = float(np.max(np.abs(raw_prediction - expected)))
+        if not math.isfinite(max_absolute_error):
+            raise ValueError(f"Extracted constraint group model verification error is invalid for: {grouping}")
+        results.append(
+            {
+                "grouping": grouping,
+                "status": "verified",
+                "artifact": filename,
+                "tree_count": int(extracted.num_trees()),
+                "verified_rows": int(shap_frame.height),
+                "max_absolute_error": max_absolute_error,
+            }
+        )
+        used_filenames.append(filename)
+    return results
+
+
 def feature_config_with_mean_abs_shap(
     feature_config: list[dict[str, Any]],
     shap_summary_rows: list[dict[str, Any]],
@@ -1691,6 +1818,7 @@ __all__ = [
     "lightgbm_progress_payload",
     "lightgbm_interaction_constraints",
     "lightgbm_pair_interaction_constraints",
+    "create_and_verify_interaction_group_models",
     "feature_config_with_mean_abs_shap",
     "normalise_feature_scenario",
     "polars_feature_frame",

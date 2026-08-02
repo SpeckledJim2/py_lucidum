@@ -264,6 +264,13 @@ WHERE feature IS NOT NULL
         stored = manifest.get("feature_interaction_constraints")
         if not isinstance(stored, dict):
             return None
+        raw_group_model_metadata = manifest.get("feature_interaction_group_models")
+        group_model_metadata = self.normalise_interaction_group_models(raw_group_model_metadata)
+        has_group_model_metadata = isinstance(raw_group_model_metadata, dict)
+        group_models_by_name = {
+            group["grouping"]: group
+            for group in group_model_metadata["groups"]
+        }
         pairs = normalise_feature_interaction_pairs(stored.get("pairs"))
         groups = self.normalise_interaction_constraint_groups(stored.get("groups"))
         features = self.scenario_feature_list(stored.get("features"))
@@ -279,6 +286,8 @@ WHERE feature IS NOT NULL
                 payload["status"] = "stale"
             else:
                 payload["status"] = "current"
+            if grouping in group_models_by_name:
+                payload["group_model"] = group_models_by_name[grouping]
             payload_groups.append(payload)
         if str(stored.get("mode") or "").strip().lower() == "pairs" or pairs:
             uncovered_policy = str(stored.get("uncovered_policy") or "").strip().lower()
@@ -298,6 +307,7 @@ WHERE feature IS NOT NULL
                 "groups": payload_groups,
                 "uncovered_policy": uncovered_policy,
                 "policy_inferred": policy_inferred,
+                **({"create_group_models": group_model_metadata["enabled"]} if has_group_model_metadata else {}),
             } if pairs else None
         if not groups and not features:
             return None
@@ -306,7 +316,34 @@ WHERE feature IS NOT NULL
             "groupings": [group["grouping"] for group in payload_groups],
             "features": features,
             "groups": payload_groups,
+            **({"create_group_models": group_model_metadata["enabled"]} if has_group_model_metadata else {}),
         }
+
+    def normalise_interaction_group_models(self, raw: Any) -> dict[str, Any]:
+        if not isinstance(raw, dict):
+            return {"enabled": False, "groups": []}
+        groups: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for raw_group in raw.get("groups", []):
+            if not isinstance(raw_group, dict):
+                continue
+            grouping = str(raw_group.get("grouping") or "").strip()
+            status = str(raw_group.get("status") or "").strip().lower()
+            if not grouping or grouping in seen or status not in {"verified", "no_trees"}:
+                continue
+            error = json_number(raw_group.get("max_absolute_error"))
+            groups.append(
+                {
+                    "grouping": grouping,
+                    "status": status,
+                    "artifact": str(raw_group.get("artifact") or "").strip() or None,
+                    "tree_count": max(0, int(json_number(raw_group.get("tree_count")) or 0)),
+                    "verified_rows": max(0, int(json_number(raw_group.get("verified_rows")) or 0)),
+                    "max_absolute_error": float(error) if error is not None else None,
+                }
+            )
+            seen.add(grouping)
+        return {"enabled": raw.get("enabled") is True, "groups": groups}
 
     def infer_pair_uncovered_policy(
         self,

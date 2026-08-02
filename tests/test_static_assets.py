@@ -2479,10 +2479,16 @@ if (message !== GBM_PARAMETER_GRID_COPY_ERROR) throw new Error("grid-search copy
         self.assertIn('id="gbmFeatureSetupPanel" class="gbm-feature-setup-panel', gbm)
         self.assertIn(
             "${featureScenarioDropdownHtml(data.feature_scenarios || [], data.active_feature_scenario || null)}\n"
-            "                  ${featureInteractionConstraintDropdownHtml(data.feature_interaction_groupings || [], data.active_feature_interaction_constraints || null, data.features || [])}\n"
+            "                  ${featureInteractionConstraintDropdownHtml(data.feature_interaction_groupings || [], data.active_feature_interaction_constraints || null, data.features || [], selectedShapRows)}\n"
             "                  ${featureInteractionPairsDropdownHtml(data.active_feature_interaction_constraints || null, data.features || [])}",
             gbm,
         )
+        self.assertIn("Create constraint group LightGBM model .txt file(s)", gbm)
+        self.assertIn("data-gbm-create-interaction-group-models", gbm)
+        self.assertIn("create_feature_interaction_group_models: currentCreateFeatureInteractionGroupModels()", gbm)
+        self.assertIn('input[name=\'gbmShapRows\'][value=\'0\']', gbm)
+        self.assertIn('Error ${escapeHtml(error)}', gbm)
+        self.assertIn(">No trees</span>", gbm)
         self.assertIn('id="gbmClearFeaturesBtn" class="app-control-button app-command-button gbm-feature-command-button"', gbm)
         self.assertIn('id="gbmSelectFeaturesBtn" class="app-control-button app-command-button gbm-feature-command-button"', gbm)
         self.assertIn('class="gbm-parameter-control-cell app-control-strip-row app-control-strip--titled"', gbm)

@@ -907,6 +907,11 @@ def validate_request(dataset: Dataset, payload: dict[str, Any], generated_sample
         selected_interaction_groupings = normalise_feature_interaction_groupings(payload.get("feature_interaction_groupings"))
         selected_interaction_features = normalise_feature_interaction_features(payload.get("feature_interaction_features"))
         selected_interaction_pairs = normalise_feature_interaction_pairs(payload.get("feature_interaction_pairs"))
+        create_interaction_group_models = bool_parameter(payload, "create_feature_interaction_group_models")
+        if create_interaction_group_models and not selected_interaction_groupings:
+            errors.append("Choose at least one GBM feature interaction grouping to create constraint group model files")
+        if create_interaction_group_models and not shap_rows_requested(payload.get("shap_rows")):
+            errors.append("Choose non-zero SHAP rows to create and verify constraint group model files")
         for grouping in selected_interaction_groupings:
             if grouping not in valid_interaction_groupings:
                 errors.append(f"Choose a valid GBM feature interaction grouping: {grouping}")
@@ -924,6 +929,20 @@ def validate_request(dataset: Dataset, payload: dict[str, Any], generated_sample
             for feature_name in (pair["left"], pair["right"])
         }
         selected_interaction_feature_set = set(selected_interaction_features)
+        if create_interaction_group_models:
+            for grouping in selected_interaction_groupings:
+                eligible_group_features = [
+                    str(feature.get("name") or "").strip()
+                    for feature in selected_features
+                    if feature_grouping_map.get(str(feature.get("name") or "").strip(), "") == grouping
+                    and str(feature.get("name") or "").strip() not in selected_interaction_feature_set
+                    and str(feature.get("name") or "").strip() not in pair_feature_names
+                ]
+                if not eligible_group_features:
+                    errors.append(
+                        f"Select at least one eligible feature in GBM feature interaction grouping {grouping} "
+                        "to create its constraint group model file"
+                    )
         if selected_interaction_pairs and selected_interaction_groupings:
             for grouping in selected_interaction_groupings:
                 overlapping: list[str] = []

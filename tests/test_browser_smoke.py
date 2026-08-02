@@ -12487,6 +12487,7 @@ COPY (
                         "training_rows": 2,
                         "test_rows": 1,
                         "scored_rows": 3,
+                        "shap_rows": 3 if model_id in {"browser-smoke-model", "browser-smoke-model-2"} else 0,
                         "sample_column": "SAMPLE",
                         "sample_source": "dataset",
                         "timings": {"training_seconds": 1.234 if model_id == "browser-smoke-model" else 62.0},
@@ -12502,6 +12503,45 @@ COPY (
                                 {"mode": "pairs", "pairs": [{"left": "Age", "right": "Segment"}]}
                                 if model_id == "browser-smoke-delete-a"
                                 else {"groupings": ["OLD"], "groups": [{"grouping": "OLD", "features": ["Age"]}]}
+                            )
+                        ),
+                        **(
+                            {
+                                "feature_interaction_group_models": {
+                                    "enabled": True,
+                                    "error_metric": "max_absolute_error",
+                                    "groups": [
+                                        {
+                                            "grouping": "DRIVER",
+                                            "status": "no_trees",
+                                            "artifact": None,
+                                            "tree_count": 0,
+                                            "verified_rows": 0,
+                                            "max_absolute_error": None,
+                                        }
+                                    ],
+                                }
+                            }
+                            if model_id == "browser-smoke-model-2"
+                            else (
+                                {
+                                    "feature_interaction_group_models": {
+                                        "enabled": True,
+                                        "error_metric": "max_absolute_error",
+                                        "groups": [
+                                            {
+                                                "grouping": "OLD",
+                                                "status": "verified",
+                                                "artifact": "model_OLD.txt",
+                                                "tree_count": 3,
+                                                "verified_rows": 3,
+                                                "max_absolute_error": 1.89e-15,
+                                            }
+                                        ],
+                                    }
+                                }
+                                if model_id == "browser-smoke-model"
+                                else {}
                             )
                         ),
                     },
@@ -26333,7 +26373,8 @@ COPY (
                 )
                 self.assertEqual(initial_constraints["button"], "Trained constraint groups (1)")
                 self.assertIn("interact within selected groups", initial_constraints["title"])
-                self.assertIn("OLD (trained; missing from spec)", initial_constraints["rows"])
+                self.assertTrue(any("OLD (trained; missing from spec)" in row for row in initial_constraints["rows"]))
+                self.assertTrue(any("Error 1.89e-15" in row for row in initial_constraints["rows"]))
                 self.assertIn("\U0001f512", initial_constraints["ageGrouping"])
                 self.assertEqual(initial_constraints["ageGroupSize"], "1")
                 self.assertEqual(initial_constraints["ageGroupTitle"], "Constrained within OLD (1 feature)")
@@ -28743,6 +28784,22 @@ COPY (
                 assert_core_parameter_order()
                 self.assertEqual(feature_scenario_state()["value"], "scenario1")
                 self.assertEqual(page.locator("#gbmFeatureInteractionConstraintButton").text_content(), "Constraint groups (1)")
+                page.locator("#gbmFeatureInteractionConstraintButton").click()
+                group_model_option = page.locator("[data-gbm-create-interaction-group-models]")
+                self.assertTrue(group_model_option.is_checked())
+                self.assertTrue(group_model_option.is_enabled())
+                self.assertTrue(page.locator("input[name='gbmShapRows'][value='0']").is_disabled())
+                driver_constraint_row = page.locator(
+                    ".gbm-interaction-constraint-row",
+                    has=page.locator('[data-gbm-interaction-grouping="DRIVER"]'),
+                )
+                self.assertIn("No trees", driver_constraint_row.text_content())
+                group_model_result = driver_constraint_row.locator(".gbm-interaction-group-model-result")
+                self.assertIn("contains no trees", group_model_result.get_attribute("title"))
+                group_model_option.uncheck()
+                self.assertFalse(page.locator("input[name='gbmShapRows'][value='0']").is_disabled())
+                group_model_option.check()
+                page.locator("#gbmFeatureInteractionConstraintButton").click()
                 assert_feature_heading_matches_checked(2)
                 self.assertTrue(page.locator("input[name='gbmTrainingMode'][value='ebm']").is_checked())
                 ebm_metric_state = page.evaluate(

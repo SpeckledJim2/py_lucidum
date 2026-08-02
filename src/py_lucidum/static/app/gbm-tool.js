@@ -284,6 +284,7 @@ export function createGbmTool({
     captureFeatureDraftStateForRender(data);
     config = applyFeatureDraftStateToData(data);
     data = config;
+    const selectedShapRows = featureDraftForData(data)?.shapRows || gbmShapSelectionValue(data);
     syncFeatureMetricMode(data);
     const groupMeta = "";
     setGroupMeta(tool, groupMeta);
@@ -342,7 +343,7 @@ export function createGbmTool({
               <div id="gbmFeatureSetupPanel" class="gbm-feature-setup-panel ${featureSetupOpen ? "" : "hidden"}" role="region" aria-label="Feature setup">
                 <div class="gbm-feature-setup-controls">
                   ${featureScenarioDropdownHtml(data.feature_scenarios || [], data.active_feature_scenario || null)}
-                  ${featureInteractionConstraintDropdownHtml(data.feature_interaction_groupings || [], data.active_feature_interaction_constraints || null, data.features || [])}
+                  ${featureInteractionConstraintDropdownHtml(data.feature_interaction_groupings || [], data.active_feature_interaction_constraints || null, data.features || [], selectedShapRows)}
                   ${featureInteractionPairsDropdownHtml(data.active_feature_interaction_constraints || null, data.features || [])}
                 </div>
               </div>
@@ -365,7 +366,7 @@ export function createGbmTool({
                 <div id="gbmShapRows" class="gbm-shap-rows" role="radiogroup" aria-label="SHAP rows">
                   <span class="gbm-shap-label">SHAP rows</span>
                   <div class="gbm-shap-options">
-                    ${shapOptionsHtml(data.shap_options || [], gbmShapSelectionValue(data))}
+                    ${shapOptionsHtml(data.shap_options || [], selectedShapRows)}
                   </div>
                 </div>
                 ${gridSampleHtml(data.parameters || [])}
@@ -670,6 +671,8 @@ export function createGbmTool({
     if (!rows.length) return;
     const interactionGroupings = currentFeatureInteractionGroupings();
     const interactionPairs = currentFeatureInteractionPairs();
+    const createGroupModels = currentCreateFeatureInteractionGroupModels();
+    const shapRows = String(document.querySelector("input[name='gbmShapRows']:checked")?.value || gbmShapSelectionValue(config));
     const scenarioName = el("gbmFeatureScenarioDropdown")?.dataset.gbmSelectedFeatureScenario || "";
     featureDraftState = {
       modelId: currentModelId,
@@ -683,6 +686,9 @@ export function createGbmTool({
       interactionGroupingsEdited: featureInteractionGroupingsEdited(interactionGroupings, config),
       interactionPairs,
       interactionPairsEdited: featureInteractionPairsEdited(interactionPairs, config),
+      createGroupModels,
+      createGroupModelsEdited: createGroupModels !== activeCreateFeatureInteractionGroupModels(config),
+      shapRows,
       scenarioName,
       scenarioEdited: featureScenarioSelectionEdited(scenarioName, config),
     };
@@ -696,6 +702,8 @@ export function createGbmTool({
     const existing = featureDraftForData(config);
     const rows = Array.isArray(features) && features.length ? features : currentFeatureRows();
     const interactionGroupings = existing?.interactionGroupings || currentFeatureInteractionGroupings();
+    const createGroupModels = existing?.createGroupModels ?? currentCreateFeatureInteractionGroupModels();
+    const shapRows = String(existing?.shapRows || document.querySelector("input[name='gbmShapRows']:checked")?.value || gbmShapSelectionValue(config));
     const scenarioName = existing?.scenarioName ?? (el("gbmFeatureScenarioDropdown")?.dataset.gbmSelectedFeatureScenario || "");
     featureDraftState = {
       modelId: featureDraftModelId(config),
@@ -709,6 +717,9 @@ export function createGbmTool({
       interactionGroupingsEdited: existing?.interactionGroupingsEdited ?? featureInteractionGroupingsEdited(interactionGroupings, config),
       interactionPairs: normaliseFeatureInteractionPairs(pairs),
       interactionPairsEdited: true,
+      createGroupModels,
+      createGroupModelsEdited: existing?.createGroupModelsEdited ?? (createGroupModels !== activeCreateFeatureInteractionGroupModels(config)),
+      shapRows,
       scenarioName,
       scenarioEdited: existing?.scenarioEdited ?? featureScenarioSelectionEdited(scenarioName, config),
     };
@@ -752,6 +763,12 @@ export function createGbmTool({
     bindFeatureInteractionActions();
     bindFeatureInteractionPairActions();
     bindFeatureScenarioActions();
+    for (const input of document.querySelectorAll("input[name='gbmShapRows']")) {
+      input.addEventListener("change", () => {
+        syncConstraintGroupModelControl();
+        captureFeatureDraftStateForRender(config);
+      });
+    }
     el("gbmClearFeaturesBtn")?.addEventListener("click", () => setFeatureIncludes(false));
     el("gbmSelectFeaturesBtn")?.addEventListener("click", () => setFeatureIncludes(true));
     el("gbmCreateSampleBtn")?.addEventListener("click", createSampleColumn);
@@ -996,7 +1013,7 @@ export function createGbmTool({
     window.setTimeout(applyRows, 0);
   }
 
-  function featureInteractionConstraintDropdownHtml(groupings, activeConstraints = null, features = []) {
+  function featureInteractionConstraintDropdownHtml(groupings, activeConstraints = null, features = [], shapRows = "100k") {
     const rows = featureInteractionGroupingRows(groupings);
     const active = normaliseActiveFeatureInteractionConstraints(activeConstraints);
     const draft = featureDraftForData(config);
@@ -1015,6 +1032,11 @@ export function createGbmTool({
     const counts = selectedFeatureCountsByGrouping(features);
     const sourcePairs = featureInteractionPairsUserEdited(config) ? draft?.interactionPairs || [] : active.pairs;
     const pairedNames = featureInteractionPairFeatureNames(sourcePairs);
+    const activeGroups = new Map(active.groups.map((group) => [group.grouping, group]));
+    const showTrainedResults = !draft?.interactionGroupingsEdited;
+    const createGroupModels = draft?.createGroupModelsEdited ? Boolean(draft.createGroupModels) : active.createGroupModels;
+    const shapRowsAvailable = !["", "0", "zero", "none", "no"].includes(String(shapRows || "0").trim().toLowerCase());
+    const createGroupModelsEnabled = selectedCurrent.size > 0 && shapRowsAvailable;
     const hasOptions = rows.length || synthetic.length;
     const hidden = hasOptions ? "" : " hidden";
     const disabled = hasOptions ? "" : " disabled";
@@ -1023,10 +1045,16 @@ export function createGbmTool({
       <div id="gbmFeatureInteractionConstraintSelect" class="gbm-interaction-constraint-select${hidden}" data-gbm-feature-menu-root>
         <button id="gbmFeatureInteractionConstraintButton" class="gbm-feature-menu-button gbm-interaction-constraint-button${constraintClass}" type="button" aria-haspopup="true" aria-expanded="false" aria-label="Constraint groups" title="Constrain selected grouped features so they only interact within selected groups" data-gbm-feature-menu-button${disabled}>${escapeHtml(featureInteractionButtonLabel(selectedCurrent.size, synthetic.length))}</button>
         <div id="gbmFeatureInteractionConstraintMenu" class="gbm-feature-menu gbm-interaction-constraint-menu hidden" role="menu" data-gbm-feature-menu>
+          <label class="gbm-interaction-constraint-row gbm-interaction-group-model-option${createGroupModelsEnabled ? "" : " disabled"}" title="Create and verify one SHAP-centred LightGBM text model for each selected constraint group">
+            <input type="checkbox" data-gbm-create-interaction-group-models ${createGroupModels && createGroupModelsEnabled ? "checked" : ""} ${createGroupModelsEnabled ? "" : "disabled"} />
+            <span>Create constraint group LightGBM model .txt file(s)</span>
+          </label>
+          <div class="gbm-interaction-constraint-divider" aria-hidden="true"></div>
           ${synthetic.map((group) => `
             <label class="gbm-interaction-constraint-row gbm-interaction-constraint-row-trained" data-gbm-trained-interaction-row="${escapeHtml(group.grouping)}">
               <input type="checkbox" checked disabled />
-              <span>${escapeHtml(trainedFeatureInteractionLabel(group))}</span>
+              <span class="gbm-interaction-constraint-label">${escapeHtml(trainedFeatureInteractionLabel(group))}</span>
+              ${featureInteractionGroupModelResultHtml(group.groupModel)}
             </label>
           `).join("")}
           ${rows.map((row) => {
@@ -1036,7 +1064,8 @@ export function createGbmTool({
             return `
             <label class="gbm-interaction-constraint-row${blocked ? " disabled" : ""}" ${reason ? `title="${escapeHtml(reason)}"` : ""}>
               <input type="checkbox" value="${escapeHtml(row.name)}" data-gbm-interaction-grouping="${escapeHtml(row.name)}" ${selectedCurrent.has(row.name) ? "checked" : ""} ${blocked ? `disabled aria-label="${escapeHtml(reason)}"` : ""} />
-              <span data-gbm-interaction-count-label="${escapeHtml(row.name)}">${escapeHtml(featureInteractionGroupingLabel(row.name, counts))}</span>
+              <span class="gbm-interaction-constraint-label" data-gbm-interaction-count-label="${escapeHtml(row.name)}">${escapeHtml(featureInteractionGroupingLabel(row.name, counts))}</span>
+              ${showTrainedResults ? featureInteractionGroupModelResultHtml(activeGroups.get(row.name)?.groupModel) : ""}
             </label>
           `;
           }).join("")}
@@ -1138,8 +1167,15 @@ export function createGbmTool({
       checkbox.addEventListener("change", () => {
         clearTrainedInteractionConstraintRows();
         syncFeatureInteractionControls();
+        captureFeatureDraftStateForRender(config);
       });
     }
+    const createGroupModels = root.querySelector("[data-gbm-create-interaction-group-models]");
+    createGroupModels?.addEventListener("change", () => {
+      syncConstraintGroupModelControl();
+      captureFeatureDraftStateForRender(config);
+    });
+    syncConstraintGroupModelControl();
   }
 
   function featureInteractionGroupingRows(groupings) {
@@ -1158,7 +1194,7 @@ export function createGbmTool({
 
   function normaliseActiveFeatureInteractionConstraints(activeConstraints) {
     if (!activeConstraints || typeof activeConstraints !== "object") {
-      return { mode: "", groups: [], features: [], pairs: [], uncoveredPolicy: "", policyInferred: false };
+      return { mode: "", groups: [], features: [], pairs: [], uncoveredPolicy: "", policyInferred: false, createGroupModels: false };
     }
     const groups = Array.isArray(activeConstraints.groups) ? activeConstraints.groups : [];
     const pairs = normaliseFeatureInteractionPairs(activeConstraints.pairs);
@@ -1169,6 +1205,7 @@ export function createGbmTool({
       pairs,
       uncoveredPolicy: ["singletons", "remainder", "unknown"].includes(uncoveredPolicy) ? uncoveredPolicy : "",
       policyInferred: Boolean(activeConstraints.policy_inferred),
+      createGroupModels: Boolean(activeConstraints.create_group_models),
       groups: groups
         .map((group) => {
           const grouping = String(group?.grouping || "").trim();
@@ -1178,9 +1215,25 @@ export function createGbmTool({
             grouping,
             status: ["current", "stale", "missing"].includes(status) ? status : "current",
             features,
+            groupModel: normaliseFeatureInteractionGroupModel(group?.group_model),
           };
         })
         .filter((group) => group.grouping && group.features.length),
+    };
+  }
+
+  function normaliseFeatureInteractionGroupModel(raw) {
+    if (!raw || typeof raw !== "object") return null;
+    const status = String(raw.status || "").trim().toLowerCase();
+    if (!["verified", "no_trees"].includes(status)) return null;
+    const rawError = raw.max_absolute_error;
+    const error = rawError === null || rawError === undefined || rawError === "" ? Number.NaN : Number(rawError);
+    return {
+      status,
+      artifact: String(raw.artifact || "").trim(),
+      treeCount: Math.max(0, Number(raw.tree_count) || 0),
+      verifiedRows: Math.max(0, Number(raw.verified_rows) || 0),
+      maxAbsoluteError: Number.isFinite(error) ? error : null,
     };
   }
 
@@ -1306,6 +1359,37 @@ export function createGbmTool({
     if (group.status === "stale") return `${group.grouping} (trained; spec changed)`;
     if (group.status === "missing") return `${group.grouping} (trained; missing from spec)`;
     return group.grouping;
+  }
+
+  function featureInteractionGroupModelResultHtml(groupModel) {
+    if (!groupModel) return "";
+    if (groupModel.status === "no_trees") {
+      return '<span class="gbm-interaction-group-model-result" data-gbm-interaction-group-model-result title="The fitted GBM contains no trees for this constraint group, so no group model file was created.">No trees</span>';
+    }
+    if (groupModel.status !== "verified" || !Number.isFinite(groupModel.maxAbsoluteError)) return "";
+    const error = formatFeatureInteractionGroupModelError(groupModel.maxAbsoluteError);
+    const rows = Number(groupModel.verifiedRows || 0).toLocaleString();
+    const title = `Maximum absolute difference between the extracted model's raw prediction and summed group SHAP values over ${rows} saved SHAP rows.`;
+    return `<span class="gbm-interaction-group-model-result" data-gbm-interaction-group-model-result title="${escapeHtml(title)}">Error ${escapeHtml(error)}</span>`;
+  }
+
+  function formatFeatureInteractionGroupModelError(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return "";
+    if (number === 0) return "0";
+    return number.toExponential(2).replace("e+", "e");
+  }
+
+  function activeCreateFeatureInteractionGroupModels(data = config) {
+    return normaliseActiveFeatureInteractionConstraints(data?.active_feature_interaction_constraints).createGroupModels;
+  }
+
+  function currentCreateFeatureInteractionGroupModels(data = config) {
+    const checkbox = document.querySelector("[data-gbm-create-interaction-group-models]");
+    if (checkbox) return Boolean(checkbox.checked && !checkbox.disabled);
+    const draft = featureDraftForData(data);
+    if (draft?.createGroupModelsEdited) return Boolean(draft.createGroupModels);
+    return activeCreateFeatureInteractionGroupModels(data);
   }
 
   function featureInteractionButtonLabel(selectedCurrentCount, syntheticCount = 0) {
@@ -1498,6 +1582,9 @@ export function createGbmTool({
     for (const row of document.querySelectorAll("[data-gbm-trained-interaction-row]")) {
       row.remove();
     }
+    for (const result of document.querySelectorAll("[data-gbm-interaction-group-model-result]")) {
+      result.remove();
+    }
   }
 
   function syncFeatureInteractionControls() {
@@ -1507,6 +1594,28 @@ export function createGbmTool({
     syncFeatureInteractionCounts(features);
     syncFeatureInteractionPairControls(features);
     syncFeatureInteractionLocks(currentFeatureRows());
+    syncConstraintGroupModelControl();
+  }
+
+  function syncConstraintGroupModelControl() {
+    const checkbox = document.querySelector("[data-gbm-create-interaction-group-models]");
+    if (!checkbox) return;
+    const selectedGroupCount = currentFeatureInteractionGroupings().length;
+    const shapValue = String(document.querySelector("input[name='gbmShapRows']:checked")?.value || "0").trim().toLowerCase();
+    const shapRowsAvailable = !["", "0", "zero", "none", "no"].includes(shapValue);
+    const enabled = selectedGroupCount > 0 && shapRowsAvailable;
+    checkbox.disabled = !enabled;
+    if (!enabled) checkbox.checked = false;
+    const row = checkbox.closest(".gbm-interaction-constraint-row");
+    row?.classList.toggle("disabled", !enabled);
+    const reason = selectedGroupCount <= 0
+      ? "Select at least one constraint group first"
+      : !shapRowsAvailable
+        ? "Choose non-zero SHAP rows first"
+        : "Create and verify one SHAP-centred LightGBM text model for each selected constraint group";
+    row?.setAttribute("title", reason);
+    const zeroShap = document.querySelector("input[name='gbmShapRows'][value='0']");
+    if (zeroShap) zeroShap.disabled = Boolean(checkbox.checked);
   }
 
   function syncFeatureInteractionCounts(features = currentFeatureRows()) {
@@ -3422,6 +3531,7 @@ export function createGbmTool({
       sample_column: config?.sample?.column || config?.sample_column || "",
       sample_source: config?.sample?.source || "none",
       create_sample: false,
+      create_feature_interaction_group_models: currentCreateFeatureInteractionGroupModels(),
     };
     if (hasGridParameters(payload.parameters)) payload.grid_samples = currentGridSampleValue();
     if (featureScenario) payload.feature_scenario = featureScenario;

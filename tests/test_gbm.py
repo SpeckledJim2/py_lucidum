@@ -13,10 +13,13 @@ from unittest.mock import patch
 
 import duckdb
 
+from py_lucidum import extract_lightgbm_interaction_group
+from py_lucidum.tools.gbm.interaction_group_model import interaction_group_model_filename
 from py_lucidum.app import create_app
 from py_lucidum.app.telemetry import TelemetryStore
 from py_lucidum.core import Dataset, quote_ident, sql_literal
 from py_lucidum.demo import demo_dataset_path
+from py_lucidum.tools.gbm.config import GbmConfigBuilder
 from py_lucidum.tools.gbm.grid import parse_parameter_grid, prepare_grid_run, sampled_combination_indexes, validate_grid_or_request
 from py_lucidum.tools.gbm.jobs import GbmJob, GbmJobManager, best_grid_model
 from py_lucidum.tools.gbm.sample import create_generated_sample, sample_metadata
@@ -234,6 +237,258 @@ class GbmToolTests(unittest.TestCase):
             {"name": "Age", "include": True, "monotonicity": "Increasing"},
             {"name": "Segment", "include": True, "monotonicity": ""},
         ]
+
+    def train_demo_interaction_model(self) -> tuple[Any, Any, Path, list[str], list[str]]:
+        try:
+            import lightgbm as lgb
+        except ImportError:
+            self.skipTest("LightGBM is not installed")
+
+        all_features = [
+            "LATITUDE",
+            "LONGITUDE",
+            "POSTCODE_CATEGORY",
+            "DRIVER_AGE",
+            "CAR_VALUE",
+        ]
+        postcode_features = all_features[:3]
+        con = duckdb.connect(database=":memory:")
+        try:
+            frame = con.execute(
+                f"""
+SELECT {", ".join(quote_ident(feature) for feature in all_features)}, PREMIUM
+FROM read_parquet({sql_literal(str(demo_dataset_path()))})
+LIMIT 5000
+"""
+            ).fetchdf()
+        finally:
+            con.close()
+        booster = lgb.train(
+            {
+                "objective": "regression",
+                "metric": "l2",
+                "verbosity": -1,
+                "num_leaves": 7,
+                "min_data_in_leaf": 5,
+                "learning_rate": 0.1,
+                "interaction_constraints": [[0, 1, 2], [3, 4]],
+                "seed": 1,
+                "num_threads": 1,
+            },
+            lgb.Dataset(frame[all_features], label=frame["PREMIUM"]),
+            num_boost_round=12,
+        )
+        model_path = self.root / "demo_interaction_model.txt"
+        booster.save_model(str(model_path))
+        return lgb, frame, model_path, all_features, postcode_features
+
+    def test_extract_lightgbm_interaction_group_writes_loadable_postcode_model(self) -> None:
+        lgb, frame, model_path, all_features, postcode_features = self.train_demo_interaction_model()
+        postcode_path = self.root / "postcode_model.txt"
+        remainder_path = self.root / "remainder_model.txt"
+
+        result = extract_lightgbm_interaction_group(
+            model_path,
+            reversed(postcode_features),
+            postcode_path,
+        )
+        extract_lightgbm_interaction_group(model_path, all_features[3:], remainder_path)
+
+        self.assertEqual(result, postcode_path)
+        postcode_model = lgb.Booster(model_file=str(postcode_path))
+        remainder_model = lgb.Booster(model_file=str(remainder_path))
+        self.assertEqual(postcode_model.feature_name(), postcode_features)
+        self.assertEqual(postcode_model.num_feature(), len(postcode_features))
+        self.assertGreater(postcode_model.num_trees(), 0)
+        original_model = lgb.Booster(model_file=str(model_path))
+        self.assertEqual(
+            postcode_model.num_trees() + remainder_model.num_trees(),
+            original_model.num_trees(),
+        )
+
+        original_predictions = original_model.predict(
+            frame[all_features], raw_score=True
+        )
+        original_contributions = original_model.predict(
+            frame[all_features], pred_contrib=True
+        )
+        postcode_predictions = postcode_model.predict(frame[postcode_features], raw_score=True)
+        remainder_predictions = remainder_model.predict(frame[all_features[3:]], raw_score=True)
+        expected_postcode = original_contributions[:, :3].sum(axis=1)
+        expected_remainder = original_contributions[:, 3:5].sum(axis=1)
+        original_bias = original_contributions[:, 5]
+        for predicted, expected in zip(postcode_predictions, expected_postcode):
+            self.assertAlmostEqual(float(predicted), float(expected), places=12)
+        for predicted, expected in zip(remainder_predictions, expected_remainder):
+            self.assertAlmostEqual(float(predicted), float(expected), places=12)
+        for original, postcode, remainder, bias in zip(
+            original_predictions,
+            postcode_predictions,
+            remainder_predictions,
+            original_bias,
+        ):
+            self.assertAlmostEqual(
+                float(original),
+                float(postcode + remainder + bias),
+                places=12,
+            )
+
+        uncentred_postcode_path = self.root / "postcode_model_uncentred.txt"
+        uncentred_remainder_path = self.root / "remainder_model_uncentred.txt"
+        extract_lightgbm_interaction_group(
+            model_path,
+            postcode_features,
+            uncentred_postcode_path,
+            shap_centered=False,
+        )
+        extract_lightgbm_interaction_group(
+            model_path,
+            all_features[3:],
+            uncentred_remainder_path,
+            shap_centered=False,
+        )
+        uncentred_predictions = lgb.Booster(model_file=str(uncentred_postcode_path)).predict(
+            frame[postcode_features], raw_score=True
+        ) + lgb.Booster(model_file=str(uncentred_remainder_path)).predict(
+            frame[all_features[3:]], raw_score=True
+        )
+        for original, uncentred in zip(original_predictions, uncentred_predictions):
+            self.assertAlmostEqual(float(original), float(uncentred), places=12)
+
+        text = postcode_path.read_text(encoding="utf-8")
+        self.assertIn("max_feature_idx=2\n", text)
+        self.assertIn(
+            "feature_names=LATITUDE LONGITUDE POSTCODE_CATEGORY\n",
+            text,
+        )
+        self.assertIn("[interaction_constraints: [0,1,2]]\n", text)
+        importance_text = text.split("feature_importances:\n", 1)[1].split(
+            "\nparameters:\n", 1
+        )[0]
+        importance_names = {
+            line.split("=", 1)[0] for line in importance_text.splitlines() if line
+        }
+        self.assertTrue(importance_names)
+        self.assertTrue(importance_names.issubset(set(postcode_features)))
+        self.assertFalse(importance_names.intersection(all_features[3:]))
+
+    def test_extract_lightgbm_interaction_group_validates_saved_constraint_and_trees(self) -> None:
+        _lgb, _frame, model_path, _all_features, postcode_features = (
+            self.train_demo_interaction_model()
+        )
+        output_path = self.root / "invalid_output.txt"
+        output_path.write_text("existing output\n", encoding="utf-8")
+
+        with self.assertRaisesRegex(ValueError, "exactly match"):
+            extract_lightgbm_interaction_group(
+                model_path,
+                postcode_features[:2],
+                output_path,
+            )
+        self.assertEqual(output_path.read_text(encoding="utf-8"), "existing output\n")
+
+        unconstrained_path = self.root / "unconstrained_model.txt"
+        unconstrained_path.write_text(
+            model_path.read_text(encoding="utf-8").replace(
+                "[interaction_constraints: [0,1,2],[3,4]]",
+                "[interaction_constraints: ]",
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ValueError, "exactly match"):
+            extract_lightgbm_interaction_group(
+                unconstrained_path,
+                postcode_features,
+                output_path,
+            )
+        self.assertEqual(output_path.read_text(encoding="utf-8"), "existing output\n")
+
+        forged_path = self.root / "forged_constraint_model.txt"
+        forged_path.write_text(
+            model_path.read_text(encoding="utf-8").replace(
+                "[interaction_constraints: [0,1,2],[3,4]]",
+                "[interaction_constraints: [0,1,2,3],[4]]",
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ValueError, "mixes the requested interaction group"):
+            extract_lightgbm_interaction_group(
+                forged_path,
+                [*postcode_features, "DRIVER_AGE"],
+                output_path,
+            )
+        self.assertEqual(output_path.read_text(encoding="utf-8"), "existing output\n")
+
+    def test_extract_lightgbm_interaction_group_subsets_categorical_and_feature_metadata(self) -> None:
+        try:
+            import lightgbm as lgb
+            import pandas as pd
+        except ImportError:
+            self.skipTest("LightGBM GBM dependencies are not installed")
+
+        frame = pd.DataFrame(
+            {
+                "num": [1, 2, 3, 4, 5, 6] * 40,
+                "cat": pd.Categorical(["a", "b", "c", "a", "b", "c"] * 40),
+                "num2": [3, 1, 4, 2, 5, 0] * 40,
+                "cat2": pd.Categorical(["x", "x", "y", "z", "y", "z"] * 40),
+            }
+        )
+        response = [50 - (5 * value) for value in frame["num2"]]
+        booster = lgb.train(
+            {
+                "objective": "regression",
+                "verbosity": -1,
+                "min_data_in_leaf": 2,
+                "interaction_constraints": [[0, 1], [2, 3]],
+                "monotone_constraints": [1, 0, -1, 0],
+                "max_bin_by_feature": [10, 20, 30, 40],
+                "feature_contri": [1, 2, 3, 4],
+                "cegb_penalty_feature_lazy": [0.1, 0.2, 0.3, 0.4],
+                "cegb_penalty_feature_coupled": [0.5, 0.6, 0.7, 0.8],
+                "num_threads": 1,
+            },
+            lgb.Dataset(
+                frame,
+                label=response,
+                categorical_feature=["cat", "cat2"],
+            ),
+            num_boost_round=6,
+        )
+        source_path = self.root / "categorical_source.txt"
+        output_path = self.root / "categorical_group.txt"
+        booster.save_model(str(source_path))
+
+        extract_lightgbm_interaction_group(
+            source_path,
+            ["cat2", "num2"],
+            output_path,
+        )
+
+        extracted = lgb.Booster(model_file=str(output_path))
+        self.assertEqual(extracted.feature_name(), ["num2", "cat2"])
+        self.assertEqual(len(extracted.predict(frame[["num2", "cat2"]])), len(frame))
+        text = output_path.read_text(encoding="utf-8")
+        self.assertIn("monotone_constraints=-1 0\n", text)
+        self.assertIn("[monotone_constraints: -1,0]\n", text)
+        self.assertIn("[feature_contri: 3,4]\n", text)
+        self.assertIn("[max_bin_by_feature: 30,40]\n", text)
+        self.assertIn("[categorical_feature: 1]\n", text)
+        self.assertIn('pandas_categorical:[["x", "y", "z"]]\n', text)
+
+    def test_interaction_group_model_filename_is_readable_safe_and_collision_resistant(self) -> None:
+        self.assertEqual(interaction_group_model_filename("POSTCODE"), "model_POSTCODE.txt")
+        self.assertEqual(interaction_group_model_filename("Policy holder"), "model_Policy_holder.txt")
+        self.assertEqual(interaction_group_model_filename("München/区域"), "model_M_nchen.txt")
+
+        collision = interaction_group_model_filename("postcode", ["model_POSTCODE.txt"])
+        self.assertRegex(collision, r"^model_postcode_[0-9a-f]{8}\.txt$")
+        self.assertEqual(collision, interaction_group_model_filename("postcode", ["model_POSTCODE.txt"]))
+
+        long_name = "LONG" * 30
+        truncated = interaction_group_model_filename(long_name)
+        self.assertRegex(truncated, r"^model_[A-Za-z0-9._-]{71}_[0-9a-f]{8}\.txt$")
+        self.assertLessEqual(len(truncated.removeprefix("model_").removesuffix(".txt")), 80)
 
     def test_create_model_id_uses_time_only_timestamp_and_uuid_suffix(self) -> None:
         store = GbmModelStore(self.data_path)
@@ -1164,6 +1419,39 @@ COPY (
 
         self.assertFalse(result.ok)
         self.assertIn("Choose a valid GBM feature interaction grouping: POSTCODE", result.errors)
+
+    def test_validate_group_model_exports_require_groups_and_shap_rows(self) -> None:
+        dataset = Dataset(self.data_path)
+        base_payload = {
+            "response": "actualNumerator",
+            "offset": "denominator",
+            "features": [{"name": "Age", "include": True}],
+            "parameters": default_parameters(),
+            "sample_column": "SAMPLE",
+            "feature_groupings": {"Age": "DRIVER"},
+            "create_feature_interaction_group_models": True,
+        }
+
+        without_group = validate_request(dataset, {**base_payload, "shap_rows": "10k"})
+        without_shap = validate_request(
+            dataset,
+            {
+                **base_payload,
+                "feature_interaction_groupings": ["DRIVER"],
+                "shap_rows": "0",
+            },
+        )
+
+        self.assertFalse(without_group.ok)
+        self.assertIn(
+            "Choose at least one GBM feature interaction grouping to create constraint group model files",
+            without_group.errors,
+        )
+        self.assertFalse(without_shap.ok)
+        self.assertIn(
+            "Choose non-zero SHAP rows to create and verify constraint group model files",
+            without_shap.errors,
+        )
 
     def test_validate_rejects_unknown_feature_interaction_feature(self) -> None:
         dataset = Dataset(self.data_path)
@@ -2512,6 +2800,24 @@ COPY (
 
     def test_rename_active_model_updates_folder_computed_sources_and_schema(self) -> None:
         store = self.write_model_artifacts()
+        group_model_path = store.model_dir("m1") / "model_POSTCODE.txt"
+        group_model_path.write_text("group model sidecar\n", encoding="utf-8")
+        manifest = store.manifest("m1")
+        manifest["feature_interaction_group_models"] = {
+            "enabled": True,
+            "error_metric": "max_absolute_error",
+            "groups": [
+                {
+                    "grouping": "POSTCODE",
+                    "status": "verified",
+                    "artifact": "model_POSTCODE.txt",
+                    "tree_count": 2,
+                    "verified_rows": 3,
+                    "max_absolute_error": 1e-15,
+                }
+            ],
+        }
+        store.write_json(store.artifact_path("m1", "manifest"), manifest)
         con = duckdb.connect(database=":memory:")
         try:
             con.execute(
@@ -2531,6 +2837,10 @@ COPY (
         self.assertEqual(status, 200)
         self.assertFalse(store.model_dir("m1").exists())
         self.assertTrue(store.model_dir("renamed-model").exists())
+        self.assertEqual(
+            (store.model_dir("renamed-model") / "model_POSTCODE.txt").read_text(encoding="utf-8"),
+            "group model sidecar\n",
+        )
         self.assertEqual(payload["config"]["active_model_id"], "renamed-model")
         self.assertEqual(payload["model"]["model_id"], "renamed-model")
         self.assertEqual(payload["model"]["label"], "renamed-model")
@@ -2539,6 +2849,10 @@ COPY (
         self.assertEqual(manifest["model_id"], "renamed-model")
         self.assertEqual(manifest["label"], "renamed-model")
         self.assertNotIn("sources", manifest)
+        self.assertEqual(
+            manifest["feature_interaction_group_models"]["groups"][0]["artifact"],
+            "model_POSTCODE.txt",
+        )
         self.assertEqual(store.active_model_id(), "renamed-model")
 
         detail = store.model_detail("renamed-model")
@@ -2605,6 +2919,8 @@ COPY (
 
     def test_delete_final_model_clears_active_model_and_schema_sources(self) -> None:
         store = self.write_model_artifacts()
+        group_model_path = store.model_dir("m1") / "model_POSTCODE.txt"
+        group_model_path.write_text("group model sidecar\n", encoding="utf-8")
         app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
 
         status, body = asgi_delete(app, "/api/gbm/models/m1")
@@ -2612,6 +2928,7 @@ COPY (
 
         self.assertEqual(status, 200)
         self.assertFalse(store.model_dir("m1").exists())
+        self.assertFalse(group_model_path.exists())
         self.assertIsNone(payload["config"]["active_model_id"])
         self.assertEqual(payload["config"]["models"], [])
         self.assertIsNone(store.active_model_id())
@@ -2752,6 +3069,176 @@ COPY (
             store.read_json(store.artifact_path(result["model_id"], "parameters"))["interaction_constraints"],
             [[0, 2], [1], [3], [4], [5]],
         )
+
+    def test_training_creates_and_verifies_selected_interaction_group_models(self) -> None:
+        try:
+            import lightgbm as lgb
+            import pandas as pd
+        except ImportError:
+            self.skipTest("LightGBM and pandas are required")
+
+        data_path = self.root / "interaction_group_exports.csv"
+        rows = ["actualNumerator,denominator,PostcodeA,PostcodeB,DriverA,DriverB,PairA,PairB"]
+        for index in range(600):
+            postcode_a = index % 11
+            postcode_b = (index // 11) % 7
+            driver_a = (index // 5) % 13
+            driver_b = (index // 17) % 5
+            pair_a = index % 2
+            pair_b = (index // 2) % 2
+            response = math.exp(
+                2
+                + (0.12 * postcode_a)
+                + (0.15 * postcode_b)
+                + (0.12 * driver_a)
+                + (0.2 * driver_b)
+                + (0.25 if pair_a == pair_b else 0)
+            )
+            rows.append(f"{response},1,{postcode_a},{postcode_b},{driver_a},{driver_b},{pair_a},{pair_b}")
+        data_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+        dataset = Dataset(data_path)
+        store = GbmModelStore(data_path)
+        features = ["PostcodeA", "PostcodeB", "DriverA", "DriverB", "PairA", "PairB"]
+        parameters = default_parameters() + [
+            {"name": "num_iterations", "value": 120},
+            {"name": "early_stopping_rounds", "value": 0},
+            {"name": "num_leaves", "value": 3},
+            {"name": "min_data_in_leaf", "value": 3},
+            {"name": "learning_rate", "value": 0.2},
+            {"name": "metric", "value": "poisson"},
+            {"name": "objective", "value": "poisson"},
+            {"name": "num_threads", "value": 1},
+        ]
+
+        result = train_model(
+            dataset,
+            store,
+            {
+                "label": "Group exports",
+                "response": "actualNumerator",
+                "offset": "denominator",
+                "features": [{"name": name, "include": True, "monotonicity": ""} for name in features],
+                "parameters": parameters,
+                "sample_column": "",
+                "shap_rows": "all",
+                "feature_groupings": {
+                    "PostcodeA": "POSTCODE",
+                    "PostcodeB": "POSTCODE",
+                    "DriverA": "DRIVER",
+                    "DriverB": "DRIVER",
+                },
+                "feature_interaction_groupings": ["POSTCODE", "DRIVER"],
+                "feature_interaction_pairs": [{"left": "PairA", "right": "PairB"}],
+                "create_feature_interaction_group_models": True,
+            },
+        )
+
+        manifest = store.manifest(result["model_id"])
+        metadata = manifest["feature_interaction_group_models"]
+        self.assertTrue(metadata["enabled"])
+        self.assertEqual(metadata["error_metric"], "max_absolute_error")
+        self.assertGreaterEqual(manifest["timings"]["interaction_group_model_seconds"], 0)
+        self.assertEqual(manifest["feature_interaction_constraints"]["mode"], "pairs")
+        by_group = {item["grouping"]: item for item in metadata["groups"]}
+        self.assertEqual(set(by_group), {"POSTCODE", "DRIVER"})
+        frame = pd.read_csv(data_path)
+        with duckdb.connect(database=":memory:") as con:
+            shap = con.execute(
+                f"SELECT * FROM read_parquet({sql_literal(str(store.artifact_path(result['model_id'], 'shap_long')))}) "
+                "ORDER BY __lucidum_row_id"
+            ).fetchdf()
+        for grouping, group_features in {
+            "POSTCODE": ["PostcodeA", "PostcodeB"],
+            "DRIVER": ["DriverA", "DriverB"],
+        }.items():
+            saved = by_group[grouping]
+            self.assertEqual(saved["status"], "verified")
+            self.assertEqual(saved["verified_rows"], len(frame))
+            self.assertGreater(saved["tree_count"], 0)
+            model_path = store.model_dir(result["model_id"]) / saved["artifact"]
+            self.assertTrue(model_path.exists())
+            booster = lgb.Booster(model_file=str(model_path))
+            self.assertEqual(booster.feature_name(), group_features)
+            prediction = booster.predict(frame[group_features], raw_score=True)
+            expected = shap[f"{grouping}_INTERACTION_GROUP"]
+            maximum_error = float(abs(prediction - expected).max())
+            self.assertAlmostEqual(maximum_error, saved["max_absolute_error"], places=15)
+            self.assertLess(maximum_error, 1e-12)
+
+        feature_spec_rows = [
+            {"feature": name, "grouping": "POSTCODE" if name.startswith("Postcode") else "DRIVER"}
+            for name in features
+        ]
+        active_constraints = GbmConfigBuilder(
+            dataset,
+            store,
+            feature_spec=lambda: {"rows": feature_spec_rows, "scenarios": []},
+        ).payload()["active_feature_interaction_constraints"]
+        self.assertTrue(active_constraints["create_group_models"])
+        active_by_group = {item["grouping"]: item for item in active_constraints["groups"]}
+        self.assertEqual(active_by_group["POSTCODE"]["group_model"]["status"], "verified")
+        self.assertLess(active_by_group["POSTCODE"]["group_model"]["max_absolute_error"], 1e-12)
+
+    def test_training_records_no_trees_without_failing_group_model_export(self) -> None:
+        try:
+            import lightgbm  # noqa: F401
+        except ImportError:
+            self.skipTest("LightGBM is not installed")
+
+        data_path = self.root / "unused_interaction_group.csv"
+        rows = ["actualNumerator,denominator,Signal,ConstantA,ConstantB"]
+        for index in range(200):
+            signal = index % 20
+            rows.append(f"{10 + (4 * signal)},1,{signal},1,1")
+        data_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+        dataset = Dataset(data_path)
+        store = GbmModelStore(data_path)
+        parameters = default_parameters() + [
+            {"name": "num_iterations", "value": 10},
+            {"name": "early_stopping_rounds", "value": 0},
+            {"name": "num_leaves", "value": 3},
+            {"name": "min_data_in_leaf", "value": 2},
+            {"name": "metric", "value": "poisson"},
+            {"name": "objective", "value": "poisson"},
+            {"name": "num_threads", "value": 1},
+        ]
+
+        result = train_model(
+            dataset,
+            store,
+            {
+                "label": "Unused group",
+                "response": "actualNumerator",
+                "offset": "denominator",
+                "features": [
+                    {"name": name, "include": True, "monotonicity": ""}
+                    for name in ("Signal", "ConstantA", "ConstantB")
+                ],
+                "parameters": parameters,
+                "sample_column": "",
+                "shap_rows": "all",
+                "feature_groupings": {"ConstantA": "NOISE", "ConstantB": "NOISE"},
+                "feature_interaction_groupings": ["NOISE"],
+                "create_feature_interaction_group_models": True,
+            },
+        )
+
+        metadata = store.manifest(result["model_id"])["feature_interaction_group_models"]
+        self.assertEqual(
+            metadata["groups"],
+            [
+                {
+                    "grouping": "NOISE",
+                    "status": "no_trees",
+                    "artifact": None,
+                    "tree_count": 0,
+                    "verified_rows": 0,
+                    "max_absolute_error": None,
+                }
+            ],
+        )
+        self.assertFalse((store.model_dir(result["model_id"]) / "model_NOISE.txt").exists())
+        self.assertTrue(store.artifact_path(result["model_id"], "model").exists())
 
     def test_ebm_pair_allowlist_produces_only_allowed_pairs_or_group_terms(self) -> None:
         try:
