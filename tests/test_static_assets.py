@@ -1765,12 +1765,28 @@ if (formulaCompletionContext("# Post", 0, 6).type !== "none") throw new Error("c
 
 
 
-    def test_gbm_shap_flame_option_uses_exact_domain_without_45_55(self) -> None:
+    def test_gbm_shap_flame_option_uses_line_bar_category_label_density(self) -> None:
         chart_path = Path(__file__).resolve().parents[1] / "src/py_lucidum/static/app/gbm-shap-chart.js"
         script = f"""
 import fs from "node:fs";
 const source = fs.readFileSync({str(chart_path)!r}, "utf8").replaceAll("export ", "");
-eval(source + "\\nglobalThis.__shapChartOption = shapChartOption;\\nglobalThis.__formatUpliftPercent = formatUpliftPercent;");
+eval(source + "\\nglobalThis.__shapChartOption = shapChartOption;\\nglobalThis.__shapFlameXAxisDensityMessage = shapFlameXAxisDensityMessage;\\nglobalThis.__formatUpliftPercent = formatUpliftPercent;");
+function flameRow(x) {{
+  return {{ x, p0: -0.2, p5: -0.19, p10: -0.18, p20: -0.17, p30: -0.16, p40: -0.15, p50: -0.14, p60: -0.13, p70: -0.12, p80: -0.11, p90: -0.1, p95: -0.09, p100: -0.08 }};
+}}
+function flameOptionForCount(count, chartWidth = 1200) {{
+  const denseRows = Array.from({{ length: count }}, (_, index) => flameRow(index + 1));
+  return globalThis.__shapChartOption({{
+    plot_type: "flame",
+    title: "SHAP flame plot: Category",
+    x_feature: "Category",
+    y_label: "SHAP",
+    x_domain: [1, count],
+    y_domain: [-0.2, -0.08],
+    banding: 1,
+    rows: denseRows,
+  }}, {{}}, {{ chartWidth }});
+}}
 const rows = [
   {{ x: 18, p0: 0.1, p5: 0.11, p10: 0.12, p20: 0.13, p30: 0.14, p40: 0.15, p50: 0.16, p60: 0.17, p70: 0.18, p80: 0.19, p90: 0.2, p95: 0.21, p100: 0.22 }},
   {{ x: 83, p0: -0.2, p5: -0.19, p10: -0.18, p20: -0.17, p30: -0.16, p40: -0.15, p50: -0.14, p60: -0.13, p70: -0.12, p80: -0.11, p90: -0.1, p95: -0.09, p100: -0.08 }},
@@ -1783,14 +1799,70 @@ const option = globalThis.__shapChartOption({{
   x_domain: [18, 83],
   y_domain: [-0.2, 0.22],
   rows,
-}}, {{}});
-if (option.xAxis.min !== 18 || option.xAxis.max !== 83) {{
-  throw new Error(`expected exact x domain 18..83, got ${{option.xAxis.min}}..${{option.xAxis.max}}`);
+}}, {{}}, {{ chartWidth: 1200 }});
+if (option.xAxis.type !== "category" || option.xAxis.data.join("|") !== "18|83") {{
+  throw new Error(`expected ordered x categories 18|83, got ${{option.xAxis.data.join("|")}}`);
 }}
 const seriesNames = option.series.map((series) => series.name);
 if (seriesNames.includes("45-55")) throw new Error("45-55 series should not be rendered");
 const tooltip = option.tooltip.formatter([{{ axisValue: 18, value: [18, 0.16] }}]);
 if (tooltip.includes("45-55")) throw new Error("45-55 tooltip row should not be rendered");
+const demoOption = globalThis.__shapChartOption({{
+  plot_type: "flame",
+  title: "SHAP flame plot: POSTCODE_CATEGORY",
+  x_feature: "POSTCODE_CATEGORY",
+  y_label: "SHAP",
+  x_domain: [3, 38],
+  y_domain: [-0.4, 0.8],
+  banding: 1,
+  rows: Array.from({{ length: 36 }}, (_, index) => flameRow(index + 3)),
+}}, {{}}, {{ chartWidth: 1200 }});
+if (demoOption.xAxis.data.length !== 36 || demoOption.xAxis.data[0] !== 3 || demoOption.xAxis.data.at(-1) !== 38) {{
+  throw new Error(`demo categories were not preserved: ${{demoOption.xAxis.data.join("|")}}`);
+}}
+if (demoOption.xAxis.axisLabel.show !== true
+    || demoOption.xAxis.axisLabel.interval !== 0
+    || demoOption.xAxis.axisLabel.rotate !== 65
+    || demoOption.xAxis.axisLabel.fontSize !== 10
+    || demoOption.xAxis.axisLabel.showMinLabel !== true
+    || demoOption.xAxis.axisLabel.showMaxLabel !== true
+    || demoOption.xAxis.axisLabel.hideOverlap !== false) {{
+  throw new Error(`unexpected demo label policy: ${{JSON.stringify(demoOption.xAxis.axisLabel)}}`);
+}}
+if (demoOption.grid.containLabel !== false || demoOption.grid.bottom !== 64 || demoOption.xAxis.nameGap !== 48) {{
+  throw new Error(`unexpected demo axis spacing: ${{JSON.stringify({{ grid: demoOption.grid, nameGap: demoOption.xAxis.nameGap }})}}`);
+}}
+if (demoOption.dataZoom.length !== 0) throw new Error("36 categories should not enable data zoom");
+const demoMedian = demoOption.series.find((series) => series.name === "Median");
+if (demoMedian.data.length !== 36 || demoMedian.data.some((value) => Array.isArray(value))) {{
+  throw new Error("flame median values must align to category indexes");
+}}
+const demoRibbon = demoOption.series.find((series) => series.type === "custom");
+const ribbonCoordinates = [];
+demoRibbon.renderItem({{ dataIndex: 0 }}, {{
+  coord: (value) => {{ ribbonCoordinates.push(value); return value; }},
+}});
+const ribbonIndexes = new Set(ribbonCoordinates.map((value) => value[0]));
+if (Math.min(...ribbonIndexes) !== 0 || Math.max(...ribbonIndexes) !== 35 || ribbonIndexes.size !== 36) {{
+  throw new Error(`flame ribbons must use category indexes: ${{[...ribbonIndexes].join("|")}}`);
+}}
+if (flameOptionForCount(50).xAxis.axisLabel.fontSize !== 10) throw new Error("50 categories should retain 10px labels");
+if (flameOptionForCount(51).xAxis.axisLabel.fontSize !== 8) throw new Error("51 categories should use 8px labels");
+if (flameOptionForCount(120).dataZoom.length !== 0) throw new Error("120 categories should not enable data zoom");
+if (flameOptionForCount(121).dataZoom.length !== 2) throw new Error("121 categories should enable inside and slider zoom");
+if (flameOptionForCount(199).xAxis.axisLabel.show !== true) throw new Error("199 category labels should remain visible");
+const hiddenOption = flameOptionForCount(200);
+if (hiddenOption.xAxis.axisLabel.show !== false || hiddenOption.dataZoom.length !== 2) {{
+  throw new Error("200 categories should hide labels and retain zoom");
+}}
+if (!globalThis.__shapFlameXAxisDensityMessage({{ rows: Array(200).fill({{}}) }}).includes("200 or more")) {{
+  throw new Error("dense flame plots should explain hidden x-axis labels");
+}}
+const wideShortOption = flameOptionForCount(10, 1200);
+const narrowShortOption = flameOptionForCount(10, 200);
+if (wideShortOption.xAxis.axisLabel.rotate !== 0 || narrowShortOption.xAxis.axisLabel.rotate !== 65) {{
+  throw new Error("flame label rotation should respond to available chart width");
+}}
 const responseOption = globalThis.__shapChartOption({{
   plot_type: "flame",
   title: "SHAP flame plot: Age",
@@ -1803,7 +1875,7 @@ const responseOption = globalThis.__shapChartOption({{
     {{ x: 18, p0: 0.8, p5: 0.9, p10: 0.95, p20: 1, p30: 1.1, p40: 1.2, p50: 1.25, p60: 1.3, p70: 1.35, p80: 1.4, p90: 1.45, p95: 1.5, p100: 1.6 }},
     {{ x: 83, p0: 0.7, p5: 0.75, p10: 0.8, p20: 0.85, p30: 0.9, p40: 0.95, p50: 1, p60: 1.05, p70: 1.1, p80: 1.15, p90: 1.2, p95: 1.25, p100: 1.3 }},
   ],
-}}, {{}});
+}}, {{}}, {{ chartWidth: 1200 }});
 const median = responseOption.series.find((series) => series.name === "Median");
 if (!median?.markLine?.data || median.markLine.data[0].yAxis !== 1) {{
   throw new Error("rescale=1 SHAP mark line should be drawn at 1");

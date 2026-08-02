@@ -1,4 +1,10 @@
-import { emptyOption, ensureShapChartLibraries, shapChartOption } from "./gbm-shap-chart.js";
+import {
+  emptyOption,
+  ensureShapChartLibraries,
+  shapChartOption,
+  shapFlameXAxisDensityMessage,
+  shapFlameXAxisPresentation,
+} from "./gbm-shap-chart.js";
 import { isEchartsTargetReady } from "./shared/echarts-gl.js";
 import { bindSettingsStripOverflowCue } from "./shared/settings-strip.js";
 
@@ -43,6 +49,7 @@ export function createGbmShapTool({ api, escapeHtml, setNotice, showClipboardToa
   let pendingChartRender = null;
   let pendingEmptyMessage = null;
   let chartRenderPending = false;
+  let flameXAxisLayoutWidth = null;
   let layoutMediaQuery = null;
   let layoutMediaListener = null;
   let settingsOverflowCleanup = null;
@@ -317,7 +324,10 @@ export function createGbmShapTool({ api, escapeHtml, setNotice, showClipboardToa
       await renderChart(payload, seq);
       if (seq !== plotSeq) return;
       setNotice("");
-      setMessage((payload.warnings || []).join(" "));
+      setMessage([
+        ...(payload.warnings || []),
+        shapFlameXAxisDensityMessage(payload),
+      ].filter(Boolean).join(" "));
     } catch (error) {
       if (seq !== plotSeq) return;
       setNotice(error.message);
@@ -370,7 +380,7 @@ export function createGbmShapTool({ api, escapeHtml, setNotice, showClipboardToa
         retainPendingChartRender(work);
         return false;
       }
-      const option = shapChartOption(payload, chartTheme());
+      const option = shapChartOption(payload, chartTheme(), { chartWidth: target.clientWidth });
       const nextLegendEntries = legendEntryNames(option);
       const pendingLegendSelection = pendingLegendSelectionForPayload(payload, nextLegendEntries);
       if (previousPlotType === payload.plot_type && sameEntries(previousLegendEntries, nextLegendEntries)) {
@@ -400,6 +410,7 @@ export function createGbmShapTool({ api, escapeHtml, setNotice, showClipboardToa
         chart.setOption(option, true);
       }
       lastPayload = payload;
+      flameXAxisLayoutWidth = payload.plot_type === "flame" ? target.clientWidth : null;
       scheduleChartResize({ flush: true });
       return true;
     } finally {
@@ -622,6 +633,7 @@ export function createGbmShapTool({ api, escapeHtml, setNotice, showClipboardToa
     chartResizeFrame = null;
     chartResizeFlush = false;
     settledObserverSize = null;
+    flameXAxisLayoutWidth = null;
     lastPayload = null;
     if (chart) {
       chart.dispose();
@@ -985,6 +997,22 @@ export function createGbmShapTool({ api, escapeHtml, setNotice, showClipboardToa
     const target = document.getElementById("gbmShapChart");
     if (!chart || target !== observedChartTarget || !isEchartsTargetReady(target)) return;
     chart.resize();
+    const chartWidth = target.clientWidth;
+    if (
+      lastPayload?.plot_type === "flame"
+      && (!Number.isFinite(flameXAxisLayoutWidth) || Math.abs(flameXAxisLayoutWidth - chartWidth) >= 0.5)
+    ) {
+      const presentation = shapFlameXAxisPresentation(
+        lastPayload,
+        chartTheme(),
+        { chartWidth },
+      );
+      chart.setOption({
+        grid: presentation.grid,
+        xAxis: presentation.xAxis,
+      });
+      flameXAxisLayoutWidth = chartWidth;
+    }
     if (flush) {
       chart.getZr?.().flush?.();
       settledObserverSize = currentChartSize();

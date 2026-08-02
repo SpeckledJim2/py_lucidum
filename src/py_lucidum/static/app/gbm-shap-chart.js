@@ -10,6 +10,8 @@ const SHAP_RED_RIBBONS = [
 const LINE_COLORS = ["#4fb99f", "#ff7f50", "#8aa1d6", "#b779d6", "#e7b84b", "#5aa2d6", "#d96a8a", "#84b547"];
 const AXIS_TARGET_INTERVALS = 6;
 const SHAP_VALUE_AXIS_TARGET_INTERVALS = 20;
+const FLAME_AXIS_LABEL_DENSITY_LIMIT = 200;
+const FLAME_AXIS_LABEL_PADDING = 8;
 const SURFACE_AXIS_LABEL_FONT_SIZE = 10;
 const SURFACE_AXIS_NAME_FONT_SIZE = 11;
 const SURFACE_BOX_WIDTH = 100;
@@ -20,10 +22,10 @@ export async function ensureShapChartLibraries(plotType) {
   return ensureEchartsGl(plotType);
 }
 
-export function shapChartOption(payload, theme = {}) {
+export function shapChartOption(payload, theme = {}, layout = {}) {
   if (!payload || typeof payload !== "object") return emptyOption("Select a SHAP feature", theme);
   const common = commonOption(payload, theme);
-  if (payload.plot_type === "flame") return flameOption(payload, common, theme);
+  if (payload.plot_type === "flame") return flameOption(payload, common, theme, layout);
   if (payload.plot_type === "box") return boxOption(payload, common, theme);
   if (payload.plot_type === "surface") return surfaceOption(payload, common, theme);
   if (payload.plot_type === "lines") return linesOption(payload, common, theme);
@@ -71,8 +73,9 @@ function commonOption(payload, theme) {
   };
 }
 
-function flameOption(payload, common, theme) {
+function flameOption(payload, common, theme, layout = {}) {
   const rows = payload.rows || [];
+  const xAxisPresentation = shapFlameXAxisPresentation(payload, theme, layout);
   const ribbons = [
     ["p0", "p100", "Min-Max"],
     ["p5", "p95", "5-95"],
@@ -89,7 +92,7 @@ function flameOption(payload, common, theme) {
   series.push({
     name: "Median",
     type: "line",
-    data: rows.map((row) => [row.x, numberOrNull(row.p50)]),
+    data: rows.map((row) => numberOrNull(row.p50)),
     symbol: "none",
     itemStyle: { color: SHAP_RED },
     lineStyle: { color: SHAP_RED, width: 2, type: "dashed" },
@@ -98,10 +101,93 @@ function flameOption(payload, common, theme) {
   return {
     ...common,
     legend: centeredLegend(common.legend),
+    grid: { ...common.grid, ...xAxisPresentation.grid },
     tooltip: { trigger: "axis", confine: true, formatter: flameTooltipFormatter(rows, payload) },
-    xAxis: valueAxis(payload.x_feature, theme, payload.x_domain, { exactDomain: true }),
+    xAxis: xAxisPresentation.xAxis,
     yAxis: shapValueAxis(payload, payload.y_label || "SHAP", theme, payload.y_domain),
+    dataZoom: xAxisPresentation.dataZoom,
     series,
+  };
+}
+
+export function shapFlameXAxisPresentation(payload, theme = {}, layout = {}) {
+  const values = (payload?.rows || [])
+    .map((row) => numberOrNull(row?.x))
+    .filter((value) => value !== null);
+  const labels = values.map(compactNumber);
+  const policy = flameXAxisLabelPolicy(labels, layout?.chartWidth);
+  return {
+    grid: {
+      bottom: policy.bottom,
+      containLabel: false,
+    },
+    xAxis: {
+      type: "category",
+      data: values,
+      boundaryGap: false,
+      name: payload?.x_feature || "",
+      nameLocation: "middle",
+      nameGap: policy.nameGap,
+      axisLine: { lineStyle: { color: theme.line || "#cbd5e1" } },
+      axisLabel: {
+        show: policy.show,
+        color: theme.text || "#334155",
+        interval: 0,
+        formatter: compactNumber,
+        hideOverlap: false,
+        showMinLabel: true,
+        showMaxLabel: true,
+        rotate: policy.rotate,
+        fontSize: policy.fontSize,
+        margin: 8,
+      },
+      nameTextStyle: { color: theme.text || "#334155", fontWeight: 700 },
+    },
+    dataZoom: policy.dataZoomEnabled
+      ? [{ type: "inside" }, { type: "slider", height: 18, bottom: 18 }]
+      : [],
+  };
+}
+
+export function shapFlameXAxisDensityMessage(payload) {
+  return (payload?.rows || []).length >= FLAME_AXIS_LABEL_DENSITY_LIMIT
+    ? `X-axis labels hidden at ${FLAME_AXIS_LABEL_DENSITY_LIMIT.toLocaleString()} or more categories.`
+    : "";
+}
+
+function flameXAxisLabelPolicy(labels, chartWidth = 0) {
+  const count = labels.length;
+  const dataZoomEnabled = count > 120;
+  const dataZoomSpace = dataZoomEnabled ? 36 : 0;
+  if (count >= FLAME_AXIS_LABEL_DENSITY_LIMIT) {
+    return {
+      show: false,
+      rotate: 0,
+      fontSize: 10,
+      nameGap: 22,
+      bottom: 38 + dataZoomSpace,
+      dataZoomEnabled,
+    };
+  }
+  const fontSize = count > 50 ? 8 : 10;
+  const maxLength = labels.reduce((longest, label) => Math.max(longest, String(label).length), 0);
+  const estimatedTextWidth = maxLength * fontSize * 0.5;
+  const width = Number(chartWidth);
+  const plotWidth = Math.max(120, (Number.isFinite(width) && width > 0 ? width : 900) - 128);
+  const slotWidth = plotWidth / Math.max(1, count);
+  const horizontalFootprint = estimatedTextWidth + FLAME_AXIS_LABEL_PADDING;
+  const rotate = count > 30 || maxLength > 10 || horizontalFootprint > slotWidth ? 65 : 0;
+  const radians = (rotate * Math.PI) / 180;
+  const rotatedHeight = estimatedTextWidth * Math.sin(radians) + fontSize * Math.cos(radians);
+  const labelSpace = rotate ? Math.min(140, Math.max(58, Math.ceil(rotatedHeight) + 18)) : 38;
+  const nameGap = rotate ? Math.max(26, labelSpace - 10) : 26;
+  return {
+    show: count > 0,
+    rotate,
+    fontSize,
+    nameGap,
+    bottom: nameGap + 16 + dataZoomSpace,
+    dataZoomEnabled,
   };
 }
 
@@ -334,8 +420,8 @@ function flameRibbonSeries(rows, lowKey, highKey, label, color) {
     z: 1,
     renderItem: (params, api) => {
       const segment = segments[params.dataIndex] || [];
-      const upper = segment.map((row) => api.coord([row.x, row.high]));
-      const lower = [...segment].reverse().map((row) => api.coord([row.x, row.low]));
+      const upper = segment.map((row) => api.coord([row.index, row.high]));
+      const lower = [...segment].reverse().map((row) => api.coord([row.index, row.low]));
       return {
         type: "polygon",
         shape: { points: [...upper, ...lower] },
@@ -347,14 +433,13 @@ function flameRibbonSeries(rows, lowKey, highKey, label, color) {
 
 function ribbonSegments(rows, lowKey, highKey) {
   const points = [];
-  for (const row of rows || []) {
+  for (const [index, row] of (rows || []).entries()) {
     const x = numberOrNull(row.x);
     const low = numberOrNull(row[lowKey]);
     const high = numberOrNull(row[highKey]);
     if (x === null || low === null || high === null) continue;
-    points.push({ x, low, high });
+    points.push({ index, x, low, high });
   }
-  points.sort((a, b) => a.x - b.x);
   return points.length > 1 ? [points] : [];
 }
 

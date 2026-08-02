@@ -12441,6 +12441,199 @@ COPY (
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_gbm_shap_flame_axis_shows_demo_like_categories(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            data_path = tmp_path / "sample.csv"
+            data_path.write_text(
+                "actualNumerator,denominator,POSTCODE_CATEGORY\n"
+                + "".join(
+                    f"{100 + value},1000,{value}\n"
+                    for value in range(3, 39)
+                ),
+                encoding="utf-8",
+            )
+            store = GbmModelStore(data_path)
+            model_id = "shap-axis-model"
+            model_dir = store.create_model_dir(model_id)
+            store.write_json(
+                model_dir / "manifest.json",
+                {
+                    "model_id": model_id,
+                    "label": "SHAP axis model",
+                    "created_at": "2026-08-02T00:00:00Z",
+                    "training_mode": "normal",
+                    "response_column": "actualNumerator",
+                    "offset_column": "denominator",
+                    "best_iteration": 1,
+                    "training_rows": 36,
+                    "test_rows": 0,
+                    "scored_rows": 36,
+                    "shap_rows": 36,
+                },
+            )
+            write_gbm_feature_config(
+                store,
+                model_id,
+                [
+                    {
+                        "name": "POSTCODE_CATEGORY",
+                        "kind": "integer",
+                        "include": True,
+                        "monotonicity": "",
+                        "gain": 1.0,
+                        "mean_abs_shap": 0.2,
+                    }
+                ],
+            )
+            store.write_json(
+                model_dir / "parameters.json",
+                {"objective": "gamma", "metric": "gamma", "num_iterations": 1},
+            )
+            con = duckdb.connect(database=":memory:")
+            try:
+                con.execute(
+                    f"""
+COPY (
+  SELECT value - 2 AS __lucidum_row_id,
+         (value - 20) * 0.01 AS POSTCODE_CATEGORY
+  FROM range(3, 39) AS values(value)
+) TO {sql_literal(str(model_dir / "shap_values.parquet"))} (FORMAT PARQUET)
+"""
+                )
+                con.execute(
+                    f"""
+COPY (
+  SELECT 'POSTCODE_CATEGORY' AS feature, 0.2 AS mean_abs_shap,
+         0.005 AS mean_shap, 36 AS row_count
+) TO {sql_literal(str(model_dir / "shap_summary.parquet"))} (FORMAT PARQUET)
+"""
+                )
+            finally:
+                con.close()
+            store.activate_model(model_id)
+            base_url, server, thread = self.start_app(
+                data_path,
+                defaults={"x": "POSTCODE_CATEGORY", "actual": "actualNumerator", "denominator": "denominator"},
+                tools=["line_bar", "gbm"],
+                use_features=False,
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    shap_plot_requests = 0
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+
+                    def track_shap_plot(request: Any) -> None:
+                        nonlocal shap_plot_requests
+                        if request.url.endswith("/shap/plot") and request.method == "POST":
+                            shap_plot_requests += 1
+
+                    page.on("request", track_shap_plot)
+                    try:
+                        page.goto(f"{base_url}/?tool=gbm", wait_until="domcontentloaded")
+                        page.get_by_role("tab", name="SHAP", exact=True).click()
+                        page.locator("#gbmShapChart canvas").wait_for(timeout=10_000)
+                        if page.locator("#gbmShapToolbarToggle").get_attribute("aria-expanded") == "false":
+                            page.locator("#gbmShapToolbarToggle").click()
+                            page.wait_for_function(
+                                '() => document.querySelector("#gbmShapToolbarToggle")?.getAttribute("aria-expanded") === "true"'
+                            )
+                        with page.expect_response(
+                            lambda response: response.url.endswith("/shap/plot") and response.request.method == "POST",
+                            timeout=10_000,
+                        ):
+                            page.locator('[data-gbm-shap-feature="1"][data-gbm-shap-band-value="1"]').click()
+                        with page.expect_response(
+                            lambda response: response.url.endswith("/shap/plot") and response.request.method == "POST",
+                            timeout=10_000,
+                        ):
+                            page.locator('[data-gbm-shap-tail="0"]').click()
+                        page.wait_for_function(
+                            """
+                            () => {
+                              const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmShapChart"));
+                              const axis = chart?.getOption()?.xAxis?.[0];
+                              return axis?.type === "category"
+                                && axis.data?.length === 36
+                                && Number(axis.data[0]) === 3
+                                && Number(axis.data.at(-1)) === 38
+                                && axis.axisLabel?.show === true
+                                && axis.axisLabel?.interval === 0
+                                && axis.axisLabel?.rotate === 65
+                                && axis.axisLabel?.fontSize === 10
+                                && axis.axisLabel?.showMinLabel === true
+                                && axis.axisLabel?.showMaxLabel === true;
+                            }
+                            """,
+                            timeout=10_000,
+                        )
+                        demo_axis = page.evaluate(
+                            """
+                            () => {
+                              const option = window.echarts
+                                .getInstanceByDom(document.querySelector("#gbmShapChart"))
+                                .getOption();
+                              return {
+                                data: option.xAxis[0].data.map(Number),
+                                rotate: option.xAxis[0].axisLabel.rotate,
+                                fontSize: option.xAxis[0].axisLabel.fontSize,
+                                interval: option.xAxis[0].axisLabel.interval,
+                              };
+                            }
+                            """
+                        )
+                        self.assertEqual(demo_axis["data"], list(range(3, 39)))
+                        self.assertEqual(demo_axis["rotate"], 65)
+                        self.assertEqual(demo_axis["fontSize"], 10)
+                        self.assertEqual(demo_axis["interval"], 0)
+
+                        with page.expect_response(
+                            lambda response: response.url.endswith("/shap/plot") and response.request.method == "POST",
+                            timeout=10_000,
+                        ):
+                            page.locator('[data-gbm-shap-feature="1"][data-gbm-shap-band-action="up"]').click()
+                        page.wait_for_function(
+                            """
+                            () => window.echarts
+                              .getInstanceByDom(document.querySelector("#gbmShapChart"))
+                              ?.getOption()?.xAxis?.[0]?.data?.length === 19
+                            """,
+                            timeout=10_000,
+                        )
+                        page.locator("#gbmShapMainResizer").press("End")
+                        page.wait_for_function(
+                            """
+                            () => window.echarts
+                              .getInstanceByDom(document.querySelector("#gbmShapChart"))
+                              ?.getOption()?.xAxis?.[0]?.axisLabel?.rotate === 65
+                            """,
+                            timeout=10_000,
+                        )
+                        resize_request_count = shap_plot_requests
+                        page.locator("#gbmShapSideToggle").click()
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector("#gbmShapSide")?.hidden
+                              && window.echarts
+                                .getInstanceByDom(document.querySelector("#gbmShapChart"))
+                                ?.getOption()?.xAxis?.[0]?.axisLabel?.rotate === 0
+                            """,
+                            timeout=10_000,
+                        )
+                        self.assertEqual(shap_plot_requests, resize_request_count)
+                        self.assertEqual(page_errors, [])
+                    finally:
+                        browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_gbm_tool_loads_feature_grid(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
@@ -27332,12 +27525,32 @@ COPY (
                       const medianIndex = option.series.findIndex((series) => series.name === "Median");
                       const median = option.series[medianIndex];
                       const formatter = option.tooltip?.[0]?.formatter;
+                      const canvas = document.querySelector("#gbmShapChart canvas");
+                      const context = canvas?.getContext?.("2d", { willReadFrequently: true });
+                      const width = canvas?.width || 0;
+                      const height = canvas?.height || 0;
+                      const plotTop = Math.floor(height * 0.18);
+                      const plotHeight = Math.max(0, Math.floor(height * 0.72));
+                      const pixels = context && width > 0 && plotHeight > 0
+                        ? context.getImageData(0, plotTop, width, plotHeight).data
+                        : [];
+                      let plottedRedPixels = 0;
+                      for (let index = 0; index < pixels.length; index += 4) {
+                        if (pixels[index] > 140
+                            && pixels[index] > pixels[index + 1] + 25
+                            && pixels[index] > pixels[index + 2] + 25
+                            && pixels[index + 3] > 0) {
+                          plottedRedPixels += 1;
+                        }
+                      }
                       return {
-                        xMin: option.xAxis?.[0]?.min,
-                        xMax: option.xAxis?.[0]?.max,
-                        xInterval: option.xAxis?.[0]?.interval,
-                        firstMedianX: median?.data?.[0]?.[0],
-                        lastMedianX: median?.data?.[median.data.length - 1]?.[0],
+                        xType: option.xAxis?.[0]?.type,
+                        xData: (option.xAxis?.[0]?.data || []).map(Number),
+                        xLabelInterval: option.xAxis?.[0]?.axisLabel?.interval,
+                        xLabelRotate: option.xAxis?.[0]?.axisLabel?.rotate,
+                        xLabelFontSize: option.xAxis?.[0]?.axisLabel?.fontSize,
+                        medianData: median?.data || [],
+                        plottedRedPixels,
                         legendLeft: option.legend?.[0]?.left || "",
                         seriesNames: option.series?.map((series) => series.name) || [],
                         hasRibbon: option.series?.some((series) => series.type === "custom"),
@@ -27346,15 +27559,19 @@ COPY (
                           .map((series) => series.itemStyle?.color || ""),
                         medianColor: option.series?.find((series) => series.name === "Median")?.itemStyle?.color || "",
                         tooltipText: typeof formatter === "function"
-                          ? formatter([{ axisValue: median?.data?.[0]?.[0], value: median?.data?.[0] }])
+                          ? formatter([{ axisValue: option.xAxis?.[0]?.data?.[0], value: median?.data?.[0] }])
                           : "",
                       };
                     }
                     """
                 )
-                self.assertAlmostEqual(initial_shap_state["xMin"], initial_shap_state["firstMedianX"])
-                self.assertAlmostEqual(initial_shap_state["xMax"], initial_shap_state["lastMedianX"])
-                self.assertAlmostEqual(initial_shap_state["xInterval"], 5)
+                self.assertEqual(initial_shap_state["xType"], "category")
+                self.assertEqual(len(initial_shap_state["medianData"]), len(initial_shap_state["xData"]))
+                self.assertTrue(all(isinstance(value, (int, float)) for value in initial_shap_state["medianData"]))
+                self.assertGreater(initial_shap_state["plottedRedPixels"], 10)
+                self.assertEqual(initial_shap_state["xLabelInterval"], 0)
+                self.assertEqual(initial_shap_state["xLabelRotate"], 0)
+                self.assertEqual(initial_shap_state["xLabelFontSize"], 10)
                 self.assertTrue(initial_shap_state["hasRibbon"])
                 self.assertEqual(initial_shap_state["legendLeft"], "center")
                 self.assertNotIn("45-55", initial_shap_state["seriesNames"])
