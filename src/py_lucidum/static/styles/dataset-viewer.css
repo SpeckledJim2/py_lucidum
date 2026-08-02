@@ -39,7 +39,8 @@
         height: 16px;
         inset-block-start: 5.5px;
         inset-inline-end: 0;
-        max-width: calc(100% - 60px);
+        inset-inline-start: 64px;
+        justify-content: flex-end;
         position: absolute;
         white-space: nowrap;
       }

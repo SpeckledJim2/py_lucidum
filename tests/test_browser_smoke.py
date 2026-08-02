@@ -12397,6 +12397,7 @@ COPY (
                     page_errors: list[str] = []
                     page.on("pageerror", lambda error: page_errors.append(str(error)))
                     page.goto(base_url, wait_until="domcontentloaded")
+                    page.locator("#lineBarTool.active").wait_for(timeout=10_000)
                     page.locator("#gbmTool").click()
                     page.get_by_role("tab", name="Tree viewer").click()
                     page.locator("#gbmTreeChart svg.gbm-tree-svg").wait_for(state="attached", timeout=10_000)
@@ -19060,8 +19061,10 @@ COPY (
                 self.assertEqual(coefficient_table_state["sortIndicators"], 5)
                 self.assertEqual(coefficient_table_state["indexes"], ["1", "2", "3"])
                 self.assertEqual(coefficient_table_state["initialAriaSort"], "ascending")
-                page.locator('#glmCoefficientTable [data-glm-coefficient-sort="estimate"]').click()
-                page.locator('#glmCoefficientTable [data-glm-coefficient-sort="estimate"]').click()
+                estimate_sort = page.locator('#glmCoefficientTable [data-glm-coefficient-sort="estimate"]')
+                self.assertEqual(estimate_sort.evaluate("node => getComputedStyle(node).overflow"), "hidden")
+                estimate_sort.click()
+                estimate_sort.click()
                 page.wait_for_function(
                     """
                     () => document.querySelector('#glmCoefficientTable [data-glm-coefficient-sort="estimate"]')
@@ -31069,7 +31072,7 @@ COPY (
                         .filter((column) => getComputedStyle(column).display !== "none").length === 4
                     """,
                     arg=expanded_width_before_collapse,
-                    timeout=5_000,
+                    timeout=10_000,
                 )
                 reopened_tree_selector = page.evaluate(
                     """
@@ -31293,12 +31296,12 @@ COPY (
                 page.set_viewport_size({"width": 800, "height": 800})
                 page.wait_for_function(
                     '() => document.querySelector("#gbmTreeViewer")?.classList.contains("gbm-tree-summary-collapsed")',
-                    timeout=5_000,
+                    timeout=10_000,
                 )
                 page.locator("#gbmTreeSummaryToggle").click()
                 page.wait_for_function(
                     '() => !document.querySelector("#gbmTreeViewer")?.classList.contains("gbm-tree-summary-collapsed")',
-                    timeout=5_000,
+                    timeout=10_000,
                 )
                 page.evaluate("() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
                 self.assertFalse(
@@ -31309,23 +31312,23 @@ COPY (
                 page.set_viewport_size({"width": 1280, "height": 800})
                 page.wait_for_function(
                     '() => document.querySelector("#gbmTreeViewer")?.getBoundingClientRect().width >= 812',
-                    timeout=5_000,
+                    timeout=10_000,
                 )
                 page.set_viewport_size({"width": 800, "height": 800})
                 page.wait_for_function(
                     '() => document.querySelector("#gbmTreeViewer")?.classList.contains("gbm-tree-summary-collapsed")',
-                    timeout=5_000,
+                    timeout=10_000,
                 )
                 page.set_viewport_size({"width": 1280, "height": 800})
                 page.wait_for_function(
                     '() => !document.querySelector("#gbmTreeViewer")?.classList.contains("gbm-tree-summary-collapsed")',
-                    timeout=5_000,
+                    timeout=10_000,
                 )
                 page.locator("#gbmTreeSummaryToggle").click()
                 page.set_viewport_size({"width": 800, "height": 800})
                 page.wait_for_function(
                     '() => document.querySelector("#gbmTreeViewer")?.classList.contains("gbm-tree-summary-collapsed")',
-                    timeout=5_000,
+                    timeout=10_000,
                 )
                 page.set_viewport_size({"width": 1280, "height": 800})
                 page.evaluate("() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))")

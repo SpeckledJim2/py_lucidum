@@ -1600,9 +1600,17 @@
         font-weight: inherit;
         gap: 6px;
         justify-content: space-between;
+        min-width: 0;
+        overflow: hidden;
         padding: 0;
         text-align: inherit;
         width: 100%;
+      }
+
+      .glm-coefficient-sort-button > span:first-child {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
 
       .glm-coefficient-sort-header.numeric .glm-coefficient-sort-button {

@@ -478,10 +478,12 @@ The current test suite should cover:
 
 Lucidum releases use annotated Git tags, immutable GitHub releases, and GitHub
 Actions Trusted Publishing. `.github/workflows/ci.yml` runs the complete test
-gate for `main` and pull requests. `.github/workflows/release.yml` accepts only
-an annotated `vMAJOR.MINOR.PATCH` tag that matches `pyproject.toml`, points to
-`main`, and has a successful hosted `CI` run. It builds one wheel/sdist pair and
-promotes those exact bytes through TestPyPI, PyPI, and the GitHub release.
+gate for `main` and pull requests on Python 3.13 with the Chromium and WebKit
+engines used by the committed browser suite. `.github/workflows/release.yml`
+accepts only an annotated `vMAJOR.MINOR.PATCH` tag that matches
+`pyproject.toml`, points to `main`, and has a successful hosted `CI` run. It
+builds one wheel/sdist pair and promotes those exact bytes through TestPyPI,
+PyPI, and the GitHub release.
 
 ### One-time repository and index setup
 
