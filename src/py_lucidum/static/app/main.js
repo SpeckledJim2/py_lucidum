@@ -478,6 +478,7 @@
         isMapPostcodeSelected: (postcode) => isMapPostcodeSelected(postcode),
         getMapSelectedAreas: (postcode) => getMapSelectedAreas(postcode),
         canOpenDatasetViewer: () => toolEnabled("dataset_viewer"),
+        getSelectedKpi: selectedKpiForCurrentMetric,
         clearActiveFavouriteSelection: () => clearActiveFavouriteSelectionForScope("map_view"),
       });
       const glmTool = createGlmTool({

@@ -146,6 +146,9 @@
       .map-floating-header strong {
         font-size: 14px;
         line-height: 1.1;
+        min-width: 0;
+        overflow-wrap: anywhere;
+        white-space: normal;
       }
 
       .map-floating-header span {
@@ -279,7 +282,11 @@
       }
 
       .map-floating-control:not(.collapsed) .map-control-reset {
-        transform: translate(5px, -5px);
+        transform: translate(9px, -9px);
+      }
+
+      .map-floating-control:not(.collapsed) .map-control-reset svg {
+        transform: translateX(3px);
       }
 
       .map-control-reset:hover {

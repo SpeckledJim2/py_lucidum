@@ -2689,6 +2689,7 @@ if (message !== GBM_PARAMETER_GRID_COPY_ERROR) throw new Error("grid-search copy
             'id="mapFloatingControl" class="map-floating-control hidden collapsed"',
             index,
         )
+        self.assertIn('<strong id="mapControlMetric" hidden></strong>', index)
         self.assertIn(
             'id="mapControlReset" class="map-control-reset" type="button" title="Expand map controls" '
             'aria-label="Expand map controls" aria-controls="mapFloatingControl" aria-expanded="false"',

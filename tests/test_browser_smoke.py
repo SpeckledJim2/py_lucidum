@@ -2279,7 +2279,9 @@ class BrowserSmokeTests(unittest.TestCase):
                                 filterText: document.querySelector("#mapControlFilterText")?.textContent.trim(),
                                 filter: typography("#mapControlFilterText"),
                                 rows: typography("#mapRowMeta"),
-                                metricBottom: document.querySelector("#mapControlMetric")?.getBoundingClientRect().bottom,
+                                metricHidden: document.querySelector("#mapControlMetric")?.hidden,
+                                metricRects: document.querySelector("#mapControlMetric")?.getClientRects().length,
+                                headerTop: document.querySelector(".map-floating-header")?.getBoundingClientRect().top,
                                 lineTops: [
                                   ".map-group-meta-count",
                                   ".map-shapefile-match-status",
@@ -2295,8 +2297,10 @@ class BrowserSmokeTests(unittest.TestCase):
                         self.assertEqual(inactive_filter_typography["filter"], inactive_filter_typography["rows"])
                         line_tops = inactive_filter_typography["lineTops"]
                         self.assertTrue(all(top is not None for top in line_tops), line_tops)
+                        self.assertTrue(inactive_filter_typography["metricHidden"])
+                        self.assertEqual(inactive_filter_typography["metricRects"], 0)
                         self.assertAlmostEqual(
-                            line_tops[0] - inactive_filter_typography["metricBottom"],
+                            line_tops[0] - inactive_filter_typography["headerTop"],
                             2,
                             delta=0.5,
                         )
@@ -13603,8 +13607,8 @@ COPY (
             kpis_path = tmp_path / "kpi_spec.csv"
             kpis_path.write_text(
                 "group,name,actual,denominator,decimals,format\n"
-                "PRICE,Burning cost,net_incurred,earned_exposure_in_period,2,currency\n"
                 "PRICE,Burning cost with an unusually long KPI name,net_incurred,earned_exposure_in_period,2,currency\n"
+                "PRICE,Burning cost,net_incurred,earned_exposure_in_period,2,currency\n"
                 "VALUE,Value,value,N,1,number\n"
                 "RATE,Rate,rate,N,1,percent\n",
                 encoding="utf-8",
@@ -24837,7 +24841,11 @@ COPY (
                 self.assertEqual(map_toggle.get_attribute("aria-expanded"), "true")
                 self.assertEqual(
                     page.evaluate('() => getComputedStyle(document.querySelector("#mapControlReset")).transform'),
-                    "matrix(1, 0, 0, 1, 5, -5)",
+                    "matrix(1, 0, 0, 1, 9, -9)",
+                )
+                self.assertEqual(
+                    page.evaluate('() => getComputedStyle(document.querySelector("#mapControlReset svg")).transform'),
+                    "matrix(1, 0, 0, 1, 3, 0)",
                 )
                 expanded_button_box = map_toggle.bounding_box()
                 self.assertIsNotNone(expanded_button_box)
@@ -33656,7 +33664,7 @@ COPY (
                     timeout=10_000,
                 )
                 page.locator("#kpiSelect .kpi-theme").first.wait_for(timeout=10_000)
-                price_row = page.locator('.kpi-option[data-kpi-group="PRICE"]').first
+                price_row = page.locator('.kpi-option[data-kpi-group="PRICE"]').nth(1)
                 self.assertEqual(page.locator("#actualNumerator").input_value(), "net_incurred")
                 self.assertEqual(page.locator("#denominator").input_value(), "earned_exposure_in_period")
                 self.assertEqual(price_row.get_attribute("aria-selected"), "true")
@@ -33780,6 +33788,96 @@ COPY (
                 page.locator("#ukMap:not(.hidden)").wait_for(timeout=20_000)
                 page.locator("#mapFloatingControl:not(.hidden)").wait_for(timeout=10_000)
                 self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
+                page.locator("#mapControlReset").click()
+                page.wait_for_function(
+                    """() => !document.querySelector("#mapFloatingControl")?.classList.contains("collapsed")
+                      && document.querySelector("#mapControlMetric")?.textContent.trim() === "Rate"
+                      && !document.querySelector("#mapControlMetric")?.hidden""",
+                    timeout=10_000,
+                )
+
+                page.locator("#kpiCollapseBtn").click()
+                page.wait_for_function(
+                    '() => document.querySelector("#kpiCollapseBtn")?.getAttribute("aria-expanded") === "true"',
+                    timeout=10_000,
+                )
+                price_heading = page.locator('.kpi-theme[data-kpi-group="PRICE"]')
+                if price_heading.get_attribute("aria-expanded") == "false":
+                    price_heading.click()
+                long_price_row = page.locator('.kpi-option[data-kpi-group="PRICE"]').first
+                long_price_row.click()
+                page.wait_for_function(
+                    """() => document.querySelector("#actualNumerator")?.value === "net_incurred"
+                      && document.querySelector("#mapControlMetric")?.textContent.trim()
+                        === "Burning cost with an unusually long KPI name"
+                      && !(document.querySelector("#mapGroupMeta")?.textContent || "").includes("Computing")""",
+                    timeout=10_000,
+                )
+                long_kpi_layout = page.evaluate(
+                    """
+                    () => {
+                      const panel = document.querySelector("#mapFloatingControl");
+                      const metric = document.querySelector("#mapControlMetric");
+                      const groupMeta = document.querySelector("#mapGroupMeta");
+                      const metricStyle = getComputedStyle(metric);
+                      const panelRect = panel.getBoundingClientRect();
+                      const metricRect = metric.getBoundingClientRect();
+                      return {
+                        text: metric.textContent.trim(),
+                        hidden: metric.hidden,
+                        contained: metric.scrollWidth <= metric.clientWidth + 1,
+                        lineHeight: parseFloat(metricStyle.lineHeight),
+                        metricHeight: metricRect.height,
+                        groupOffset: groupMeta.getBoundingClientRect().top - panelRect.top,
+                        panelHeight: panelRect.height,
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(
+                    long_kpi_layout["text"],
+                    "Burning cost with an unusually long KPI name",
+                )
+                self.assertFalse(long_kpi_layout["hidden"])
+                self.assertTrue(long_kpi_layout["contained"])
+                self.assertGreater(
+                    long_kpi_layout["metricHeight"],
+                    long_kpi_layout["lineHeight"] * 1.5,
+                )
+
+                page.locator("#actualNumerator").select_option("vehicle_age")
+                page.wait_for_function(
+                    """() => document.querySelector("#actualNumerator")?.value === "vehicle_age"
+                      && document.querySelector("#mapControlMetric")?.hidden
+                      && !(document.querySelector("#mapGroupMeta")?.textContent || "").includes("Computing")""",
+                    timeout=10_000,
+                )
+                unmatched_layout = page.evaluate(
+                    """
+                    () => {
+                      const panel = document.querySelector("#mapFloatingControl");
+                      const metric = document.querySelector("#mapControlMetric");
+                      const groupMeta = document.querySelector("#mapGroupMeta");
+                      const panelRect = panel.getBoundingClientRect();
+                      return {
+                        hidden: metric.hidden,
+                        metricRects: metric.getClientRects().length,
+                        groupOffset: groupMeta.getBoundingClientRect().top - panelRect.top,
+                        panelHeight: panelRect.height,
+                      };
+                    }
+                    """
+                )
+                self.assertTrue(unmatched_layout["hidden"])
+                self.assertEqual(unmatched_layout["metricRects"], 0)
+                self.assertLess(
+                    unmatched_layout["groupOffset"],
+                    long_kpi_layout["groupOffset"] - long_kpi_layout["lineHeight"],
+                )
+                self.assertLess(
+                    unmatched_layout["panelHeight"],
+                    long_kpi_layout["panelHeight"] - long_kpi_layout["lineHeight"],
+                )
                 page.locator("#lineBarTool").click()
                 page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
                 self.assertTrue(page.locator(".sidebar-metric-section").is_visible())

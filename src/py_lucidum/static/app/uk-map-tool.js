@@ -401,6 +401,7 @@ export function createUkMapTool({
   isMapPostcodeSelected = () => false,
   getMapSelectedAreas = () => null,
   canOpenDatasetViewer = () => false,
+  getSelectedKpi = () => null,
   clearActiveFavouriteSelection = () => {},
 }) {
   const L = leafletImpl;
@@ -2166,12 +2167,10 @@ export function createUkMapTool({
   }
 
   function syncFloatingMapControl() {
-    const actualLabel = el("actualNumerator").selectedOptions[0]?.textContent || el("actualNumerator").value || "Actual";
-    const denominatorValue = el("denominator").value;
-    const denominatorLabel = denominatorValue && denominatorValue !== "__none__"
-      ? (el("denominator").selectedOptions[0]?.textContent || denominatorValue)
-      : "";
-    el("mapControlMetric").textContent = denominatorLabel ? `${actualLabel} / ${denominatorLabel}` : actualLabel;
+    const metric = el("mapControlMetric");
+    const kpiName = String(getSelectedKpi()?.name || "").trim();
+    metric.textContent = kpiName;
+    metric.hidden = !kpiName;
     syncActiveFilterLabels();
     document.querySelectorAll(".map-palette-button").forEach((button) => {
       button.classList.toggle("active", button.dataset.palette === state.mapPalette);
