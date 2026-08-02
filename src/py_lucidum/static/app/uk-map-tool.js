@@ -415,6 +415,9 @@ export function createUkMapTool({
   const MAP_MISSING_COLOR = "#e5e7eb";
   const MAP_MUTED_COLOR = "#cbd5e1";
   const MAP_POINT_GRID_SIZE = 18;
+  const MAP_UNIT_SPATIAL_GRID_SIZE = 256;
+  const MAP_UNIT_QUANTILE_SAMPLE_SIZE = 100_000;
+  const MAP_MERCATOR_MAX_LATITUDE = 85.0511287798;
   const MAP_FIT_PADDING = [8, 8];
   const MAP_UNIT_FIT_PADDING = [18, 18];
   const MAP_POPUP_MAX_WIDTH = 440;
@@ -489,7 +492,7 @@ export function createUkMapTool({
       return null;
     }
     if (state.mapLevel === "unit" && !mapLevelSelectable("unit")) return null;
-    return {
+    const request = {
       level: state.mapLevel,
       source: numeratorOption?.dataset.sourceId || state.source || "dataset",
       numerator,
@@ -504,6 +507,44 @@ export function createUkMapTool({
       compactUnitPoints: state.mapLevel === "unit",
       smoothingLevel: state.mapLevel === "sector" ? state.mapSmoothingLevel : 0,
     };
+    if (request.level === "unit") {
+      request.compactUnitMetrics = "minimal";
+      const geometryKey = unitGeometryRequestKey(request);
+      request.reuseUnitGeometry = Boolean(
+        state.renderedMapLevel === "unit"
+        && ukMapPointLayer?.geometryKey === geometryKey
+      );
+    }
+    return request;
+  }
+
+  function unitGeometryRequestKey(request) {
+    return JSON.stringify([
+      request?.level || "",
+      request?.source || "dataset",
+      request?.filter || "",
+      request?.unitColumn || "",
+      request?.latitudeColumn || "",
+      request?.longitudeColumn || "",
+    ]);
+  }
+
+  function hydrateReusedUnitGeometry(data, request) {
+    if (data?.level !== "unit" || data?.unit_geometry?.included !== false) return true;
+    const geometryKey = unitGeometryRequestKey(request);
+    const geometry = ukMapPointLayer?.geometryPoints;
+    const metrics = unitPointArrays(data);
+    if (
+      ukMapPointLayer?.geometryKey !== geometryKey
+      || !geometry
+      || !metrics
+      || metrics.value?.length !== geometry.key?.length
+    ) {
+      return false;
+    }
+    data.unit_points = { ...geometry, ...metrics };
+    data._unitGeometryReused = true;
+    return true;
   }
 
   function showMapMissingNumerator() {
@@ -567,6 +608,10 @@ export function createUkMapTool({
       ]);
       if (requestSeq !== state.mapRequestSeq) return;
       cancelMapPendingMeta(requestSeq);
+      data._unitGeometryKey = request.level === "unit" ? unitGeometryRequestKey(request) : "";
+      if (!hydrateReusedUnitGeometry(data, request)) {
+        throw new Error("The cached postcode-unit geometry is no longer available. Refresh the map and try again.");
+      }
       const cache = toolCache("uk_map");
       cache.requestKey = requestKey;
       cache.data = data;
@@ -1622,93 +1667,76 @@ export function createUkMapTool({
     return Math.max(radius + 4, 6);
   }
 
-  function mapPointStyle(row, scale, hotspotKeys, radius) {
-    const value = finiteNumber(row?.value);
-    const selected = value !== null && (!hotspotKeys || hotspotKeys.has(String(row.key)));
-    const muted = value !== null && !selected;
-    const opacityValue = Number(state.mapOpacity);
-    const mapOpacity = Number.isFinite(opacityValue) ? Math.max(0, Math.min(1, opacityValue)) : 1;
-    const baseStrokeOpacity = radius < 2 ? 0 : (radius < 3 ? 0.35 : 0.65);
-    const strokeOpacity = (muted ? Math.min(baseStrokeOpacity, 0.25) : baseStrokeOpacity) * mapOpacity;
-    return {
-      fillColor: muted ? MAP_MUTED_COLOR : scale.color(value),
-      fillOpacity: muted ? Math.min(mapOpacity, 0.28) : mapOpacity,
-      strokeOpacity,
-    };
-  }
-
   function unitPointArrays(data) {
     const points = data?.unit_points;
-    return points && Array.isArray(points.key) ? points : null;
+    return points && Array.isArray(points.value) ? points : null;
   }
 
   function unitPointCount(data) {
     const points = unitPointArrays(data);
-    return points ? points.key.length : (data?.rows || []).length;
+    if (!points) return (data?.rows || []).length;
+    let count = 0;
+    for (const rawValue of points.value || []) {
+      if (finiteNumber(rawValue) !== null) count += 1;
+    }
+    return count;
   }
 
-  function unitPointEntries(data) {
-    const bounds = L.latLngBounds([]);
-    const entries = [];
+  function normaliseUnitPointColumns(data) {
     const points = unitPointArrays(data);
-    if (points) {
-      const count = points.key.length;
-      for (let index = 0; index < count; index += 1) {
-        const latitude = Number(points.latitude?.[index]);
-        const longitude = Number(points.longitude?.[index]);
-        if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) continue;
-        const latLng = L.latLng(latitude, longitude);
-        bounds.extend(latLng);
-        entries.push({
-          key: points.key[index],
-          row_count: points.row_count?.[index],
-          numerator: points.numerator?.[index],
-          denominator: points.denominator?.[index],
-          volume: points.volume?.[index],
-          value: points.value?.[index],
-          latitude,
-          longitude,
-          latLng,
-        });
-      }
-      return { entries, bounds };
-    }
-    for (const row of data?.rows || []) {
-      const latitude = Number(row.latitude);
-      const longitude = Number(row.longitude);
-      if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) continue;
-      const latLng = L.latLng(latitude, longitude);
-      bounds.extend(latLng);
-      entries.push({
-        ...row,
-        latitude,
-        longitude,
-        latLng,
-      });
-    }
-    return { entries, bounds };
+    if (points) return points;
+    const rows = data?.rows || [];
+    return {
+      key: rows.map((row) => row.key),
+      row_count: rows.map((row) => row.row_count),
+      numerator: rows.map((row) => row.numerator),
+      denominator: rows.map((row) => row.denominator),
+      value: rows.map((row) => row.value),
+      latitude: rows.map((row) => row.latitude),
+      longitude: rows.map((row) => row.longitude),
+    };
   }
 
   function makeUnitPointScale(data) {
-    const points = unitPointArrays(data);
-    if (!points) return makeQuantileScale(data.rows || []);
-    const values = (points.value || [])
-      .map(finiteNumber)
-      .filter((value) => value !== null);
-    return makeQuantileScaleFromValues(values);
+    const points = normaliseUnitPointColumns(data);
+    const rawValues = points.value || [];
+    const sampleCapacity = Math.min(rawValues.length, MAP_UNIT_QUANTILE_SAMPLE_SIZE);
+    const values = new Float64Array(sampleCapacity);
+    const stride = rawValues.length > sampleCapacity ? rawValues.length / sampleCapacity : 1;
+    let nextSampleIndex = rawValues.length > sampleCapacity ? stride / 2 : 0;
+    let valueCount = 0;
+    let minimum = Infinity;
+    let maximum = -Infinity;
+    for (let index = 0; index < rawValues.length; index += 1) {
+      const value = finiteNumber(rawValues[index]);
+      if (value !== null) {
+        minimum = Math.min(minimum, value);
+        maximum = Math.max(maximum, value);
+      }
+      if (value !== null && index >= nextSampleIndex && valueCount < sampleCapacity) {
+        values[valueCount] = value;
+        valueCount += 1;
+        nextSampleIndex += stride;
+      }
+    }
+    const sampledValues = values.subarray(0, valueCount);
+    sampledValues.sort();
+    if (sampledValues.length) {
+      sampledValues[0] = minimum;
+      sampledValues[sampledValues.length - 1] = maximum;
+    }
+    return makeQuantileScaleFromValues(sampledValues, { sorted: true });
   }
 
-  function mapUnitHotspotKeys(data) {
-    const points = unitPointArrays(data);
-    if (!points) return mapHotspotKeys(data.rows || []);
+  function mapUnitHotspotIndexes(data) {
+    const points = normaliseUnitPointColumns(data);
     const selection = mapHotspotSelection();
     if (!selection) return null;
     const validRows = [];
-    for (let index = 0; index < points.key.length; index += 1) {
-      const key = points.key[index];
+    for (let index = 0; index < (points.value || []).length; index += 1) {
       const value = finiteNumber(points.value?.[index]);
-      if (key === null || key === undefined || value === null) continue;
-      validRows.push({ key, value, index });
+      if (value === null) continue;
+      validRows.push({ value, index });
     }
     if (!validRows.length) return null;
     validRows.sort((a, b) => {
@@ -1716,19 +1744,123 @@ export function createUkMapTool({
       return a.index - b.index;
     });
     const count = Math.min(validRows.length, Math.max(1, Math.ceil(validRows.length * selection.fraction)));
-    return new Set(validRows.slice(0, count).map((row) => String(row.key)));
+    return new Set(validRows.slice(0, count).map((row) => row.index));
   }
 
-  function makeUnitPointLayer(data, scale, hotspotKeys) {
+  function makeUnitPointLayer(data, scale, hotspotIndexes, geometryKey) {
     return new (L.Layer.extend({
-      initialize(mapData, initialScale, initialHotspotKeys) {
-        const prepared = unitPointEntries(mapData);
-        this.data = mapData;
-        this.rows = prepared.entries;
-        this.bounds = prepared.bounds;
-        this.scale = initialScale;
-        this.hotspotKeys = initialHotspotKeys;
+      initialize(mapData, initialScale, initialHotspotIndexes, initialGeometryKey) {
+        this.geometryKey = initialGeometryKey;
+        this.setGeometry(normaliseUnitPointColumns(mapData));
+        this.setData(mapData, initialScale, initialHotspotIndexes);
         this.tooltip = null;
+      },
+      setGeometry(points) {
+        const keys = points?.key || [];
+        const rowCounts = points?.row_count || [];
+        const latitudes = points?.latitude || [];
+        const longitudes = points?.longitude || [];
+        const count = Math.min(keys.length, latitudes.length, longitudes.length);
+        this.geometryPoints = {
+          key: keys,
+          row_count: rowCounts,
+          latitude: latitudes,
+          longitude: longitudes,
+        };
+        this.pointCount = count;
+        this.worldX = new Float64Array(count);
+        this.worldY = new Float64Array(count);
+        let minLatitude = Infinity;
+        let maxLatitude = -Infinity;
+        let minLongitude = Infinity;
+        let maxLongitude = -Infinity;
+        for (let index = 0; index < count; index += 1) {
+          const latitude = Number(latitudes[index]);
+          const longitude = Number(longitudes[index]);
+          if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+            this.worldX[index] = Number.NaN;
+            this.worldY[index] = Number.NaN;
+            continue;
+          }
+          const clampedLatitude = Math.max(-MAP_MERCATOR_MAX_LATITUDE, Math.min(MAP_MERCATOR_MAX_LATITUDE, latitude));
+          const sinLatitude = Math.sin((clampedLatitude * Math.PI) / 180);
+          this.worldX[index] = ((longitude + 180) / 360) * 256;
+          this.worldY[index] = (0.5 - (Math.log((1 + sinLatitude) / (1 - sinLatitude)) / (4 * Math.PI))) * 256;
+          minLatitude = Math.min(minLatitude, latitude);
+          maxLatitude = Math.max(maxLatitude, latitude);
+          minLongitude = Math.min(minLongitude, longitude);
+          maxLongitude = Math.max(maxLongitude, longitude);
+        }
+        this.spatialBounds = {
+          minLatitude,
+          maxLatitude,
+          minLongitude,
+          maxLongitude,
+        };
+        this.bounds = Number.isFinite(minLatitude)
+          ? L.latLngBounds([[minLatitude, minLongitude], [maxLatitude, maxLongitude]])
+          : L.latLngBounds([]);
+        this.buildSpatialIndex();
+      },
+      spatialCell(latitude, longitude) {
+        const bounds = this.spatialBounds;
+        const longitudeRange = Math.max(Number.EPSILON, bounds.maxLongitude - bounds.minLongitude);
+        const latitudeRange = Math.max(Number.EPSILON, bounds.maxLatitude - bounds.minLatitude);
+        const x = Math.max(0, Math.min(
+          MAP_UNIT_SPATIAL_GRID_SIZE - 1,
+          Math.floor(((longitude - bounds.minLongitude) / longitudeRange) * MAP_UNIT_SPATIAL_GRID_SIZE),
+        ));
+        const y = Math.max(0, Math.min(
+          MAP_UNIT_SPATIAL_GRID_SIZE - 1,
+          Math.floor(((latitude - bounds.minLatitude) / latitudeRange) * MAP_UNIT_SPATIAL_GRID_SIZE),
+        ));
+        return { x, y, index: (y * MAP_UNIT_SPATIAL_GRID_SIZE) + x };
+      },
+      buildSpatialIndex() {
+        const cellCount = MAP_UNIT_SPATIAL_GRID_SIZE * MAP_UNIT_SPATIAL_GRID_SIZE;
+        const counts = new Uint32Array(cellCount);
+        for (let index = 0; index < this.pointCount; index += 1) {
+          const latitude = Number(this.geometryPoints.latitude[index]);
+          const longitude = Number(this.geometryPoints.longitude[index]);
+          if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) continue;
+          counts[this.spatialCell(latitude, longitude).index] += 1;
+        }
+        const offsets = new Uint32Array(cellCount + 1);
+        for (let cell = 0; cell < cellCount; cell += 1) {
+          offsets[cell + 1] = offsets[cell] + counts[cell];
+        }
+        const cursors = offsets.slice(0, cellCount);
+        const indexes = new Uint32Array(offsets[cellCount]);
+        for (let index = 0; index < this.pointCount; index += 1) {
+          const latitude = Number(this.geometryPoints.latitude[index]);
+          const longitude = Number(this.geometryPoints.longitude[index]);
+          if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) continue;
+          const cell = this.spatialCell(latitude, longitude).index;
+          indexes[cursors[cell]] = index;
+          cursors[cell] += 1;
+        }
+        this.spatialOffsets = offsets;
+        this.spatialIndexes = indexes;
+      },
+      prepareColorBuckets() {
+        const buckets = new Uint8Array(this.pointCount);
+        buckets.fill(255);
+        this.colorBuckets = buckets;
+      },
+      setData(mapData, nextScale, nextHotspotIndexes) {
+        const points = normaliseUnitPointColumns(mapData);
+        if ((points.value || []).length !== this.pointCount) return false;
+        this.data = mapData;
+        this.metricPoints = {
+          numerator: points.numerator || [],
+          denominator: points.denominator || [],
+          value: points.value || [],
+        };
+        this.scale = nextScale;
+        this.hotspotIndexes = nextHotspotIndexes;
+        this.prepareColorBuckets();
+        this.reset();
+        return true;
       },
       onAdd(map) {
         this.map = map;
@@ -1755,10 +1887,29 @@ export function createUkMapTool({
       getBounds() {
         return this.bounds;
       },
-      setRenderContext(nextScale, nextHotspotKeys) {
+      setRenderContext(nextScale, nextHotspotIndexes) {
         this.scale = nextScale;
-        this.hotspotKeys = nextHotspotKeys;
+        this.hotspotIndexes = nextHotspotIndexes;
+        this.prepareColorBuckets();
         this.reset();
+      },
+      visibleCellRange(hitRadius, size) {
+        if (!Number.isFinite(this.spatialBounds.minLatitude)) return null;
+        const northWest = this.map.containerPointToLatLng([-hitRadius, -hitRadius]);
+        const southEast = this.map.containerPointToLatLng([size.x + hitRadius, size.y + hitRadius]);
+        const west = Math.max(this.spatialBounds.minLongitude, Math.min(northWest.lng, southEast.lng));
+        const east = Math.min(this.spatialBounds.maxLongitude, Math.max(northWest.lng, southEast.lng));
+        const south = Math.max(this.spatialBounds.minLatitude, Math.min(northWest.lat, southEast.lat));
+        const north = Math.min(this.spatialBounds.maxLatitude, Math.max(northWest.lat, southEast.lat));
+        if (west > east || south > north) return null;
+        const minimum = this.spatialCell(south, west);
+        const maximum = this.spatialCell(north, east);
+        return {
+          minX: Math.min(minimum.x, maximum.x),
+          maxX: Math.max(minimum.x, maximum.x),
+          minY: Math.min(minimum.y, maximum.y),
+          maxY: Math.max(minimum.y, maximum.y),
+        };
       },
       reset() {
         if (!this.map || !this.canvas) return;
@@ -1777,35 +1928,91 @@ export function createUkMapTool({
         const pointRadius = unitPointRadiusForCurrentStyle(this.map.getZoom());
         const hitRadius = unitPointHitRadius(pointRadius);
         this.hitRadius = hitRadius;
-        for (const entry of this.rows) {
-          const point = this.map.latLngToLayerPoint(entry.latLng).subtract(topLeft);
-          if (point.x < -hitRadius || point.y < -hitRadius || point.x > size.x + hitRadius || point.y > size.y + hitRadius) {
-            continue;
-          }
-          const gridKey = `${Math.floor(point.x / MAP_POINT_GRID_SIZE)},${Math.floor(point.y / MAP_POINT_GRID_SIZE)}`;
-          if (!this.hitGrid.has(gridKey)) {
-            this.hitGrid.set(gridKey, []);
-          }
-          this.hitGrid.get(gridKey).push({ entry, point });
-          const style = mapPointStyle(entry, this.scale, this.hotspotKeys, pointRadius);
-          context.globalAlpha = Math.max(0, Math.min(1, style.fillOpacity));
-          context.fillStyle = style.fillColor;
-          if (pointRadius <= 1) {
-            const sizePx = pointRadius * 2;
-            context.fillRect(point.x - pointRadius, point.y - pointRadius, sizePx, sizePx);
-          } else {
-            context.beginPath();
-            context.arc(point.x, point.y, pointRadius, 0, Math.PI * 2);
-            context.fill();
-            if (style.strokeOpacity > 0) {
-              context.globalAlpha = Math.max(0, Math.min(1, style.strokeOpacity));
-              context.strokeStyle = "#000000";
-              context.lineWidth = pointRadius < 3 ? 0.5 : 0.75;
-              context.stroke();
+        const cellRange = this.visibleCellRange(hitRadius, size);
+        if (!cellRange) return;
+        const pixelBounds = this.map.getPixelBounds();
+        this.projectionScale = 2 ** this.map.getZoom();
+        this.projectionMinX = pixelBounds.min.x;
+        this.projectionMinY = pixelBounds.min.y;
+        this.hitGridStride = Math.ceil(size.x / MAP_POINT_GRID_SIZE) + 4;
+        const opacityValue = Number(state.mapOpacity);
+        const mapOpacity = Number.isFinite(opacityValue) ? Math.max(0, Math.min(1, opacityValue)) : 1;
+        const baseStrokeOpacity = pointRadius < 2 ? 0 : (pointRadius < 3 ? 0.35 : 0.65);
+        let activeFillColor = "";
+        let activeFillOpacity = -1;
+        for (let cellY = cellRange.minY; cellY <= cellRange.maxY; cellY += 1) {
+          for (let cellX = cellRange.minX; cellX <= cellRange.maxX; cellX += 1) {
+            const cell = (cellY * MAP_UNIT_SPATIAL_GRID_SIZE) + cellX;
+            const start = this.spatialOffsets[cell];
+            const end = this.spatialOffsets[cell + 1];
+            for (let offset = start; offset < end; offset += 1) {
+              const index = this.spatialIndexes[offset];
+              let bucket = this.colorBuckets[index];
+              if (bucket === 255) {
+                const value = finiteNumber(this.metricPoints?.value?.[index]);
+                bucket = value === null ? 254 : this.scale.bucket(value);
+                this.colorBuckets[index] = bucket;
+              }
+              if (bucket === 254) continue;
+              const pointX = (this.worldX[index] * this.projectionScale) - this.projectionMinX;
+              const pointY = (this.worldY[index] * this.projectionScale) - this.projectionMinY;
+              if (pointX < -hitRadius || pointY < -hitRadius || pointX > size.x + hitRadius || pointY > size.y + hitRadius) {
+                continue;
+              }
+              const gridX = Math.floor(pointX / MAP_POINT_GRID_SIZE) + 2;
+              const gridY = Math.floor(pointY / MAP_POINT_GRID_SIZE) + 2;
+              const gridKey = (gridY * this.hitGridStride) + gridX;
+              if (!this.hitGrid.has(gridKey)) this.hitGrid.set(gridKey, []);
+              this.hitGrid.get(gridKey).push(index);
+              const muted = Boolean(this.hotspotIndexes && !this.hotspotIndexes.has(index));
+              const fillColor = muted ? MAP_MUTED_COLOR : this.scale.palette[bucket];
+              const fillOpacity = muted ? Math.min(mapOpacity, 0.28) : mapOpacity;
+              if (fillOpacity !== activeFillOpacity) {
+                context.globalAlpha = fillOpacity;
+                activeFillOpacity = fillOpacity;
+              }
+              if (fillColor !== activeFillColor) {
+                context.fillStyle = fillColor;
+                activeFillColor = fillColor;
+              }
+              if (pointRadius <= 1) {
+                const sizePx = pointRadius * 2;
+                context.fillRect(pointX - pointRadius, pointY - pointRadius, sizePx, sizePx);
+              } else {
+                context.beginPath();
+                context.arc(pointX, pointY, pointRadius, 0, Math.PI * 2);
+                context.fill();
+                const strokeOpacity = (muted ? Math.min(baseStrokeOpacity, 0.25) : baseStrokeOpacity) * mapOpacity;
+                if (strokeOpacity > 0) {
+                  context.globalAlpha = strokeOpacity;
+                  context.strokeStyle = "#000000";
+                  context.lineWidth = pointRadius < 3 ? 0.5 : 0.75;
+                  context.stroke();
+                  activeFillOpacity = -1;
+                }
+              }
             }
           }
         }
         context.globalAlpha = 1;
+      },
+      pointRow(index) {
+        return {
+          key: this.geometryPoints.key[index],
+          row_count: this.geometryPoints.row_count?.[index],
+          numerator: this.metricPoints.numerator?.[index],
+          denominator: this.metricPoints.denominator?.[index],
+          value: this.metricPoints.value?.[index],
+          latitude: Number(this.geometryPoints.latitude[index]),
+          longitude: Number(this.geometryPoints.longitude[index]),
+        };
+      },
+      rowForKey(rawKey) {
+        const key = String(rawKey);
+        for (let index = 0; index < this.pointCount; index += 1) {
+          if (String(this.geometryPoints.key[index]) === key) return this.pointRow(index);
+        }
+        return null;
       },
       findNearest(containerPoint) {
         if (!this.map || !this.hitGrid) return null;
@@ -1817,19 +2024,22 @@ export function createUkMapTool({
         const gridY = Math.floor(containerPoint.y / MAP_POINT_GRID_SIZE);
         for (let dxCell = -1; dxCell <= 1; dxCell += 1) {
           for (let dyCell = -1; dyCell <= 1; dyCell += 1) {
-            const entries = this.hitGrid.get(`${gridX + dxCell},${gridY + dyCell}`) || [];
-            for (const candidate of entries) {
-              const dx = candidate.point.x - containerPoint.x;
-              const dy = candidate.point.y - containerPoint.y;
+            const key = ((gridY + dyCell + 2) * this.hitGridStride) + gridX + dxCell + 2;
+            const indexes = this.hitGrid.get(key) || [];
+            for (const index of indexes) {
+              const pointX = (this.worldX[index] * this.projectionScale) - this.projectionMinX;
+              const pointY = (this.worldY[index] * this.projectionScale) - this.projectionMinY;
+              const dx = pointX - containerPoint.x;
+              const dy = pointY - containerPoint.y;
               const distance = dx * dx + dy * dy;
               if (distance <= nearestDistance) {
-                nearest = candidate.entry;
+                nearest = index;
                 nearestDistance = distance;
               }
             }
           }
         }
-        return nearest;
+        return nearest === null ? null : this.pointRow(nearest);
       },
       handleMouseMove(event) {
         const nearest = this.findNearest(event.containerPoint);
@@ -1850,14 +2060,15 @@ export function createUkMapTool({
       handleClick(event) {
         const nearest = this.findNearest(event.containerPoint);
         if (!nearest) return;
+        const latLng = L.latLng(nearest.latitude, nearest.longitude);
         const popup = L.popup({ maxWidth: MAP_POPUP_MAX_WIDTH })
-          .setLatLng(nearest.latLng)
+          .setLatLng(latLng)
           .setContent(mapPopupHtml(String(nearest.key || "Unknown"), nearest, this.data));
         activeMapPopupSelection = {
           key: String(nearest.key || "Unknown"),
           level: "unit",
           joinColumn: this.data?.join_column || postcodeColumn("unit"),
-          latLng: nearest.latLng,
+          latLng,
           popup,
         };
         popup.openOn(this.map);
@@ -1867,7 +2078,7 @@ export function createUkMapTool({
           this.map.removeLayer(this.tooltip);
         }
       },
-    }))(data, scale, hotspotKeys);
+    }))(data, scale, hotspotIndexes, geometryKey);
   }
 
   function renderMap(data, geoJson) {
@@ -1880,7 +2091,7 @@ export function createUkMapTool({
     if (!selection || !popup || !ukMap.hasLayer(popup) || selection.level !== data?.level) return false;
     let row = null;
     if (data.level === "unit") {
-      row = ukMapPointLayer?.rows?.find((candidate) => String(candidate.key) === selection.key) || null;
+      row = ukMapPointLayer?.rowForKey?.(selection.key) || null;
     } else {
       row = activeMapPolygonContext()?.summaries?.get(selection.key) || null;
     }
@@ -2006,7 +2217,7 @@ export function createUkMapTool({
     initMap();
     syncFloatingMapControl();
     const scale = makeUnitPointScale(data);
-    const hotspotKeys = mapUnitHotspotKeys(data);
+    const hotspotIndexes = mapUnitHotspotIndexes(data);
     if (ukMapLayer) {
       ukMap.removeLayer(ukMapLayer);
       ukMapLayer = null;
@@ -2016,11 +2227,16 @@ export function createUkMapTool({
       ukMap.removeLayer(ukMapLabelLayer);
       ukMapLabelLayer = null;
     }
-    if (ukMapPointLayer) {
-      ukMap.removeLayer(ukMapPointLayer);
-      ukMapPointLayer = null;
+    const geometryKey = data._unitGeometryKey || "";
+    const reuseLayer = Boolean(
+      data._unitGeometryReused
+      && ukMapPointLayer?.geometryKey === geometryKey
+      && ukMapPointLayer?.setData(data, scale, hotspotIndexes)
+    );
+    if (!reuseLayer) {
+      if (ukMapPointLayer) ukMap.removeLayer(ukMapPointLayer);
+      ukMapPointLayer = makeUnitPointLayer(data, scale, hotspotIndexes, geometryKey).addTo(ukMap);
     }
-    ukMapPointLayer = makeUnitPointLayer(data, scale, hotspotKeys).addTo(ukMap);
 
     applyRenderedMapCamera(data.level, ukMapPointLayer.getBounds());
     renderMapLegend(scale, data.response?.label || "Actual");
@@ -2126,8 +2342,8 @@ export function createUkMapTool({
       }
       measureToolRender("uk_map", () => {
         const scale = makeUnitPointScale(state.lastMapData);
-        const hotspotKeys = mapUnitHotspotKeys(state.lastMapData);
-        ukMapPointLayer.setRenderContext(scale, hotspotKeys);
+        const hotspotIndexes = mapUnitHotspotIndexes(state.lastMapData);
+        ukMapPointLayer.setRenderContext(scale, hotspotIndexes);
         renderMapLegend(scale, state.lastMapData.response?.label || "Actual");
       });
       return;
@@ -2326,21 +2542,30 @@ export function createUkMapTool({
     return makeQuantileScaleFromValues(values);
   }
 
-  function makeQuantileScaleFromValues(rawValues) {
+  function makeQuantileScaleFromValues(rawValues, { sorted = false } = {}) {
     const palette = interpolateMapPalette(activeMapPalette(), MAP_COLOR_BUCKETS);
-    const values = [...rawValues].sort((a, b) => a - b);
+    const values = sorted ? rawValues : rawValues.sort((a, b) => a - b);
     const thresholds = quantileThresholds(values, palette.length);
+    const bucket = (value) => {
+      let low = 0;
+      let high = thresholds.length;
+      while (low < high) {
+        const middle = (low + high) >> 1;
+        if (value > thresholds[middle]) low = middle + 1;
+        else high = middle;
+      }
+      return Math.min(low, palette.length - 1);
+    };
     return {
       palette,
       legendPalette: legendPaletteFromMapPalette(palette),
       values,
       thresholds,
       legendThresholds: quantileThresholds(values, MAP_LEGEND_BUCKETS),
+      bucket,
       color(value) {
         if (value === null) return MAP_MISSING_COLOR;
-        let bucket = 0;
-        while (bucket < thresholds.length && value > thresholds[bucket]) bucket += 1;
-        return palette[Math.min(bucket, palette.length - 1)];
+        return palette[bucket(value)];
       },
     };
   }

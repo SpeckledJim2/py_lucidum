@@ -2964,12 +2964,13 @@ class BrowserSmokeTests(unittest.TestCase):
                         () => {
                           const map = document.querySelector("#ukMap")?._lucidumMap;
                           const layer = Object.values(map?._layers || {})
-                            .find((candidate) => candidate?.data?.level === "unit" && candidate?.rows?.length);
-                          const entry = layer?.rows?.[0];
+                            .find((candidate) => candidate?.data?.level === "unit" && candidate?.pointCount > 0);
+                          const entry = layer?.pointRow?.(0);
                           if (!map || !entry) return false;
+                          const latlng = { lat: entry.latitude, lng: entry.longitude };
                           map.fire("click", {
-                            containerPoint: map.latLngToContainerPoint(entry.latLng),
-                            latlng: entry.latLng,
+                            containerPoint: map.latLngToContainerPoint(latlng),
+                            latlng,
                           });
                           return true;
                         }
@@ -25530,6 +25531,42 @@ COPY (
                 self.assertTrue(page.locator("#mapSmoothingControl").is_hidden())
                 self.assertTrue(page.locator("#mapSmoothing").is_disabled())
                 page.locator("#ukMap .leaflet-unit-point-layer").wait_for(timeout=10_000)
+                page.evaluate(
+                    """
+                    () => {
+                      const map = document.querySelector("#ukMap")?._lucidumMap;
+                      window.__ukMapUnitLayerBeforeMetricChange = Object.values(map?._layers || {})
+                        .find((candidate) => candidate?.data?.level === "unit" && candidate?.pointCount > 0);
+                    }
+                    """
+                )
+                with page.expect_request(lambda request: request.url.endswith("/api/uk-map/summary"), timeout=10_000) as unit_metric_request_info:
+                    with page.expect_response(lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200, timeout=10_000):
+                        page.evaluate(
+                            """
+                            () => {
+                              const select = document.querySelector("#actualNumerator");
+                              const next = [...select.options].find((option) => option.value && option.value !== select.value);
+                              if (!next) throw new Error("No alternate Actual option available");
+                              select.value = next.value;
+                              select.dispatchEvent(new Event("change", { bubbles: true }));
+                            }
+                            """
+                        )
+                unit_metric_request = json.loads(unit_metric_request_info.value.post_data or "{}")
+                self.assertTrue(unit_metric_request["reuseUnitGeometry"])
+                self.assertTrue(
+                    page.evaluate(
+                        """
+                        () => {
+                          const map = document.querySelector("#ukMap")?._lucidumMap;
+                          const current = Object.values(map?._layers || {})
+                            .find((candidate) => candidate?.data?.level === "unit" && candidate?.pointCount > 0);
+                          return current === window.__ukMapUnitLayerBeforeMetricChange;
+                        }
+                        """
+                    )
+                )
                 page.evaluate(
                     """
                     () => {
