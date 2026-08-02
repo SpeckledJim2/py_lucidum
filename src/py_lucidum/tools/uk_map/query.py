@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import duckdb
@@ -106,10 +107,29 @@ def summary(dataset: Dataset, request: dict[str, Any], defaults: dict[str, str] 
         if level == "unit":
             latitude_column = normalise_coordinate_column("latitude", request, app_defaults, columns)
             longitude_column = normalise_coordinate_column("longitude", request, app_defaults, columns)
+            unit_viewport_bounds = normalise_unit_viewport_bounds(request.get("unitViewportBounds"))
+            unit_filter_sql = unit_viewport_filter_sql(
+                filter_sql,
+                latitude_column,
+                longitude_column,
+                unit_viewport_bounds,
+            )
             row_count = context["row_count"]
-            filtered_row_count = relation_row_count(dataset, relation, filter_sql)
-            denominator_summary = summarize_denominator_for_relation(dataset, relation, [response], denominator, filter_sql)
-            response_summaries = response_summary_for_relation(dataset, relation, [response], denominator, filter_sql)
+            filtered_row_count = relation_row_count(dataset, relation, unit_filter_sql)
+            denominator_summary = summarize_denominator_for_relation(
+                dataset,
+                relation,
+                [response],
+                denominator,
+                unit_filter_sql,
+            )
+            response_summaries = response_summary_for_relation(
+                dataset,
+                relation,
+                [response],
+                denominator,
+                unit_filter_sql,
+            )
             rows_or_points, point_summary = unit_rows(
                 dataset,
                 join_column,
@@ -117,7 +137,7 @@ def summary(dataset: Dataset, request: dict[str, Any], defaults: dict[str, str] 
                 longitude_column,
                 response,
                 denominator,
-                filter_sql,
+                unit_filter_sql,
                 source_id=source_id,
                 relation=relation,
                 compact=compact_unit_points,
@@ -205,6 +225,11 @@ def summary(dataset: Dataset, request: dict[str, Any], defaults: dict[str, str] 
             }
         else:
             payload["rows"] = rows
+        if level == "unit":
+            payload["unit_viewport"] = {
+                "applied": unit_viewport_bounds is not None,
+                "bounds": unit_viewport_bounds,
+            }
         if point_summary:
             payload["point_summary"] = point_summary
         return payload
@@ -290,6 +315,44 @@ def normalise_coordinate_column(
     if not column or not is_numeric_kind(columns[column].kind):
         raise ValueError(f"Choose a valid numeric {info['label']} column")
     return column
+
+
+def normalise_unit_viewport_bounds(raw: Any) -> dict[str, float] | None:
+    if raw is None or raw == "":
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("Choose valid unit viewport bounds")
+    bounds: dict[str, float] = {}
+    for key in ("south", "west", "north", "east"):
+        try:
+            value = float(raw.get(key))
+        except (TypeError, ValueError):
+            raise ValueError("Choose valid unit viewport bounds") from None
+        if not math.isfinite(value):
+            raise ValueError("Choose valid unit viewport bounds")
+        bounds[key] = value
+    if not (-90 <= bounds["south"] < bounds["north"] <= 90):
+        raise ValueError("Choose valid unit viewport bounds")
+    if not (-180 <= bounds["west"] < bounds["east"] <= 180):
+        raise ValueError("Choose valid unit viewport bounds")
+    return bounds
+
+
+def unit_viewport_filter_sql(
+    filter_sql: str,
+    latitude_column: str,
+    longitude_column: str,
+    bounds: dict[str, float] | None,
+) -> str:
+    if bounds is None:
+        return filter_sql
+    latitude_expr = f"TRY_CAST({quote_ident(latitude_column)} AS DOUBLE)"
+    longitude_expr = f"TRY_CAST({quote_ident(longitude_column)} AS DOUBLE)"
+    viewport_sql = (
+        f"{latitude_expr} BETWEEN {bounds['south']} AND {bounds['north']} "
+        f"AND {longitude_expr} BETWEEN {bounds['west']} AND {bounds['east']}"
+    )
+    return f"({filter_sql}) AND ({viewport_sql})" if filter_sql else viewport_sql
 
 
 def resolve_alias_column(
@@ -680,5 +743,7 @@ __all__ = [
     "normalise_join_column",
     "normalise_level",
     "normalise_response",
+    "normalise_unit_viewport_bounds",
     "summary",
+    "unit_viewport_filter_sql",
 ]

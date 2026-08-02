@@ -452,6 +452,38 @@ class UkMapToolTests(unittest.TestCase):
             [("AB10 1AA", 57.1, -2.1), ("AL1 1AA", 51.7, -0.4)],
         )
 
+    def test_unit_viewport_bounds_filter_rows_before_aggregation(self) -> None:
+        dataset = Dataset(self.data_path)
+        bounds = {"south": 51.6, "west": -0.5, "north": 51.9, "east": -0.1}
+
+        result = summary(
+            dataset,
+            self.request(level="unit", filter="Flag = 1", unitViewportBounds=bounds),
+        )
+
+        self.assertEqual(result["filtered_row_count"], 1)
+        self.assertEqual(result["unit_viewport"], {"applied": True, "bounds": bounds})
+        self.assertEqual(
+            [(row["key"], row["value"], row["latitude"], row["longitude"]) for row in result["rows"]],
+            [("AL1 1AA", 300, 51.7, -0.4)],
+        )
+
+    def test_unit_viewport_bounds_are_validated(self) -> None:
+        dataset = Dataset(self.data_path)
+        invalid_bounds = [
+            [],
+            "51,-1,52,1",
+            {"south": 51, "west": -1, "north": 51, "east": 1},
+            {"south": -91, "west": -1, "north": 51, "east": 1},
+            {"south": 50, "west": 2, "north": 51, "east": 1},
+            {"south": 50, "west": -1, "north": float("nan"), "east": 1},
+            {"south": 50, "west": -1, "north": float("inf"), "east": 1},
+        ]
+        for bounds in invalid_bounds:
+            with self.subTest(bounds=bounds):
+                with self.assertRaisesRegex(ValueError, "Choose valid unit viewport bounds"):
+                    summary(dataset, self.request(level="unit", unitViewportBounds=bounds))
+
     def test_invalid_postcode_column_is_reported(self) -> None:
         dataset = Dataset(self.data_path)
 
@@ -550,6 +582,30 @@ class UkMapToolTests(unittest.TestCase):
             reused["unit_points"],
             {"numerator": [300, None], "denominator": [30, 0], "value": [10, None]},
         )
+
+    def test_unit_viewport_bounds_filter_rows_before_grouping(self) -> None:
+        dataset = Dataset(self.data_path)
+        bounds = {"south": 57.15, "west": -2.4, "north": 57.4, "east": -2.0}
+
+        result = summary(
+            dataset,
+            self.request(
+                level="unit",
+                compactUnitPoints=True,
+                compactUnitMetrics="minimal",
+                unitViewportBounds=bounds,
+            ),
+        )
+
+        self.assertEqual(result["row_count"], 5)
+        self.assertEqual(result["filtered_row_count"], 1)
+        self.assertEqual(result["filter"], "")
+        self.assertEqual(result["unit_viewport"], {"applied": True, "bounds": bounds})
+        self.assertEqual(result["unit_geometry"], {"included": True, "point_count": 1})
+        self.assertEqual(result["unit_points"]["key"], ["AB10 1AA"])
+        self.assertEqual(result["unit_points"]["latitude"], [57.3])
+        self.assertEqual(result["unit_points"]["longitude"], [-2.3])
+        self.assertEqual(result["unit_points"]["value"], [200])
 
     def test_unit_summary_applies_filter_and_weight(self) -> None:
         dataset = Dataset(self.data_path)

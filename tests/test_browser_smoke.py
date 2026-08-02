@@ -16549,6 +16549,225 @@ COPY (
                 thread.join(timeout=5)
                 stop_persistent_glm_fit_worker()
 
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_uk_map_unit_viewport_expands_on_zoom_out_and_fit_uk(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "unit_viewport.csv"
+            data_path.write_text(
+                "PostcodeArea,PostcodeSector,PostcodeUnit,lat,long,price,value\n"
+                "E,E1 1,E1 1AA,51.5074,-0.1278,100,10\n"
+                "EC,EC1A 1,EC1A 1BB,51.5200,-0.0900,200,20\n"
+                "M,M1 1,M1 1AA,53.4808,-2.2426,300,30\n"
+                "EH,EH1 1,EH1 1AA,55.9533,-3.1883,400,40\n",
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                defaults={"actual": "price", "denominator": "__none__"},
+                tools=["uk_map"],
+                token="",
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    try:
+                        page.goto(base_url, wait_until="domcontentloaded")
+                        page.locator("#datasetMeta").get_by_text("unit_viewport.csv").wait_for(timeout=10_000)
+                        page.wait_for_function(
+                            '() => document.querySelector("#mapGroupMeta")?.textContent.includes("areas matched")',
+                            timeout=10_000,
+                        )
+                        with page.expect_request(
+                            lambda request: request.url.endswith("/api/uk-map/summary"),
+                            timeout=10_000,
+                        ) as initial_request_info:
+                            with page.expect_response(
+                                lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200,
+                                timeout=10_000,
+                            ):
+                                page.evaluate(
+                                    """
+                                    () => {
+                                      const input = document.querySelector(
+                                        '#mapLevelTiles input[name="mapLevel"][value="unit"]'
+                                      );
+                                      input.checked = true;
+                                      input.dispatchEvent(new Event("change", { bubbles: true }));
+                                    }
+                                    """
+                                )
+                        initial_request = json.loads(initial_request_info.value.post_data or "{}")
+                        self.assertIsNone(initial_request.get("unitViewportBounds"))
+                        page.wait_for_function(
+                            """
+                            () => Object.values(document.querySelector("#ukMap")?._lucidumMap?._layers || {})
+                              .some((layer) => layer?.data?.level === "unit"
+                                && layer?.pointCount === 4
+                                && layer?.coverageBounds === null)
+                            """,
+                            timeout=10_000,
+                        )
+                        page.wait_for_timeout(250)
+                        page.evaluate(
+                            """
+                            () => {
+                              document.querySelector("#ukMap")?._lucidumMap
+                                ?.setView([51.5074, -0.1278], 10, { animate: false });
+                            }
+                            """
+                        )
+                        page.wait_for_function(
+                            '() => document.querySelector("#ukMap")?._lucidumMap?.getZoom() === 10',
+                            timeout=10_000,
+                        )
+                        page.wait_for_timeout(250)
+                        page.evaluate(
+                            """
+                            () => {
+                              const map = document.querySelector("#ukMap")?._lucidumMap;
+                              window.__unitFullLayer = Object.values(map?._layers || {})
+                                .find((layer) => layer?.data?.level === "unit" && layer?.pointCount > 0);
+                            }
+                            """
+                        )
+
+                        with page.expect_request(
+                            lambda request: request.url.endswith("/api/uk-map/summary"),
+                            timeout=10_000,
+                        ) as metric_request_info:
+                            with page.expect_response(
+                                lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200,
+                                timeout=10_000,
+                            ):
+                                page.locator("#actualNumerator").select_option("value")
+                        metric_request = json.loads(metric_request_info.value.post_data or "{}")
+                        regional_bounds = metric_request.get("unitViewportBounds")
+                        self.assertIsInstance(regional_bounds, dict)
+                        assert isinstance(regional_bounds, dict)
+                        self.assertFalse(metric_request["reuseUnitGeometry"])
+                        self.assertLess(regional_bounds["south"], 51.5074)
+                        self.assertGreater(regional_bounds["north"], 51.5074)
+                        self.assertLess(regional_bounds["west"], -0.1278)
+                        self.assertGreater(regional_bounds["east"], -0.1278)
+                        regional_layer = page.evaluate(
+                            """
+                            () => {
+                              const current = Object.values(
+                                document.querySelector("#ukMap")?._lucidumMap?._layers || {}
+                              ).find((layer) => layer?.data?.level === "unit" && layer?.pointCount > 0);
+                              window.__unitRegionalLayer = current;
+                              return {
+                                replaced: current !== window.__unitFullLayer,
+                                pointCount: current?.pointCount || 0,
+                                coverageBounds: current?.coverageBounds || null,
+                              };
+                            }
+                            """
+                        )
+                        self.assertTrue(regional_layer["replaced"])
+                        self.assertEqual(regional_layer["pointCount"], 2)
+                        self.assertEqual(regional_layer["coverageBounds"], regional_bounds)
+                        page.wait_for_timeout(250)
+
+                        with page.expect_request(
+                            lambda request: request.url.endswith("/api/uk-map/summary"),
+                            timeout=10_000,
+                        ) as reused_request_info:
+                            with page.expect_response(
+                                lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200,
+                                timeout=10_000,
+                            ):
+                                page.locator("#actualNumerator").select_option("price")
+                        reused_request = json.loads(reused_request_info.value.post_data or "{}")
+                        self.assertTrue(reused_request["reuseUnitGeometry"], reused_request)
+                        self.assertEqual(reused_request["unitViewportBounds"], regional_bounds)
+                        self.assertTrue(
+                            page.evaluate(
+                                """
+                                () => Object.values(document.querySelector("#ukMap")?._lucidumMap?._layers || {})
+                                  .find((layer) => layer?.data?.level === "unit" && layer?.pointCount > 0)
+                                  === window.__unitRegionalLayer
+                                """
+                            )
+                        )
+
+                        with page.expect_request(
+                            lambda request: request.url.endswith("/api/uk-map/summary"),
+                            timeout=10_000,
+                        ) as expanded_request_info:
+                            with page.expect_response(
+                                lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200,
+                                timeout=10_000,
+                            ):
+                                stale_layer_visibility = page.evaluate(
+                                    """
+                                    () => {
+                                      const map = document.querySelector("#ukMap")?._lucidumMap;
+                                      const layer = window.__unitRegionalLayer;
+                                      map?.setView([54.5, -2.0], 5, { animate: false });
+                                      return {
+                                        stillMounted: Boolean(layer && map?.hasLayer(layer)),
+                                        visibility: layer?.canvas?.style?.visibility || "",
+                                      };
+                                    }
+                                    """
+                                )
+                        self.assertEqual(
+                            stale_layer_visibility,
+                            {"stillMounted": True, "visibility": "hidden"},
+                        )
+                        expanded_request = json.loads(expanded_request_info.value.post_data or "{}")
+                        expanded_bounds = expanded_request.get("unitViewportBounds")
+                        self.assertIsInstance(expanded_bounds, dict)
+                        assert isinstance(expanded_bounds, dict)
+                        self.assertFalse(expanded_request["reuseUnitGeometry"])
+                        regional_area = (regional_bounds["north"] - regional_bounds["south"]) * (
+                            regional_bounds["east"] - regional_bounds["west"]
+                        )
+                        expanded_area = (expanded_bounds["north"] - expanded_bounds["south"]) * (
+                            expanded_bounds["east"] - expanded_bounds["west"]
+                        )
+                        self.assertGreater(expanded_area, regional_area * 3)
+                        page.wait_for_function(
+                            """
+                            () => Object.values(document.querySelector("#ukMap")?._lucidumMap?._layers || {})
+                              .some((layer) => layer?.data?.level === "unit" && layer?.pointCount === 4)
+                            """,
+                            timeout=10_000,
+                        )
+
+                        with page.expect_request(
+                            lambda request: request.url.endswith("/api/uk-map/summary"),
+                            timeout=10_000,
+                        ) as full_request_info:
+                            with page.expect_response(
+                                lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200,
+                                timeout=10_000,
+                            ):
+                                page.locator("#mapFitUk").click()
+                        full_request = json.loads(full_request_info.value.post_data or "{}")
+                        self.assertIsNone(full_request.get("unitViewportBounds"))
+                        page.wait_for_function(
+                            """
+                            () => Object.values(document.querySelector("#ukMap")?._lucidumMap?._layers || {})
+                              .some((layer) => layer?.data?.level === "unit"
+                                && layer?.pointCount === 4
+                                && layer?.coverageBounds === null)
+                            """,
+                            timeout=10_000,
+                        )
+                        self.assertEqual(page_errors, [])
+                    finally:
+                        browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
     @staticmethod
     def start_app(
         data_path: Path,

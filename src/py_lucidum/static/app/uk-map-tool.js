@@ -417,6 +417,9 @@ export function createUkMapTool({
   const MAP_POINT_GRID_SIZE = 18;
   const MAP_UNIT_SPATIAL_GRID_SIZE = 256;
   const MAP_UNIT_QUANTILE_SAMPLE_SIZE = 100_000;
+  const MAP_UNIT_VIEWPORT_PADDING_RATIO = 0.25;
+  const MAP_UNIT_VIEWPORT_SHRINK_RATIO = 3;
+  const MAP_UNIT_VIEWPORT_REFRESH_DELAY_MS = 160;
   const MAP_MERCATOR_MAX_LATITUDE = 85.0511287798;
   const MAP_FIT_PADDING = [8, 8];
   const MAP_UNIT_FIT_PADDING = [18, 18];
@@ -475,10 +478,92 @@ export function createUkMapTool({
   let mapRegionDismissClickPending = false;
   let mapPendingMetaTimer = null;
   let mapPendingMetaRequestSeq = null;
+  let mapUnitCoverageTimer = null;
+  let mapUnitCoverageRequestKey = "";
+  let mapUnitFullExtentPending = false;
+  let mapUnitFitAfterRefresh = false;
 
   function clearActiveMapFavourite(options = {}) {
     if (state.mapFavouriteRestoreInProgress && !options.force) return;
     clearActiveFavouriteSelection();
+  }
+
+  function normaliseUnitBounds(raw) {
+    const south = Number(raw?.south);
+    const west = Number(raw?.west);
+    const north = Number(raw?.north);
+    const east = Number(raw?.east);
+    if (![south, west, north, east].every(Number.isFinite)) return null;
+    if (south >= north || west >= east) return null;
+    return { south, west, north, east };
+  }
+
+  function unitBoundsFromLeaflet(bounds) {
+    if (!bounds?.isValid?.()) return null;
+    const rounded = (value) => Number(Number(value).toFixed(6));
+    return normaliseUnitBounds({
+      south: rounded(bounds.getSouth()),
+      west: rounded(bounds.getWest()),
+      north: rounded(bounds.getNorth()),
+      east: rounded(bounds.getEast()),
+    });
+  }
+
+  function unitBoundsContains(container, candidate) {
+    const outer = normaliseUnitBounds(container);
+    const inner = normaliseUnitBounds(candidate);
+    if (!outer || !inner) return false;
+    const epsilon = 1e-6;
+    return outer.south <= inner.south + epsilon
+      && outer.west <= inner.west + epsilon
+      && outer.north >= inner.north - epsilon
+      && outer.east >= inner.east - epsilon;
+  }
+
+  function unitBoundsArea(bounds) {
+    const normalised = normaliseUnitBounds(bounds);
+    if (!normalised) return 0;
+    return (normalised.north - normalised.south) * (normalised.east - normalised.west);
+  }
+
+  function paddedUnitViewportBounds(bounds) {
+    const normalised = normaliseUnitBounds(bounds);
+    if (!normalised) return null;
+    const latitudePadding = (normalised.north - normalised.south) * MAP_UNIT_VIEWPORT_PADDING_RATIO;
+    const longitudePadding = (normalised.east - normalised.west) * MAP_UNIT_VIEWPORT_PADDING_RATIO;
+    return {
+      south: Math.max(-90, normalised.south - latitudePadding),
+      west: Math.max(-180, normalised.west - longitudePadding),
+      north: Math.min(90, normalised.north + latitudePadding),
+      east: Math.min(180, normalised.east + longitudePadding),
+    };
+  }
+
+  function unitRequestViewportBounds() {
+    if (mapUnitFullExtentPending || !ukMap || !mapContainerVisible()) return null;
+    const visibleBounds = unitBoundsFromLeaflet(ukMap.getBounds());
+    const requestedBounds = paddedUnitViewportBounds(visibleBounds);
+    if (!visibleBounds || !requestedBounds) return null;
+
+    if (state.renderedMapLevel === "unit" && ukMapPointLayer) {
+      const coverageBounds = normaliseUnitBounds(ukMapPointLayer.coverageBounds);
+      if (!coverageBounds) {
+        const fullGeometryBounds = unitBoundsFromLeaflet(ukMapPointLayer.getBounds?.());
+        return fullGeometryBounds && unitBoundsContains(requestedBounds, fullGeometryBounds)
+          ? null
+          : requestedBounds;
+      }
+      if (!unitBoundsContains(coverageBounds, visibleBounds)) return requestedBounds;
+      const requestedArea = unitBoundsArea(requestedBounds);
+      const coverageArea = unitBoundsArea(coverageBounds);
+      return requestedArea > 0 && coverageArea > requestedArea * MAP_UNIT_VIEWPORT_SHRINK_RATIO
+        ? requestedBounds
+        : coverageBounds;
+    }
+
+    const renderedBounds = unitBoundsFromLeaflet(ukMapLayer?.getBounds?.());
+    if (renderedBounds && unitBoundsContains(requestedBounds, renderedBounds)) return null;
+    return state.mapStartupFitDone || state.mapView || renderedBounds ? requestedBounds : null;
   }
 
   function buildMapRequest() {
@@ -508,6 +593,7 @@ export function createUkMapTool({
       smoothingLevel: state.mapLevel === "sector" ? state.mapSmoothingLevel : 0,
     };
     if (request.level === "unit") {
+      request.unitViewportBounds = unitRequestViewportBounds();
       request.compactUnitMetrics = "minimal";
       const geometryKey = unitGeometryRequestKey(request);
       request.reuseUnitGeometry = Boolean(
@@ -526,6 +612,7 @@ export function createUkMapTool({
       request?.unitColumn || "",
       request?.latitudeColumn || "",
       request?.longitudeColumn || "",
+      normaliseUnitBounds(request?.unitViewportBounds),
     ]);
   }
 
@@ -639,6 +726,7 @@ export function createUkMapTool({
   }
 
   function clearRenderedMap() {
+    cancelUnitCoverageRefresh();
     state.lastMapData = null;
     state.renderedMapLevel = null;
     state.mapPolygonRenderContext = null;
@@ -763,6 +851,47 @@ export function createUkMapTool({
     return geoJson;
   }
 
+  function cancelUnitCoverageRefresh() {
+    if (mapUnitCoverageTimer !== null) window.clearTimeout(mapUnitCoverageTimer);
+    mapUnitCoverageTimer = null;
+  }
+
+  function unitViewportExceedsCoverage() {
+    if (
+      state.tool !== "uk_map"
+      || state.renderedMapLevel !== "unit"
+      || !ukMap
+      || !ukMapPointLayer
+    ) {
+      return false;
+    }
+    const coverageBounds = normaliseUnitBounds(ukMapPointLayer.coverageBounds);
+    if (!coverageBounds) return false;
+    const visibleBounds = unitBoundsFromLeaflet(ukMap.getBounds());
+    return Boolean(visibleBounds && !unitBoundsContains(coverageBounds, visibleBounds));
+  }
+
+  function scheduleUnitCoverageRefresh() {
+    cancelUnitCoverageRefresh();
+    if (mapUnitFullExtentPending || !unitViewportExceedsCoverage()) return;
+    mapUnitCoverageTimer = window.setTimeout(() => {
+      mapUnitCoverageTimer = null;
+      if (!unitViewportExceedsCoverage()) return;
+      const request = buildMapRequest();
+      if (!request?.unitViewportBounds) return;
+      const geometryKey = unitGeometryRequestKey(request);
+      if (geometryKey === ukMapPointLayer?.geometryKey || geometryKey === mapUnitCoverageRequestKey) return;
+      mapUnitCoverageRequestKey = geometryKey;
+      Promise.resolve(refreshMap({
+        force: true,
+        preserveRenderedMap: true,
+        suppressPendingMeta: true,
+      })).finally(() => {
+        if (mapUnitCoverageRequestKey === geometryKey) mapUnitCoverageRequestKey = "";
+      });
+    }, MAP_UNIT_VIEWPORT_REFRESH_DELAY_MS);
+  }
+
   function initMap() {
     if (ukMap) return;
     ukMap = L.map("ukMap", {
@@ -772,7 +901,10 @@ export function createUkMapTool({
       zoomSnap: 0.25,
     }).setView([MAP_DEFAULT_VIEW.center.lat, MAP_DEFAULT_VIEW.center.lng], MAP_DEFAULT_VIEW.zoom);
     ukMap.getContainer()._lucidumMap = ukMap;
-    ukMap.on("moveend zoomend", () => captureMapView("leaflet"));
+    ukMap.on("moveend zoomend", () => {
+      captureMapView("leaflet");
+      scheduleUnitCoverageRefresh();
+    });
     ukMap.on("zoomend", () => {
       if (state.lastMapData?.level === "sector") restyleActiveMapPolygonLayer();
     });
@@ -1312,6 +1444,20 @@ export function createUkMapTool({
   }
 
   function fitMapToLayer(options = {}) {
+    if (
+      state.renderedMapLevel === "unit"
+      && normaliseUnitBounds(ukMapPointLayer?.coverageBounds)
+      && !mapUnitFullExtentPending
+    ) {
+      mapUnitFullExtentPending = true;
+      mapUnitFitAfterRefresh = true;
+      refreshMap({ force: true, preserveRenderedMap: true, suppressPendingMeta: true })
+        .finally(() => {
+          mapUnitFullExtentPending = false;
+          mapUnitFitAfterRefresh = false;
+        });
+      return;
+    }
     const bounds = activeMapBounds();
     if (!bounds) {
       if (!ukMap) return;
@@ -1751,6 +1897,7 @@ export function createUkMapTool({
     return new (L.Layer.extend({
       initialize(mapData, initialScale, initialHotspotIndexes, initialGeometryKey) {
         this.geometryKey = initialGeometryKey;
+        this.coverageBounds = normaliseUnitBounds(mapData?.unit_viewport?.bounds);
         this.setGeometry(normaliseUnitPointColumns(mapData));
         this.setData(mapData, initialScale, initialHotspotIndexes);
         this.tooltip = null;
@@ -1851,6 +1998,7 @@ export function createUkMapTool({
         const points = normaliseUnitPointColumns(mapData);
         if ((points.value || []).length !== this.pointCount) return false;
         this.data = mapData;
+        this.coverageBounds = normaliseUnitBounds(mapData?.unit_viewport?.bounds);
         this.metricPoints = {
           numerator: points.numerator || [],
           denominator: points.denominator || [],
@@ -1913,6 +2061,18 @@ export function createUkMapTool({
       },
       reset() {
         if (!this.map || !this.canvas) return;
+        const visibleBounds = unitBoundsFromLeaflet(this.map.getBounds());
+        if (
+          this.coverageBounds
+          && visibleBounds
+          && !unitBoundsContains(this.coverageBounds, visibleBounds)
+        ) {
+          this.canvas.style.visibility = "hidden";
+          this.hitGrid = new Map();
+          this.closeTooltip();
+          return;
+        }
+        this.canvas.style.visibility = "";
         const size = this.map.getSize();
         const topLeft = this.map.containerPointToLayerPoint([0, 0]);
         const ratio = window.devicePixelRatio || 1;
@@ -2238,7 +2398,12 @@ export function createUkMapTool({
       ukMapPointLayer = makeUnitPointLayer(data, scale, hotspotIndexes, geometryKey).addTo(ukMap);
     }
 
-    applyRenderedMapCamera(data.level, ukMapPointLayer.getBounds());
+    if (mapUnitFitAfterRefresh && data?.unit_viewport?.applied === false) {
+      mapUnitFitAfterRefresh = false;
+      fitMapBounds(ukMapPointLayer.getBounds(), data.level);
+    } else {
+      applyRenderedMapCamera(data.level, ukMapPointLayer.getBounds());
+    }
     renderMapLegend(scale, data.response?.label || "Actual");
     const rowMeta = mapRowMetaForData(data);
     const pointSummary = data.point_summary || {};
