@@ -203,6 +203,13 @@ def _categorical_split_values(row: dict[str, Any]) -> set[str]:
     return {part.strip() for part in threshold.replace("||", " / ").split(" / ") if part.strip()}
 
 
+def _categorical_split_key(value: Any) -> str:
+    key = _json_value(value)
+    if isinstance(key, bool):
+        return str(key).lower()
+    return str(key)
+
+
 def _left_mask(frame: Any, row: dict[str, Any], pd: Any) -> Any:
     feature = _clean_text(row.get("split_feature"))
     decision_type = _clean_text(row.get("decision_type")) or "<="
@@ -210,7 +217,7 @@ def _left_mask(frame: Any, row: dict[str, Any], pd: Any) -> Any:
     missing = values.isna()
     if decision_type == "==":
         categories = _categorical_split_values(row)
-        condition = values.map(lambda value: str(_json_value(value)) in categories if not pd.isna(value) else False)
+        condition = values.map(lambda value: _categorical_split_key(value) in categories if not pd.isna(value) else False)
     else:
         numeric = pd.to_numeric(values, errors="coerce")
         threshold = _as_number(row.get("threshold"))

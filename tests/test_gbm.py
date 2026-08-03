@@ -2163,15 +2163,22 @@ COPY (
                 "unused": ["x", "y", "z"],
                 "Age": [30, 40, 50],
                 "Segment": ["B", "A", None],
+                "IsRenewal": [False, True, None],
             }
         )
 
-        features, labels = polars_feature_frame(frame, ["Age", "Segment"], ["Segment"], pl)
+        features, labels = polars_feature_frame(
+            frame,
+            ["Age", "Segment", "IsRenewal"],
+            ["Segment", "IsRenewal"],
+            pl,
+        )
         arrow = features.to_arrow()
 
-        self.assertEqual(features.columns, ["Age", "Segment"])
-        self.assertEqual(labels, {"Segment": ["A", "B"]})
+        self.assertEqual(features.columns, ["Age", "Segment", "IsRenewal"])
+        self.assertEqual(labels, {"Segment": ["A", "B"], "IsRenewal": ["false", "true"]})
         self.assertEqual(features.get_column("Segment").to_list(), [1, 0, None])
+        self.assertEqual(features.get_column("IsRenewal").to_list(), [0, 1, None])
         self.assertTrue(all(str(field.type).startswith(("double", "int")) for field in arrow.schema))
 
     def test_response_prediction_uses_exactly_one_lightgbm_pass_per_mode(self) -> None:
@@ -4684,6 +4691,51 @@ COPY (
         self.assertEqual([row["tabulated_linear"] for row in table_rows], [0.0, 1.0, 1.0])
         prediction_rows = store.read_parquet_records(store.artifact_path("tab-gbm", "tabulated_predictions"))
         self.assertEqual([row["gbm_tabulated_prediction"] for row in prediction_rows], [1.0, 2.0, 2.0])
+
+    def test_gbm_tabulation_preserves_distinct_logical_levels(self) -> None:
+        self.data_path = self.root / "logical.parquet"
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"""
+COPY (
+  SELECT *
+  FROM (VALUES
+    (10.0, 1.0, FALSE),
+    (20.0, 1.0, TRUE),
+    (30.0, 1.0, FALSE)
+  ) AS source(actualNumerator, denominator, IsRenewal)
+) TO {sql_literal(str(self.data_path))} (FORMAT PARQUET)
+"""
+            )
+        finally:
+            con.close()
+
+        tree_sql = """
+  SELECT 0 AS tree_index, 1 AS node_depth, '0-S0' AS node_index, '0-L0' AS left_child, '0-L1' AS right_child,
+         NULL AS parent_index, 'IsRenewal' AS split_feature, 1.0 AS split_gain, '0' AS threshold,
+         'false' AS threshold_label, '==' AS decision_type, 'right' AS missing_direction, 'None' AS missing_type,
+         0.0 AS value, 3.0 AS weight, 3 AS count
+  UNION ALL SELECT 0, 2, '0-L0', NULL, NULL, '0-S0', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 1.0, 2.0, 2
+  UNION ALL SELECT 0, 2, '0-L1', NULL, NULL, '0-S0', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 2.0, 1.0, 1
+"""
+        store = self.write_gbm_tabulation_artifacts(tree_sql=tree_sql, predictions=[1.0, 2.0, 1.0])
+        dataset = Dataset(self.data_path)
+
+        result = build_gbm_tabulations(dataset, store, "tab-gbm", {"rows": []})
+
+        logical_column = dataset.column_map()["IsRenewal"]
+        self.assertEqual(logical_column.duckdb_type, "BOOLEAN")
+        self.assertEqual(logical_column.kind, "categorical")
+        self.assertEqual(result["diagnostics"]["mean_linear_error"], 0.0)
+        self.assertEqual(result["diagnostics"]["linear_sd_error"], 0.0)
+        table_rows = store.read_parquet_records(store.tabulations_dir("tab-gbm") / "IsRenewal.parquet")
+        self.assertEqual(
+            [(row["IsRenewal"], row["tabulated_linear"]) for row in table_rows],
+            [(False, 0.0), (True, 1.0)],
+        )
+        prediction_rows = store.read_parquet_records(store.artifact_path("tab-gbm", "tabulated_predictions"))
+        self.assertEqual([row["gbm_tabulated_prediction"] for row in prediction_rows], [1.0, 2.0, 1.0])
 
     def test_gbm_tabulation_export_xlsx_uses_saved_sidecars(self) -> None:
         load_workbook = self.require_openpyxl_load_workbook()

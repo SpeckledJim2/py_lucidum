@@ -2329,6 +2329,25 @@ if (message !== GBM_PARAMETER_GRID_COPY_ERROR) throw new Error("grid-search copy
             dataset_viewer,
         )
 
+    def test_column_profile_displays_boolean_columns_as_logical(self) -> None:
+        module = Path("src/py_lucidum/static/app/column-profile-tool.js").resolve().as_uri()
+        script = f"""
+import {{ columnProfileTypeLabel }} from "{module}";
+
+const cases = [
+  [{{ kind: "categorical", duckdb_type: "BOOLEAN" }}, "logical"],
+  [{{ kind: "categorical", duckdb_type: "bool" }}, "logical"],
+  [{{ kind: "categorical", duckdb_type: "VARCHAR" }}, "categorical"],
+  [{{ kind: "integer", duckdb_type: "BIGINT" }}, "integer"],
+  [{{}}, "unknown"],
+];
+for (const [column, expected] of cases) {{
+  const actual = columnProfileTypeLabel(column);
+  if (actual !== expected) throw new Error(`expected ${{expected}}, received ${{actual}}`);
+}}
+"""
+        self.run_node_script(script)
+
     def test_app_control_strips_use_shared_height_tokens(self) -> None:
         static_root = Path(__file__).resolve().parents[1] / "src/py_lucidum/static"
         foundations = (static_root / "styles/foundations.css").read_text(encoding="utf-8")

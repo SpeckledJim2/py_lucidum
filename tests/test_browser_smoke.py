@@ -4677,6 +4677,52 @@ class BrowserSmokeTests(unittest.TestCase):
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_column_profile_displays_boolean_columns_as_logical(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "logical_profile.parquet"
+            con = duckdb.connect(database=":memory:")
+            try:
+                con.execute(
+                    f"""
+COPY (
+  SELECT *
+  FROM (VALUES (1, FALSE), (2, TRUE)) AS source(value, logical_feature)
+) TO {sql_literal(str(data_path))} (FORMAT PARQUET)
+"""
+                )
+            finally:
+                con.close()
+            base_url, server, thread = self.start_app(data_path, tools=["column_profile"])
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1100, "height": 700})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    try:
+                        page.goto(f"{base_url}?tool=column_profile", wait_until="domcontentloaded")
+                        row = page.locator('.profile-summary-row[data-profile-column="logical_feature"]')
+                        row.wait_for(timeout=10_000)
+                        summary_badge = row.locator(".profile-type")
+                        self.assertEqual(summary_badge.text_content(), "logical")
+                        self.assertEqual(summary_badge.get_attribute("title"), "BOOLEAN")
+
+                        row.click()
+                        page.locator("#profileDetailTitle", has_text="logical_feature").wait_for(timeout=10_000)
+                        detail_badge = page.locator(".profile-detail-subtitle .profile-type")
+                        self.assertEqual(detail_badge.text_content(), "logical")
+                        self.assertEqual(detail_badge.get_attribute("title"), "BOOLEAN")
+                        self.assertIn("BOOLEAN", page.locator(".profile-detail-subtitle").inner_text())
+                        self.assertEqual(page_errors, [])
+                    finally:
+                        browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_column_profile_preserves_table_scroll_on_filter_change(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "many_profile_columns.csv"

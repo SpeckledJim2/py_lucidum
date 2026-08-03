@@ -4,6 +4,12 @@ const PROFILE_SUMMARY_MIN_WIDTH = 320;
 const PROFILE_DETAIL_MIN_WIDTH = 260;
 const PROFILE_RESIZE_STEP = 24;
 
+export function columnProfileTypeLabel(column = {}) {
+  const kind = column.kind || "unknown";
+  const duckdbType = String(column.duckdb_type || "").toUpperCase();
+  return duckdbType.includes("BOOL") ? "logical" : kind;
+}
+
 export function createColumnProfileTool({
   api,
   el,
@@ -1063,8 +1069,8 @@ export function createColumnProfileTool({
       return leftValue === rightValue ? compareProfileText(left.name, right.name) : leftValue - rightValue;
     }
     if (key === "type") {
-      const leftType = `${left.kind || ""}\u0000${left.duckdb_type || ""}`;
-      const rightType = `${right.kind || ""}\u0000${right.duckdb_type || ""}`;
+      const leftType = `${columnProfileTypeLabel(left)}\u0000${left.duckdb_type || ""}`;
+      const rightType = `${columnProfileTypeLabel(right)}\u0000${right.duckdb_type || ""}`;
       const compared = compareProfileText(leftType, rightType);
       return compared || compareProfileText(left.name, right.name);
     }
@@ -1076,8 +1082,8 @@ export function createColumnProfileTool({
   }
 
   function profileTypeBadgeHtml(column) {
-    const kind = column.kind || "unknown";
-    return `<span class="profile-type" title="${escapeHtml(column.duckdb_type || kind)}">${escapeHtml(kind)}</span>`;
+    const label = columnProfileTypeLabel(column);
+    return `<span class="profile-type" title="${escapeHtml(column.duckdb_type || label)}">${escapeHtml(label)}</span>`;
   }
 
   function profileMissingHtml(column) {
