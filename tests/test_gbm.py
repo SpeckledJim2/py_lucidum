@@ -2492,6 +2492,87 @@ COPY (
         self.assertFalse(result.ok)
         self.assertIn("cross_entropy objective requires response values between 0 and 1", "; ".join(result.errors))
 
+    def test_gamma_validation_uses_denominator_eligible_rows(self) -> None:
+        data_path = self.root / "gamma_eligible_rows.csv"
+        data_path.write_text(
+            "actualNumerator,denominator,Age\n"
+            "0,0,30\n"
+            "-5,0,40\n"
+            ",,50\n"
+            "10,1,60\n"
+            "20,2,70\n",
+            encoding="utf-8",
+        )
+
+        result = validate_request(
+            Dataset(data_path),
+            {
+                "response": "actualNumerator",
+                "offset": "denominator",
+                "features": [{"name": "Age", "include": True, "monotonicity": ""}],
+                "parameters": [
+                    {"name": "objective", "value": "gamma"},
+                    {"name": "metric", "value": "gamma"},
+                ],
+            },
+        )
+
+        self.assertTrue(result.ok, result.errors)
+        self.assertIn(
+            "3 rows have non-positive or missing denominator and will be excluded",
+            result.warnings,
+        )
+
+    def test_gamma_validation_rejects_non_positive_eligible_response(self) -> None:
+        data_path = self.root / "gamma_invalid_eligible_row.csv"
+        data_path.write_text(
+            "actualNumerator,denominator,Age\n"
+            "10,0,30\n"
+            "0,1,40\n",
+            encoding="utf-8",
+        )
+
+        result = validate_request(
+            Dataset(data_path),
+            {
+                "response": "actualNumerator",
+                "offset": "denominator",
+                "features": [{"name": "Age", "include": True, "monotonicity": ""}],
+                "parameters": [
+                    {"name": "objective", "value": "gamma"},
+                    {"name": "metric", "value": "gamma"},
+                ],
+            },
+        )
+
+        self.assertFalse(result.ok)
+        self.assertIn("Gamma objective requires strictly positive response values", result.errors)
+
+    def test_gamma_validation_without_denominator_checks_all_rows(self) -> None:
+        data_path = self.root / "gamma_without_denominator.csv"
+        data_path.write_text(
+            "actualNumerator,denominator,Age\n"
+            "0,0,30\n"
+            "10,1,40\n",
+            encoding="utf-8",
+        )
+
+        result = validate_request(
+            Dataset(data_path),
+            {
+                "response": "actualNumerator",
+                "offset": "__none__",
+                "features": [{"name": "Age", "include": True, "monotonicity": ""}],
+                "parameters": [
+                    {"name": "objective", "value": "gamma"},
+                    {"name": "metric", "value": "gamma"},
+                ],
+            },
+        )
+
+        self.assertFalse(result.ok)
+        self.assertIn("Gamma objective requires strictly positive response values", result.errors)
+
     def test_gain_defaults_and_sorts_descending(self) -> None:
         dataset = Dataset(self.data_path)
 

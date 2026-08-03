@@ -852,7 +852,14 @@ def validate_request(dataset: Dataset, payload: dict[str, Any], generated_sample
                 errors.append(f"Monotonicity is not supported for objective {selected_objective}")
 
         if response_col:
-            errors.extend(response_objective_errors(dataset, selected_objective, response_col))
+            errors.extend(
+                response_objective_errors(
+                    dataset,
+                    selected_objective,
+                    response_col,
+                    offset_column=offset_col,
+                )
+            )
         if offset_col:
             invalid_denominator = int(
                 dataset.con.execute(
@@ -1051,9 +1058,16 @@ def shap_rows_requested(raw: Any) -> bool:
     return text not in {"", "0", "zero", "none", "no"}
 
 
-def response_objective_errors(dataset: Dataset, selected_objective: str, response_column: str = RESPONSE_COLUMN) -> list[str]:
+def response_objective_errors(
+    dataset: Dataset,
+    selected_objective: str,
+    response_column: str = RESPONSE_COLUMN,
+    *,
+    offset_column: str | None = None,
+) -> list[str]:
     column = quote_ident(response_column)
     relation = dataset.relation_sql()
+    where_sql = f"WHERE TRY_CAST({quote_ident(offset_column)} AS DOUBLE) > 0" if offset_column else ""
     errors: list[str] = []
     stats = dataset.con.execute(
         f"""
@@ -1063,6 +1077,7 @@ SELECT
   COUNT(*) FILTER (WHERE TRY_CAST({column} AS DOUBLE) IS NULL) AS missing_y,
   COUNT(DISTINCT TRY_CAST({column} AS DOUBLE)) AS distinct_y
 FROM {relation}
+{where_sql}
 """
     ).fetchone()
     min_y, max_y, missing_y, distinct_y = stats
