@@ -3719,7 +3719,10 @@ export function createGbmTool({
             body: "{}",
           });
           if (queuedActivationModelId) continue;
-          await applyModelMutationResult(result, { activationOnly: true });
+          await applyModelMutationResult(result, {
+            activationOnly: true,
+            syncModelMetrics: targetModelId !== currentActiveModelId(),
+          });
         } catch (error) {
           if (!queuedActivationModelId) setGbmNotice(error.message);
         }
@@ -3766,6 +3769,7 @@ export function createGbmTool({
     const confirmed = confirm(`Delete ${label}? This deletes the selected .lucidum model folder${modelIds.length === 1 ? "" : "s"}.`);
     if (!confirmed) return;
     invalidateLineBar({ pending: state.tool === "line_bar" });
+    const activeModelIdBeforeDelete = currentActiveModelId();
     let result = null;
     let deletedCount = 0;
     try {
@@ -3773,11 +3777,15 @@ export function createGbmTool({
         result = await api(`/api/gbm/models/${encodeURIComponent(modelId)}`, { method: "DELETE", body: "{}" });
         deletedCount += 1;
       }
-      await applyModelMutationResult(result);
+      await applyModelMutationResult(result, {
+        syncModelMetrics: modelIds.includes(activeModelIdBeforeDelete),
+      });
     } catch (error) {
       try {
         const latest = await api("/api/gbm/config", { method: "GET", clientTiming: true });
-        await applyModelMutationResult({ config: latest });
+        await applyModelMutationResult({ config: latest }, {
+          syncModelMetrics: modelIds.slice(0, deletedCount).includes(activeModelIdBeforeDelete),
+        });
       } catch (_) {
         // Keep the original delete error visible when the refresh also fails.
       }
@@ -3789,8 +3797,13 @@ export function createGbmTool({
   async function applyModelMutationResult(result, options = {}) {
     invalidateLineBar({ pending: state.tool === "line_bar" });
     const nextConfig = result.config || config || {};
-    const schemaApplied = await reloadSchema(preferredModelSource(result, nextConfig), { modelKind: "gbm" });
-    if (schemaApplied === false) return;
+    const activeMetricModel = options?.syncModelMetrics ? activeModelFromData(nextConfig) : null;
+    const schemaResult = await reloadSchema(preferredModelSource(result, nextConfig), {
+      modelKind: "gbm",
+      activeModel: activeMetricModel,
+    });
+    if (schemaResult === false) return;
+    const chartReady = schemaResult?.chartReady !== false;
     const preserveProfile = clearCachesAfterGbmModelSourceChange();
     syncGbmModelCountFromConfig(nextConfig);
     const currentModelId = featureDraftModelId(config);
@@ -3809,7 +3822,8 @@ export function createGbmTool({
     } else {
       config = nextConfig;
       syncSidebarModelChooser(nextConfig?.models || [], nextConfig?.active_model_id);
-      if (!(options?.activationOnly && await onExternalModelActivation("gbm"))) {
+      const handledExternalActivation = options?.activationOnly && await onExternalModelActivation("gbm");
+      if (!handledExternalActivation && chartReady) {
         await refreshActiveTool({ force: true });
       }
     }

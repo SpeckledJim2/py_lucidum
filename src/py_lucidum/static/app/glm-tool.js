@@ -2891,7 +2891,10 @@ export function createGlmTool({
             body: "{}",
           });
           if (queuedActivationModelId) continue;
-          await applyModelMutationResult(result, { activationOnly: true });
+          await applyModelMutationResult(result, {
+            activationOnly: true,
+            syncModelMetrics: targetModelId !== currentActiveModelId(),
+          });
         } catch (error) {
           if (!queuedActivationModelId) setGlmNotice(error.message);
         }
@@ -2936,6 +2939,7 @@ export function createGlmTool({
     const confirmed = confirm(`Delete ${label}? This deletes the selected .lucidum model folder${modelIds.length === 1 ? "" : "s"}.`);
     if (!confirmed) return;
     invalidateLineBar({ pending: state.tool === "line_bar" });
+    const activeModelIdBeforeDelete = currentActiveModelId();
     let result = null;
     let deletedCount = 0;
     try {
@@ -2943,11 +2947,15 @@ export function createGlmTool({
         result = await api(`/api/glm/models/${encodeURIComponent(modelId)}`, { method: "DELETE", body: "{}" });
         deletedCount += 1;
       }
-      await applyModelMutationResult(result);
+      await applyModelMutationResult(result, {
+        syncModelMetrics: modelIds.includes(activeModelIdBeforeDelete),
+      });
     } catch (error) {
       try {
         const latest = await api("/api/glm/config", { method: "GET", clientTiming: true });
-        await applyModelMutationResult({ config: latest });
+        await applyModelMutationResult({ config: latest }, {
+          syncModelMetrics: modelIds.slice(0, deletedCount).includes(activeModelIdBeforeDelete),
+        });
       } catch (_) {
       }
       const prefix = deletedCount > 0 ? `${deletedCount} deleted. ` : "";
@@ -3004,8 +3012,13 @@ export function createGlmTool({
     if (renamedFrom && renamedTo && builderDraftSourceModelId === renamedFrom) {
       builderDraftSourceModelId = renamedTo;
     }
-    const schemaApplied = await reloadSchema(preferredModelSource(result, nextConfig), { modelKind: "glm" });
-    if (schemaApplied === false) return;
+    const activeMetricModel = options?.syncModelMetrics ? activeModelFromConfig(nextConfig) : null;
+    const schemaResult = await reloadSchema(preferredModelSource(result, nextConfig), {
+      modelKind: "glm",
+      activeModel: activeMetricModel,
+    });
+    if (schemaResult === false) return;
+    const chartReady = schemaResult?.chartReady !== false;
     const preserveProfile = clearCachesAfterGlmModelSourceChange();
     if (!currentActiveModelId(nextConfig)) builderDraftSourceModelId = "";
     activeDetail = null;
@@ -3022,7 +3035,7 @@ export function createGlmTool({
     } else {
       config = nextConfig;
       syncSidebarModelChooser(nextConfig?.models || [], nextConfig?.active_model_id);
-      await refreshActiveTool({ force: true });
+      if (chartReady) await refreshActiveTool({ force: true });
     }
     renderExpectedNumerators();
     renderFeatures();
@@ -3052,6 +3065,11 @@ export function createGlmTool({
 
   function currentActiveModelId(data = config) {
     return String(data?.active_model_id || (data?.models || []).find((model) => model.active)?.model_id || "");
+  }
+
+  function activeModelFromConfig(data = config) {
+    const activeModelId = currentActiveModelId(data);
+    return (data?.models || []).find((model) => String(model?.model_id || "") === activeModelId) || null;
   }
 
   function normaliseModels(models = []) {

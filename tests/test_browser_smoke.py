@@ -13370,6 +13370,307 @@ COPY (
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_model_switches_apply_saved_metrics_before_one_chart_request(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "model_metric_switch.csv"
+            data_path.write_text(
+                "num_a,num_b,num_c,den_a,den_b,actualNumerator,denominator,Age,Segment,SAMPLE\n"
+                "10,100,1000,1,10,10,1,30,A,training\n"
+                "20,200,2000,2,20,20,2,40,B,test\n"
+                "30,300,3000,3,30,30,3,50,C,training\n",
+                encoding="utf-8",
+            )
+            gbm_store = GbmModelStore(data_path)
+            self.write_gbm_prediction_model(
+                gbm_store,
+                "metric-gbm-a",
+                "Metric GBM A",
+                "2026-08-03T00:00:00Z",
+                [11, 22, 33],
+                response_column="num_a",
+                offset_column="den_a",
+            )
+            self.write_gbm_prediction_model(
+                gbm_store,
+                "metric-gbm-b",
+                "Metric GBM B",
+                "2026-08-03T00:00:01Z",
+                [101, 202, 303],
+                response_column="num_b",
+                offset_column="den_b",
+            )
+            gbm_store.activate_model("metric-gbm-a")
+
+            glm_store = GlmModelStore(data_path)
+            self.write_glm_prediction_model(
+                glm_store,
+                "metric-glm-a",
+                "Metric GLM A",
+                "2026-08-03T00:00:00Z",
+                [12, 23, 34],
+                response_column="num_a",
+                denominator_column="den_a",
+            )
+            self.write_glm_prediction_model(
+                glm_store,
+                "metric-glm-b",
+                "Metric GLM B",
+                "2026-08-03T00:00:01Z",
+                [102, 203, 304],
+                response_column="num_b",
+                denominator_column="den_b",
+            )
+            self.write_glm_prediction_model(
+                glm_store,
+                "metric-glm-no-denominator",
+                "Metric GLM no denominator",
+                "2026-08-03T00:00:02Z",
+                [1002, 2003, 3004],
+                response_column="num_c",
+                denominator_column="",
+            )
+            glm_store.activate_model("metric-glm-a")
+
+            base_url, server, thread = self.start_app(
+                data_path,
+                tools=["line_bar", "glm", "gbm"],
+                defaults={"x": "Segment", "actual": "num_a", "denominator": "den_a"},
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    chart_requests: list[dict[str, Any]] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.on(
+                        "request",
+                        lambda request: chart_requests.append(json.loads(request.post_data or "{}"))
+                        if request.url.endswith("/api/chart") and request.method == "POST"
+                        else None,
+                    )
+
+                    def wait_for_line_bar() -> None:
+                        page.locator("#lineBarTool.active").wait_for(timeout=10_000)
+                        page.wait_for_function(
+                            '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
+                            timeout=10_000,
+                        )
+                        page.wait_for_timeout(100)
+
+                    def assert_chart_request(
+                        request: dict[str, Any],
+                        *,
+                        numerator: str,
+                        denominator: str,
+                        expected: str,
+                        expected_source: str,
+                    ) -> None:
+                        self.assertEqual(request["x"], "Segment")
+                        self.assertEqual(request["denominator"], denominator)
+                        self.assertEqual(request["denominatorSource"], "dataset")
+                        self.assertEqual(
+                            [response["numerator"] for response in request["responses"]],
+                            [numerator, expected],
+                        )
+                        self.assertNotIn("source", request["responses"][0])
+                        self.assertEqual(request["responses"][1]["source"], expected_source)
+
+                    try:
+                        page.goto(
+                            f"{base_url}/?tool=line_bar&x=Segment&actual=num_a"
+                            "&expected=gbm_prediction&denominator=den_a",
+                            wait_until="domcontentloaded",
+                        )
+                        wait_for_line_bar()
+                        requests_before = len(chart_requests)
+                        with page.expect_response(
+                            lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                            timeout=10_000,
+                        ):
+                            page.evaluate(
+                                """
+                                () => document.querySelector(
+                                  '#gbmModelSelect [data-gbm-model-id="metric-gbm-b"]'
+                                )?.click()
+                                """
+                            )
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector("#actualNumerator")?.value === "num_b"
+                              && document.querySelector("#denominator")?.value === "den_b"
+                              && document.querySelector("#gbmModelSelectedMeta")?.textContent.includes("Metric GBM B")
+                            """,
+                            timeout=10_000,
+                        )
+                        page.wait_for_timeout(150)
+                        self.assertEqual(len(chart_requests) - requests_before, 1)
+                        assert_chart_request(
+                            chart_requests[-1],
+                            numerator="num_b",
+                            denominator="den_b",
+                            expected="gbm_prediction",
+                            expected_source="gbm:metric-gbm-b:predictions",
+                        )
+
+                        requests_before = len(chart_requests)
+                        with page.expect_response(
+                            lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                            timeout=10_000,
+                        ):
+                            page.evaluate(
+                                """
+                                () => {
+                                  document.querySelector(
+                                    '#gbmModelSelect [data-gbm-model-id="metric-gbm-a"]'
+                                  )?.click();
+                                  document.querySelector(
+                                    '#gbmModelSelect [data-gbm-model-id="metric-gbm-b"]'
+                                  )?.click();
+                                  document.querySelector(
+                                    '#gbmModelSelect [data-gbm-model-id="metric-gbm-a"]'
+                                  )?.click();
+                                }
+                                """
+                            )
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector("#actualNumerator")?.value === "num_a"
+                              && document.querySelector("#denominator")?.value === "den_a"
+                              && document.querySelector("#gbmModelSelectedMeta")?.textContent.includes("Metric GBM A")
+                            """,
+                            timeout=10_000,
+                        )
+                        page.wait_for_timeout(150)
+                        self.assertEqual(len(chart_requests) - requests_before, 1)
+                        assert_chart_request(
+                            chart_requests[-1],
+                            numerator="num_a",
+                            denominator="den_a",
+                            expected="gbm_prediction",
+                            expected_source="gbm:metric-gbm-a:predictions",
+                        )
+
+                        page.goto(
+                            f"{base_url}/?tool=line_bar&x=Segment&actual=num_a"
+                            "&expected=glm_prediction&denominator=den_a",
+                            wait_until="domcontentloaded",
+                        )
+                        wait_for_line_bar()
+                        page.locator("#glmTool").click()
+                        page.locator("#modelToolWrap:not(.hidden) .glm-tool").wait_for(timeout=10_000)
+                        page.get_by_role("tab", name="Model navigator").click()
+                        page.locator("#glmModelGrid .tabulator-row", has_text="Metric GLM B").click()
+                        requests_before = len(chart_requests)
+                        with page.expect_response("**/api/glm/models/metric-glm-b/activate", timeout=10_000):
+                            page.locator("#glmActivateModelBtn").click()
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector("#actualNumerator")?.value === "num_b"
+                              && document.querySelector("#denominator")?.value === "den_b"
+                              && document.querySelector("#glmModelSelectedMeta")?.textContent.includes("Metric GLM B")
+                            """,
+                            timeout=10_000,
+                        )
+                        self.assertEqual(len(chart_requests), requests_before)
+                        with page.expect_response(
+                            lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                            timeout=10_000,
+                        ):
+                            page.locator("#lineBarTool").click()
+                        wait_for_line_bar()
+                        self.assertEqual(len(chart_requests) - requests_before, 1)
+                        assert_chart_request(
+                            chart_requests[-1],
+                            numerator="num_b",
+                            denominator="den_b",
+                            expected="glm_prediction",
+                            expected_source="glm:metric-glm-b:predictions",
+                        )
+
+                        page.locator("#glmTool").click()
+                        page.get_by_role("tab", name="Model navigator").click()
+                        glm_b_row = page.locator("#glmModelGrid .tabulator-row", has_text="Metric GLM B")
+                        if "tabulator-selected" not in (glm_b_row.get_attribute("class") or ""):
+                            glm_b_row.click()
+                        requests_before = len(chart_requests)
+                        page.once("dialog", lambda dialog: dialog.accept())
+                        with page.expect_response("**/api/glm/models/metric-glm-b", timeout=10_000):
+                            page.locator("#glmDeleteModelBtn").click()
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector("#actualNumerator")?.value === "num_c"
+                              && document.querySelector("#denominator")?.value === "__none__"
+                              && document.querySelector("#glmModelSelectedMeta")?.textContent.includes(
+                                "Metric GLM no denominator"
+                              )
+                            """,
+                            timeout=10_000,
+                        )
+                        self.assertEqual(len(chart_requests), requests_before)
+                        with page.expect_response(
+                            lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                            timeout=10_000,
+                        ):
+                            page.locator("#lineBarTool").click()
+                        wait_for_line_bar()
+                        self.assertEqual(len(chart_requests) - requests_before, 1)
+                        assert_chart_request(
+                            chart_requests[-1],
+                            numerator="num_c",
+                            denominator="__none__",
+                            expected="glm_prediction",
+                            expected_source="glm:metric-glm-no-denominator:predictions",
+                        )
+
+                        page.goto(
+                            f"{base_url}/?tool=line_bar&x=Segment&actual=num_a"
+                            "&expected=gbm_prediction&denominator=den_a",
+                            wait_until="domcontentloaded",
+                        )
+                        wait_for_line_bar()
+                        page.locator("#gbmTool").click()
+                        page.get_by_role("tab", name="Model navigator").click()
+                        gbm_a_row = page.locator("#gbmModelGrid .tabulator-row", has_text="Metric GBM A")
+                        if "tabulator-selected" not in (gbm_a_row.get_attribute("class") or ""):
+                            gbm_a_row.click()
+                        requests_before = len(chart_requests)
+                        page.once("dialog", lambda dialog: dialog.accept())
+                        with page.expect_response("**/api/gbm/models/metric-gbm-a", timeout=10_000):
+                            page.locator("#gbmDeleteModelBtn").click()
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector("#actualNumerator")?.value === "num_b"
+                              && document.querySelector("#denominator")?.value === "den_b"
+                              && document.querySelector("#gbmModelSelectedMeta")?.textContent.includes("Metric GBM B")
+                            """,
+                            timeout=10_000,
+                        )
+                        self.assertEqual(len(chart_requests), requests_before)
+                        with page.expect_response(
+                            lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                            timeout=10_000,
+                        ):
+                            page.locator("#lineBarTool").click()
+                        wait_for_line_bar()
+                        self.assertEqual(len(chart_requests) - requests_before, 1)
+                        assert_chart_request(
+                            chart_requests[-1],
+                            numerator="num_b",
+                            denominator="den_b",
+                            expected="gbm_prediction",
+                            expected_source="gbm:metric-gbm-b:predictions",
+                        )
+                        self.assertEqual(page_errors, [])
+                    finally:
+                        browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_gbm_model_navigator_preserves_line_bar_x_feature(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "sample.csv"
@@ -15871,12 +16172,19 @@ COPY (
                         page.locator("#gbmActivateModelBtn").click(timeout=10_000)
                         page.wait_for_function(
                             """
-                            ([sourceId]) => document.querySelector("#denominator")?.selectedOptions[0]?.dataset.sourceId === sourceId
+                            () => document.querySelector("#actualNumerator")?.value === "actualNumerator"
+                              && document.querySelector("#denominator")?.value === "denominator"
+                              && document.querySelector("#denominator")?.selectedOptions[0]?.dataset.sourceId === "dataset"
+                              && document.querySelector("#gbmModelSelectedMeta")?.textContent.includes("Saved GBM")
                             """,
-                            arg=[saved_gbm_source],
                             timeout=10_000,
                         )
                         self.assertEqual(len(chart_requests), chart_count_before_activation)
+                        self.assertFalse(
+                            page.locator('.saved-favourite-option[data-favourite-id="saved-ratio-view"]').evaluate(
+                                "(button) => button.classList.contains('active')"
+                            )
+                        )
                         with page.expect_response(
                             lambda response: (
                                 response.url.endswith("/api/banding/suggestion")
@@ -15909,8 +16217,8 @@ COPY (
                         self.assertNotEqual(banding_payload["band_suggestion"], 1)
                         self.assertEqual(activated_chart_request["x"], "gbm_to_glm_ratio")
                         self.assertEqual(activated_chart_request["xSource"], activated_saved_ratio_source)
-                        self.assertEqual(activated_chart_request["denominator"], "gbm_prediction")
-                        self.assertEqual(activated_chart_request["denominatorSource"], saved_gbm_source)
+                        self.assertEqual(activated_chart_request["denominator"], "denominator")
+                        self.assertEqual(activated_chart_request["denominatorSource"], "dataset")
                         self.assertEqual(activated_chart_request["filter"], "Segment = 'B'")
                         self.assertGreater(activated_chart_request["bandWidth"], 0)
                         self.assertNotEqual(activated_chart_request["bandWidth"], 1)
@@ -16942,6 +17250,9 @@ COPY (
         label: str,
         created_at: str,
         predictions: list[float],
+        *,
+        response_column: str = "actualNumerator",
+        offset_column: str = "denominator",
     ) -> None:
         model_dir = store.create_model_dir(model_id)
         store.write_json(
@@ -16951,8 +17262,8 @@ COPY (
                 "label": label,
                 "created_at": created_at,
                 "training_mode": "normal",
-                "response_column": "actualNumerator",
-                "offset_column": "denominator",
+                "response_column": response_column,
+                "offset_column": offset_column,
                 "best_iteration": len(predictions),
                 "training_rows": 2,
                 "test_rows": 1,
@@ -17018,6 +17329,8 @@ COPY (
         n_terms: int | None = None,
         n_features: int | None = None,
         n_interactions: int | None = None,
+        response_column: str = "actualNumerator",
+        denominator_column: str = "denominator",
     ) -> None:
         model_dir = store.create_model_dir(model_id)
         diagnostics = {
@@ -17040,8 +17353,8 @@ COPY (
             "created_at": created_at,
             "family": family,
             "link": "auto",
-            "response_column": "actualNumerator",
-            "denominator_column": "denominator",
+            "response_column": response_column,
+            "denominator_column": denominator_column,
             "training_scope": training_scope,
             "regularization": regularization or {"mode": "none"},
             "timings": {"fit_ms": 1234.5, "elapsed_ms": 62789.0},
@@ -19520,7 +19833,7 @@ COPY (
 
                 chart_url = (
                     f"{base_url}/?tool=line_bar&source=gbm%3Abrowser-smoke-model%3Apredictions"
-                    "&x=Segment&actual=gbm_prediction&denominator=denominator"
+                    "&x=Segment&actual=actualNumerator&expected=gbm_prediction&denominator=denominator"
                 )
                 page.goto(chart_url, wait_until="domcontentloaded")
                 page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
@@ -19545,7 +19858,12 @@ COPY (
                 self.assertGreater(chart_requests, chart_requests_before)
                 self.assertEqual(request_body["source"], "gbm:browser-smoke-model-2:predictions")
                 self.assertEqual(request_body["x"], "Segment")
-                self.assertEqual(request_body["responses"][0]["numerator"], "gbm_prediction")
+                self.assertEqual(request_body["responses"][0]["numerator"], "actualNumerator")
+                self.assertEqual(request_body["responses"][1]["numerator"], "gbm_prediction")
+                self.assertEqual(
+                    request_body["responses"][1]["source"],
+                    "gbm:browser-smoke-model-2:predictions",
+                )
                 self.assertEqual(request_body["denominator"], "denominator")
                 page.locator("#featureList .feature.active", has_text="Segment").wait_for(timeout=10_000)
 
@@ -21740,7 +22058,9 @@ COPY (
                 page.locator("#gbmModelSelectedMeta", has_text="Browser smoke model").wait_for(timeout=10_000)
                 self.assertGreater(chart_requests, chart_requests_before)
                 self.assertEqual(shap_request_body["source"], "gbm:browser-smoke-model:shap_long")
-                self.assertEqual(shap_request_body["responses"][0]["numerator"], "SHAP__Age")
+                self.assertEqual(shap_request_body["responses"][0]["numerator"], "actualNumerator")
+                self.assertEqual(page.locator("#actualNumerator").input_value(), "actualNumerator")
+                self.assertEqual(page.locator("#denominator").input_value(), "denominator")
                 self.assertEqual(page_errors, [])
                 premature_selection_warnings = [
                     warning

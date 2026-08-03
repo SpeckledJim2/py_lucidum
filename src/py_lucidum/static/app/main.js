@@ -2713,6 +2713,31 @@
         return setExpectedSelections(resolved, { allowAnySource: true });
       }
 
+      function modelMetricSelection(model, modelKind = "") {
+        if (!model || !modelKind) return null;
+        const numerator = String(model.response_column || "").trim();
+        const rawDenominator = modelKind === "gbm"
+          ? model.offset_column
+          : model.denominator_column || model.offset_column;
+        return {
+          numerator,
+          denominator: normaliseKpiDenominator(rawDenominator),
+          sourceId: "dataset",
+        };
+      }
+
+      function modelMetricSelectionError(selection, modelKind = "") {
+        if (!selection) return "";
+        const modelLabel = modelKind ? modelKind.toUpperCase() : "model";
+        if (!selection.numerator || !datasetNumericColumnExists(selection.numerator)) {
+          return `The active ${modelLabel} Numerator is unavailable in this dataset. No replacement chart was requested.`;
+        }
+        if (selection.denominator !== "__none__" && !datasetNumericColumnExists(selection.denominator)) {
+          return `The active ${modelLabel} Denominator is unavailable in this dataset. No replacement chart was requested.`;
+        }
+        return "";
+      }
+
       function actualSelectionSourceId() {
         return el("actualNumerator").selectedOptions[0]?.dataset.sourceId || "";
       }
@@ -2785,6 +2810,8 @@
         state.schema = schema;
         state.datasetViewerColumnCount = null;
         renderSidebarVersion();
+        const requestedModelMetrics = modelMetricSelection(options?.activeModel, modelKind);
+        const modelMetricError = modelMetricSelectionError(requestedModelMetrics, modelKind);
         if (preferredSource) state.source = preferredSource;
         state.x = previousX;
         state.xSource = previousXSource;
@@ -2802,23 +2829,44 @@
         fillMetricSelect(el("actualNumerator"));
         fillMetricSelect(el("expectedNumerator"), true);
         fillDenominatorSelect(el("denominator"), previousDenominator);
-        if (!setActualSelection(previousActual, previousActualSource)) {
+        const requestedActual = modelMetricError ? previousActual : requestedModelMetrics?.numerator || previousActual;
+        const requestedActualSource = modelMetricError
+          ? previousActualSource
+          : requestedModelMetrics?.sourceId || previousActualSource;
+        if (!setActualSelection(requestedActual, requestedActualSource)) {
           el("actualNumerator").value = numericColumnExists(previousActual) ? previousActual : numericColumns()[0]?.name || "";
         }
         restoreExpectedSelectionsAfterModelMutation(previousExpectedSelections, modelKind);
-        const denominatorRestored = setDenominatorSelection(previousDenominator, { preserveUnavailable: true });
+        const requestedDenominator = !modelMetricError && requestedModelMetrics
+          ? {
+            value: requestedModelMetrics.denominator,
+            sourceId: requestedModelMetrics.sourceId,
+          }
+          : previousDenominator;
+        const denominatorRestored = setDenominatorSelection(requestedDenominator, { preserveUnavailable: true });
+        const metricsChanged = previousActual !== el("actualNumerator").value
+          || previousActualSource !== actualSelectionSourceId()
+          || previousDenominator.value !== denominatorSelection().value
+          || previousDenominator.sourceId !== denominatorSelection().sourceId;
         syncLineBarXFallback();
         lineBarTool.renderExpectedNumerators();
         lineBarTool.renderFeatures();
         lineBarTool.updateAxisControls();
+        glmTool.syncDenominatorBuildState();
+        gbmTool.syncDenominatorBuildState();
         syncKpiSelectionFromMetrics();
+        if (metricsChanged) clearActiveFavouriteSelectionForScope("metrics");
         renderKpis();
         renderFavourites();
+        if (modelMetricError) {
+          setStatus(modelMetricError, true);
+          return { chartReady: false };
+        }
         if (denominatorRestored && denominatorSelection().unavailable) {
           setStatus(`The selected ${denominatorSelection().modelKind.toUpperCase()} prediction Denominator is unavailable because there is no active model.`, true);
         }
         await refreshMetricSummary({ force: true });
-        return true;
+        return { chartReady: true };
       }
 
       async function reloadSchemaAfterSpecsSave() {
