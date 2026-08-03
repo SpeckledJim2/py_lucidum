@@ -13271,6 +13271,103 @@ COPY (
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_line_bar_shap_ribbon_stays_bound_when_another_window_activates_a_gbm(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "two_window_shap.csv"
+            data_path.write_text(
+                "actualNumerator,denominator,Age,Segment,SAMPLE\n"
+                "10,1,30,A,training\n"
+                "20,1,40,B,test\n"
+                "30,1,50,C,training\n"
+                "40,1,60,D,validation\n",
+                encoding="utf-8",
+            )
+            store = GbmModelStore(data_path)
+            self.write_gbm_prediction_model(
+                store,
+                "window-a-model",
+                "Window A model",
+                "2026-08-03T00:00:00Z",
+                [11.0, 21.0, 31.0, 41.0],
+            )
+            self.write_gbm_prediction_model(
+                store,
+                "window-b-model",
+                "Window B model",
+                "2026-08-03T00:00:01Z",
+                [101.0, 201.0, 301.0, 401.0],
+            )
+            store.activate_model("window-a-model")
+            base_url, server, thread = self.start_app(
+                data_path,
+                defaults={"x": "Age", "actual": "actualNumerator", "denominator": "denominator"},
+                tools=["line_bar", "gbm"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page_a = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_b = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    page_a.on("pageerror", lambda error: page_errors.append(f"window A: {error}"))
+                    page_b.on("pageerror", lambda error: page_errors.append(f"window B: {error}"))
+
+                    page_a.goto(f"{base_url}/?tool=line_bar", wait_until="domcontentloaded")
+                    page_a.wait_for_function(
+                        '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
+                        timeout=10_000,
+                    )
+                    if page_a.locator("#lineBarToolbarToggleBtn").get_attribute("aria-expanded") == "false":
+                        page_a.locator("#lineBarToolbarToggleBtn").click()
+                    with page_a.expect_response(
+                        lambda response: response.url.endswith("/api/chart") and response.request.method == "POST",
+                        timeout=10_000,
+                    ) as first_shap_response:
+                        page_a.locator('.segmented[data-control="partialDependence"] button[data-value="shap"]').click()
+                    first_request = first_shap_response.value.request.post_data_json
+                    first_payload = first_shap_response.value.json()
+                    self.assertEqual(first_request["partialDependence"]["model_id"], "window-a-model")
+                    self.assertEqual(first_payload["partial_dependence"]["model_id"], "window-a-model")
+
+                    page_b.goto(f"{base_url}/?tool=line_bar", wait_until="domcontentloaded")
+                    page_b.wait_for_function(
+                        '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
+                        timeout=10_000,
+                    )
+                    if page_b.locator("#sidebarToggleBtn").get_attribute("aria-expanded") == "false":
+                        page_b.locator("#sidebarToggleBtn").click()
+                    if page_b.locator("#gbmModelCollapseBtn").get_attribute("aria-expanded") == "false":
+                        page_b.locator("#gbmModelCollapseBtn").click()
+                    with page_b.expect_response(
+                        lambda response: response.url.endswith("/api/gbm/models/window-b-model/activate"),
+                        timeout=10_000,
+                    ):
+                        page_b.locator('#gbmModelSelect [data-gbm-model-id="window-b-model"]').click()
+                    page_b.locator("#gbmModelSelectedMeta", has_text="Window B model").wait_for(timeout=10_000)
+                    self.assertEqual(store.active_model_id(), "window-b-model")
+
+                    band_button = page_a.locator(
+                        '#bandControl .segmented button[data-value]:not(.active)'
+                    ).first
+                    with page_a.expect_response(
+                        lambda response: response.url.endswith("/api/chart") and response.request.method == "POST",
+                        timeout=10_000,
+                    ) as stale_window_response:
+                        band_button.click()
+                    stale_request = stale_window_response.value.request.post_data_json
+                    stale_payload = stale_window_response.value.json()
+                    self.assertEqual(stale_request["partialDependence"]["model_id"], "window-a-model")
+                    self.assertEqual(stale_payload["partial_dependence"]["model_id"], "window-a-model")
+                    self.assertEqual(store.active_model_id(), "window-b-model")
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_gbm_sidebar_switch_preserves_profile_but_refreshes_model_chart(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "sample.csv"

@@ -2523,8 +2523,13 @@ def build_shap_partial_dependence_overlay(
     responses: list[dict[str, str]],
     denominator: dict[str, str | None],
 ) -> dict[str, Any]:
-    source = active_gbm_shap_overlay_source(dataset)
+    requested_model_id = shap_partial_dependence_model_id(request)
+    source = gbm_shap_overlay_source(dataset, requested_model_id)
     if source is None:
+        if requested_model_id:
+            return empty_shap_partial_dependence_warning(
+                f"GBM SHAP values for {requested_model_id} are no longer available."
+            )
         return empty_shap_partial_dependence_warning("No active GBM SHAP values are available.")
     model_id = str(source.get("model_id") or "")
     shap_source_id = str(source.get("id") or "")
@@ -2600,8 +2605,23 @@ def build_shap_partial_dependence_overlay(
     }
 
 
-def active_gbm_shap_overlay_source(dataset: Dataset) -> dict[str, Any] | None:
+def shap_partial_dependence_model_id(request: dict[str, Any]) -> str:
+    partial_dependence = request.get("partialDependence")
+    if not isinstance(partial_dependence, dict):
+        return ""
+    return str(partial_dependence.get("model_id") or "").strip()
+
+
+def gbm_shap_overlay_source(dataset: Dataset, model_id: str = "") -> dict[str, Any] | None:
     for provider in getattr(dataset, "_source_providers", []):
+        if model_id:
+            requested_source = getattr(provider, "shap_overlay_source", None)
+            if not callable(requested_source):
+                continue
+            source = requested_source(model_id, dataset)
+            if isinstance(source, dict) and str(source.get("model_id") or "") == model_id:
+                return source
+            continue
         active_source = getattr(provider, "active_shap_overlay_source", None)
         if not callable(active_source):
             continue

@@ -523,6 +523,7 @@ One-feature plots show numeric percentile ribbons around the median or factor bo
 Stacked SHAP stays on the linear predictor contribution scale and uses a full-bleed chart with a launch-collapsed borderless settings strip. Its Model feature chooser can be collapsed or resized with the divider; those layout choices last for the current page session and stack above the chart on narrow screens.
 
 Once a model is active, its predictions and SHAP outputs also appear as selectable data sources so Line/Bar and UK Mapping can plot model outputs like normal columns.
+Line/Bar SHAP ribbons stay bound to the GBM shown as active in that browser page when the request is made, so activating a different GBM in another open page cannot switch the saved SHAP values underneath an existing view.
 
 ## Development
 

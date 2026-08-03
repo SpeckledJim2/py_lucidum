@@ -2670,6 +2670,35 @@ COPY (
         self.assertAlmostEqual(by_x["Social"]["p50"], 250.0 / ((1.0 + math.exp(1.0)) / 2.0))
         self.assertAlmostEqual(by_x["Business"]["p50"], math.exp(1.0) * by_x["Social"]["p50"])
 
+    def test_chart_shap_ribbons_stay_bound_to_requested_model_when_active_model_changes(self) -> None:
+        store = self.write_active_gbm_for_shap_ribbons(
+            objective="regression",
+            shap_values=[(1, 10.0, 10.0), (2, 10.0, 10.0), (3, 20.0, 20.0), (4, 20.0, 20.0)],
+        )
+        requested_model_id = store.active_model_id()
+        self.write_active_gbm_for_shap_ribbons(
+            objective="poisson",
+            shap_values=[(1, 0.0, 0.0), (2, 0.0, 0.0), (3, 1.0, 1.0), (4, 1.0, 1.0)],
+        )
+        self.assertEqual(store.active_model_id(), "poisson-ribbons")
+
+        dataset = Dataset(self.data_path)
+        dataset.register_data_source_provider(GbmSourceProvider(store))
+        request = self.request()
+        request["partialDependence"] = {"mode": "shap", "model_id": requested_model_id}
+
+        result = chart(dataset, request)
+
+        partial = result["partial_dependence"]
+        self.assertEqual(partial["model_id"], requested_model_id)
+        self.assertEqual(partial["scale"]["method"], "add")
+
+        request["partialDependence"]["model_id"] = "deleted-window-model"
+        unavailable = chart(dataset, request)["partial_dependence"]
+        self.assertEqual(unavailable["model_id"], "")
+        self.assertEqual(unavailable["rows"], [])
+        self.assertIn("deleted-window-model", unavailable["warnings"][0])
+
     def test_chart_shap_ribbons_use_provider_metadata_without_rebuilding_data_sources(self) -> None:
         dataset = self.dataset_with_gbm_ribbons()
         request = self.request()

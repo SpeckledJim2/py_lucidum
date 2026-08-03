@@ -1020,22 +1020,22 @@ LEFT JOIN read_parquet({sql_literal(str(tabulated_path))}) tabulated USING (__lu
         except (duckdb.Error, FileNotFoundError, KeyError, ValueError):
             return dataset.schema_for_source(source_id)
 
-    def active_shap_overlay_source(self, dataset: Dataset | None = None) -> dict[str, Any] | None:
-        model_id = self.store.active_model_id()
-        if not model_id:
+    def shap_overlay_source(self, model_id: str, dataset: Dataset | None = None) -> dict[str, Any] | None:
+        try:
+            manifest = self.store.manifest(model_id)
+        except ValueError:
             return None
         shap_path = self.store.source_path(model_id, "shap_long")
         if not shap_path.exists():
             return None
         prediction_path = self.store.source_path(model_id, "predictions")
-        manifest = self.store.manifest(model_id)
         parameters = self.store.model_parameters(model_id)
         source_columns = list(dataset.column_map()) if dataset is not None else None
         return {
             "id": self.store.source_id(model_id, "shap_long"),
             "kind": SOURCE_KINDS["shap_long"]["kind"],
             "model_id": model_id,
-            "active": True,
+            "active": model_id == self.store.active_model_id(),
             "objective": str(parameters.get("objective") or manifest.get("objective") or ""),
             "prediction_source_id": self.store.source_id(model_id, "predictions"),
             "prediction_path": prediction_path,
@@ -1049,6 +1049,12 @@ LEFT JOIN read_parquet({sql_literal(str(tabulated_path))}) tabulated USING (__lu
                 for column in self.store.shap_value_columns(model_id, source_columns)
             ],
         }
+
+    def active_shap_overlay_source(self, dataset: Dataset | None = None) -> dict[str, Any] | None:
+        model_id = self.store.active_model_id()
+        if not model_id:
+            return None
+        return self.shap_overlay_source(model_id, dataset)
 
     def data_sources(self, dataset: Dataset) -> list[dict[str, Any]]:
         sources: list[dict[str, Any]] = []

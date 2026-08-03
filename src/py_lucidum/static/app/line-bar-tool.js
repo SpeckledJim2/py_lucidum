@@ -1884,6 +1884,8 @@ export function createLineBarTool({
     if (!denominatorFields) return null;
     const sourceId = column?.source_id || state.xSource || state.source || "dataset";
     const xSource = column && (isModelPredictionColumn(column) || sourceId !== (state.source || "dataset")) ? sourceId : "";
+    const partialDependenceMode = selectedPartialDependenceMode();
+    const shapModelId = activeShapOverlayModelId();
     return {
       source: state.source || "dataset",
       ...(xSource ? { xSource } : {}),
@@ -1896,7 +1898,10 @@ export function createLineBarTool({
       emptyPeriods: normaliseEmptyPeriods(state.emptyPeriods),
       missings: normaliseMissings(state.missings),
       transform: state.transform,
-      partialDependence: { mode: selectedPartialDependenceMode() },
+      partialDependence: {
+        mode: partialDependenceMode,
+        ...(["shap", "both"].includes(partialDependenceMode) && shapModelId ? { model_id: shapModelId } : {}),
+      },
       base: selectedFeatureBase(),
       sigma: Number(state.sigma),
       filter: state.activeFilter,
@@ -3404,6 +3409,11 @@ export function createLineBarTool({
       column?.source_role === "gbm_shap_value"
       && String(column.artifact_column || column.label || "") === feature
     ));
+  }
+
+  function activeShapOverlayModelId() {
+    const source = (state.schema?.data_sources || []).find((item) => item.kind === "gbm_shap_long" && item.active);
+    return String(source?.model_id || "");
   }
 
   function formatChartXLabel(row, data) {
