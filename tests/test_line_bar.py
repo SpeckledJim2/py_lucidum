@@ -24,7 +24,7 @@ from py_lucidum.tools.gbm.sources import GbmSourceProvider
 from py_lucidum.tools.gbm.store import GbmModelStore
 from py_lucidum.tools.glm import overlay as glm_overlay
 from py_lucidum.tools.glm.store import GlmModelStore, GlmSourceProvider
-from py_lucidum.tools.glm.training import MissingGlmDependency, glm_dependencies, train_model
+from py_lucidum.tools.glm.training import MissingGlmDependency, glm_dependencies, stop_persistent_glm_fit_worker, train_model
 from py_lucidum.tools.line_bar import query as line_bar_query
 from py_lucidum.tools.line_bar import two_feature as two_feature_query
 from py_lucidum.tools.line_bar.favourites import LineBarFavouriteStore
@@ -2947,6 +2947,169 @@ COPY (
         self.assertEqual(set(by_x), {"Business", "Social"})
         self.assertAlmostEqual(by_x["Social"]["p50"], 0.0)
         self.assertIsNotNone(by_x["Business"]["p50"])
+
+    def test_glm_overlay_preserves_logical_values_for_direct_and_context_paths(self) -> None:
+        self.require_glm_dependencies()
+        self.addCleanup(stop_persistent_glm_fit_worker)
+        self.addCleanup(glm_overlay.stop_persistent_glm_overlay_worker)
+        data_path = self.root / "logical_glm_overlay.parquet"
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"""
+COPY (
+  SELECT *
+  FROM (VALUES
+    (1, FALSE, 10.0),
+    (2, FALSE, 12.0),
+    (3, FALSE, 9.0),
+    (4, FALSE, 11.0),
+    (5, TRUE, 29.0),
+    (6, TRUE, 31.0),
+    (7, TRUE, 33.0),
+    (8, TRUE, 27.0)
+  ) AS rows(id, logical_feature, y)
+) TO {sql_literal(str(data_path))} (FORMAT PARQUET)
+"""
+            )
+        finally:
+            con.close()
+        dataset = Dataset(data_path)
+        store = GlmModelStore(data_path, dataset=dataset)
+        result = train_model(
+            dataset,
+            store,
+            {
+                "label": "logical overlay",
+                "formula": "y ~ 1 + ifelse(logical_feature, 1, 0)",
+                "response_column": "y",
+                "family": "normal",
+                "training_scope": "all",
+                "regularization": {"mode": "manual", "alpha": 0.001, "l1_ratio": 0.0},
+            },
+        )
+        model_id = str(result["model_id"])
+        dataset.register_data_source_provider(GlmSourceProvider(store))
+        request = {
+            **self.request(),
+            "x": "logical_feature",
+            "responses": [
+                {"label": "Actual", "numerator": "y"},
+                {
+                    "label": "glm_prediction",
+                    "numerator": "glm_prediction",
+                    "source": store.source_id(model_id),
+                },
+            ],
+        }
+
+        direct = chart(dataset, {**request, "partialDependence": {"mode": "glm"}})
+        current = chart(dataset, {**request, "partialDependence": {"mode": "none"}})
+        optimized = line_bar_query.glm_overlay(
+            dataset,
+            {
+                "request": {**request, "partialDependence": {"mode": "glm"}},
+                "chart_context": current["glm_overlay_context"],
+            },
+        )
+
+        context_values = {
+            point["source_x"]: point["x_value"]
+            for point in current["glm_overlay_context"]["points"]
+        }
+        self.assertIs(context_values["false"], False)
+        self.assertIs(context_values["true"], True)
+        fitted = {row["x"]: row["resp1"] for row in current["rows"]}
+        direct_rows = {row["x"]: row["p50"] for row in direct["partial_dependence"]["rows"]}
+        optimized_rows = {row["x"]: row["p50"] for row in optimized["partial_dependence"]["rows"]}
+        self.assertEqual(set(fitted), {"false", "true"})
+        self.assertEqual(set(direct_rows), set(fitted))
+        self.assertEqual(set(optimized_rows), set(fitted))
+        self.assertNotAlmostEqual(direct_rows["false"], direct_rows["true"])
+        for label, fitted_value in fitted.items():
+            self.assertAlmostEqual(direct_rows[label], fitted_value)
+            self.assertAlmostEqual(optimized_rows[label], fitted_value)
+
+    def test_glm_overlay_scores_missing_value_when_formula_handles_nan(self) -> None:
+        self.require_glm_dependencies()
+        self.addCleanup(stop_persistent_glm_fit_worker)
+        self.addCleanup(glm_overlay.stop_persistent_glm_overlay_worker)
+        data_path = self.root / "missing_glm_overlay.parquet"
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"""
+COPY (
+  SELECT id, CAST(x AS DOUBLE) AS x, CAST(y AS DOUBLE) AS y
+  FROM (VALUES
+    (1, 1.0, 10.0),
+    (2, 2.0, 20.0),
+    (3, NULL, 30.0),
+    (4, 4.0, 40.0),
+    (5, 5.0, 50.0),
+    (6, NULL, 60.0)
+  ) AS rows(id, x, y)
+) TO {sql_literal(str(data_path))} (FORMAT PARQUET)
+"""
+            )
+        finally:
+            con.close()
+        dataset = Dataset(data_path)
+        store = GlmModelStore(data_path, dataset=dataset)
+        result = train_model(
+            dataset,
+            store,
+            {
+                "label": "missing overlay",
+                "formula": "y ~ 1 + ifelse(np.isnan(x), 3, x) + ifelse(np.isnan(x), 1, 0)",
+                "response_column": "y",
+                "family": "normal",
+                "training_scope": "all",
+                "regularization": {"mode": "manual", "alpha": 0.001, "l1_ratio": 0.0},
+            },
+        )
+        model_id = str(result["model_id"])
+        dataset.register_data_source_provider(GlmSourceProvider(store))
+        request = {
+            **self.request(),
+            "x": "x",
+            "bandWidth": "1",
+            "missings": "show",
+            "responses": [
+                {"label": "Actual", "numerator": "y"},
+                {
+                    "label": "glm_prediction",
+                    "numerator": "glm_prediction",
+                    "source": store.source_id(model_id),
+                },
+            ],
+        }
+
+        direct = chart(dataset, {**request, "partialDependence": {"mode": "glm"}})
+        current = chart(dataset, {**request, "partialDependence": {"mode": "none"}})
+        optimized = line_bar_query.glm_overlay(
+            dataset,
+            {
+                "request": {**request, "partialDependence": {"mode": "glm"}},
+                "chart_context": current["glm_overlay_context"],
+            },
+        )
+
+        missing_point = next(
+            point
+            for point in current["glm_overlay_context"]["points"]
+            if point["source_x"] == "(missing)"
+        )
+        self.assertIsNone(missing_point["x_value"])
+        fitted = {row["x"]: row["resp1"] for row in current["rows"]}
+        direct_rows = {row["x"]: row["p50"] for row in direct["partial_dependence"]["rows"]}
+        optimized_rows = {row["x"]: row["p50"] for row in optimized["partial_dependence"]["rows"]}
+        self.assertIn("(missing)", fitted)
+        self.assertEqual(set(direct_rows), set(fitted))
+        self.assertEqual(set(optimized_rows), set(fitted))
+        for label, fitted_value in fitted.items():
+            self.assertAlmostEqual(direct_rows[label], fitted_value)
+            self.assertAlmostEqual(optimized_rows[label], fitted_value)
 
     def test_glm_overlay_from_current_chart_matches_existing_values_without_dataset_scan(self) -> None:
         dataset = Dataset(self.data_path)

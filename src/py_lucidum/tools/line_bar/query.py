@@ -859,7 +859,8 @@ def build_grouped_pipeline_sql(
     rownum_expr = "__rownum"
     x_bound_select = ""
     x_bound_agg = ",\n    NULL AS x_start,\n    NULL AS x_end"
-    x_value_agg = "MIN(x_key) AS x_value"
+    x_model_value_select = f",\n    {x_sql.get('model_value', x_sql['key'])} AS __x_model_value"
+    x_value_agg = "MIN(__x_model_value) AS x_value"
     if x_sql.get("quantile_count"):
         quantile_cte = f""",
 quantiles AS (
@@ -911,7 +912,7 @@ prepared AS (
     {rownum_expr} AS __rownum,
     {x_sql['key']} AS x_key,
     {x_sql['label']} AS x_label,
-    {x_sql['sort']} AS x_sort{x_bound_select}{fold_select}{response_sql},
+    {x_sql['sort']} AS x_sort{x_model_value_select}{x_bound_select}{fold_select}{response_sql},
     {denominator_select} AS __denominator_value
   FROM {keyed_from}
 ),
@@ -2089,7 +2090,7 @@ def build_x_sql(x_col: str, kind: str, band_width: Any, date_bucket: Any, quanti
             "sort": key,
         }
     key = f"COALESCE(CAST({col} AS VARCHAR), '(missing)')"
-    return {"key": key, "label": key, "sort": key}
+    return {"key": key, "label": key, "sort": key, "model_value": col}
 
 
 def build_chart_sql(

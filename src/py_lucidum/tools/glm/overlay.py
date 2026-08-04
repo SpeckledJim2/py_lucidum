@@ -1262,7 +1262,7 @@ def glm_x_group_rows(
     keyed_from = "base"
     rownum_expr = "__rownum"
     source_columns = "*"
-    x_value_expr = "x_key"
+    x_value_expr = x_sql.get("model_value", x_sql["key"])
     x_value_select = "MIN(__x_value) AS x_value"
     if x_sql.get("quantile_count"):
         quantile_cte = f""",
@@ -1650,10 +1650,8 @@ def glm_uses_positive_scale(manifest: dict[str, Any]) -> bool:
 
 
 def usable_x_value(row: dict[str, Any]) -> bool:
-    if row.get("x_value") is None:
-        return False
     label = str(row.get("x") or "")
-    return label not in {"(missing)", "Missing"}
+    return row.get("x_value") is not None or label in {"(missing)", "Missing"}
 
 
 def glm_overlay_seed(manifest: dict[str, Any]) -> int:
