@@ -405,6 +405,16 @@ Use these tiers to keep iteration focused while preserving the full suite.
 .venv/bin/python scripts/run_tests.py browser -- tests/test_browser_smoke.py::BrowserSmokeTests::test_gbm_tool_loads_feature_grid -q
 ```
 
+Hosted CI runs the browser file once across four deterministic, balanced
+shards. The full-unit job uses `prepush --skip-browser`; that option is for the
+CI split and does not replace the normal local `prepush` gate. Browser jobs set
+`PY_LUCIDUM_BROWSER_ARTIFACT_DIR`, which enables failure-only Playwright traces,
+full-page screenshots, browser/network event logs, and JUnit output. Each failed
+shard uploads those files as a 14-day Actions artifact. Do not retry a red run
+to manufacture a releaseable result: use the first failure's artifact to fix
+the readiness or rendering contract, and require a clean run on the exact
+commit.
+
 Prefer future behavior tests over exact JS/CSS string-contract tests where
 practical. Exact asset-string checks are still acceptable for stable contracts
 such as asset registration, cache-control behavior, and intentionally documented

@@ -338,7 +338,7 @@ def run_precommit(root: Path) -> int:
     return run_changed(root)
 
 
-def run_prepush(root: Path) -> int:
+def run_prepush(root: Path, *, include_browser: bool = True) -> int:
     code = run_whitespace_checks(root)
     if code:
         return code
@@ -350,7 +350,7 @@ def run_prepush(root: Path) -> int:
     code = run_command_phase("Full unittest suite", command, root=root)
     if code:
         return code
-    return run_browser(root, ())
+    return run_browser(root, ()) if include_browser else 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -361,7 +361,12 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("changed", help="run syntax and tests selected from working-tree changes")
     subparsers.add_parser("syntax", help="check Python and non-vendored JavaScript syntax")
     subparsers.add_parser("precommit", help="run the fast change-aware local commit gate")
-    subparsers.add_parser("prepush", help="run the complete deterministic local push gate")
+    prepush_parser = subparsers.add_parser("prepush", help="run the complete deterministic local push gate")
+    prepush_parser.add_argument(
+        "--skip-browser",
+        action="store_true",
+        help="stop after the full unittest suite (used by the sharded CI workflow)",
+    )
     subparsers.add_parser("pipx", help="run the release-only pipx installation tests")
 
     focus_parser = subparsers.add_parser("focus", help="run focused unittest areas or targets")
@@ -400,7 +405,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "precommit":
             code = run_precommit(root)
         elif args.command == "prepush":
-            code = run_prepush(root)
+            code = run_prepush(root, include_browser=not args.skip_browser)
         elif args.command == "pipx":
             code = run_pipx(root)
         else:  # pragma: no cover - argparse enforces the command choices.

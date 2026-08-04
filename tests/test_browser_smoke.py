@@ -14,7 +14,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 from unittest.mock import patch
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 import duckdb
 import uvicorn
@@ -26,13 +26,16 @@ from py_lucidum.tools.gbm.store import GbmModelStore
 from py_lucidum.tools.glm.store import GlmModelStore
 from py_lucidum.tools.glm.tabulation import build_tabulations
 from py_lucidum.tools.glm.training import stop_persistent_glm_fit_worker, train_model
+from scripts.browser_diagnostics import instrument_sync_playwright
 
 
 try:
-    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, sync_playwright
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, sync_playwright as _sync_playwright
 except ImportError:  # pragma: no cover - exercised only without optional test deps.
     PlaywrightTimeoutError = TimeoutError
     sync_playwright = None
+else:
+    sync_playwright = instrument_sync_playwright(_sync_playwright)
 
 
 RUN_BROWSER_TESTS = os.environ.get("PY_LUCIDUM_RUN_BROWSER_TESTS") == "1"
@@ -97,6 +100,16 @@ COPY (
 
 
 class BrowserSmokeTests(unittest.TestCase):
+    @staticmethod
+    def wait_for_app_ready(page: Any, *, timeout: int = 15_000) -> None:
+        page.locator("#appStatusBadge.ready").wait_for(timeout=timeout)
+        page.wait_for_function(
+            """
+            () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+            """,
+            timeout=timeout,
+        )
+
     def assert_model_command_button_styles(self, page: Any, prefix: str) -> None:
         def capture() -> dict[str, Any]:
             return page.evaluate(
@@ -5623,6 +5636,7 @@ COPY (
                         """
                     )
                     page.goto(base_url, wait_until="domcontentloaded")
+                    self.wait_for_app_ready(page)
                     page.locator("#datasetMeta").get_by_text("many_columns.csv").wait_for(timeout=10_000)
                     page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
                     page.locator("#lineBarSideControlsToggleBtn").click()
@@ -6277,7 +6291,22 @@ COPY (
                     self.assertTrue(expected_arrow_up_state["focusedInExpected"])
                     self.assertTrue(expected_arrow_up_state["focusedNone"])
 
-                    page.locator('#expectedList .feature[data-value="actual"]').click()
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.locator('#expectedList .feature[data-value="actual"]').click()
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const target = document.querySelector('#expectedList .feature[data-value="actual"]');
+                          return target?.classList.contains("active")
+                            && target.getAttribute("aria-pressed") === "true"
+                            && document.activeElement === target;
+                        }
+                        """,
+                        timeout=10_000,
+                    )
                     next_expected_value = page.evaluate(
                         """
                         () => {
@@ -9348,26 +9377,43 @@ COPY (
                         )
 
                     page.goto(base_url, wait_until="domcontentloaded")
+                    self.wait_for_app_ready(page)
                     page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
                     long_filter = (
                         "(vehicle_age >= 2) AND (price >= 200) AND (value >= 20) "
                         "AND (PostcodeArea IN ('AB', 'AL'))"
                     )
-                    page.evaluate(
-                        """
-                        (expression) => {
-                          document.querySelector("#filterInput").value = expression;
-                          document.querySelector("#filterApplyBtn").click();
-                        }
-                        """,
-                        long_filter,
-                    )
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                        timeout=10_000,
+                    ):
+                        page.evaluate(
+                            """
+                            (expression) => {
+                              document.querySelector("#filterInput").value = expression;
+                              document.querySelector("#filterApplyBtn").click();
+                            }
+                            """,
+                            long_filter,
+                        )
                     page.wait_for_function(
                         """
                         (expression) => document.querySelector("#filterRowMetaText")?.textContent.trim() === "3 / 4 rows"
                           && document.querySelector("#lineBarFilterText")?.textContent.trim() === expression
                         """,
                         arg=long_filter,
+                        timeout=10_000,
+                    )
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const chartNode = document.querySelector("#chart");
+                          const option = window.echarts?.getInstanceByDom(chartNode)?.getOption?.() || {};
+                          const legend = Array.isArray(option.legend) ? option.legend[0] : option.legend;
+                          const grid = Array.isArray(option.grid) ? option.grid[0] : option.grid;
+                          return Number.isFinite(Number(legend?.top)) && Number.isFinite(Number(grid?.top));
+                        }
+                        """,
                         timeout=10_000,
                     )
 
@@ -11918,6 +11964,7 @@ COPY (
                     page_errors: list[str] = []
                     page.on("pageerror", lambda error: page_errors.append(str(error)))
                     page.goto(base_url, wait_until="domcontentloaded")
+                    self.wait_for_app_ready(page)
                     page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
 
                     def save_button_state() -> dict[str, bool]:
@@ -11953,7 +12000,9 @@ COPY (
                         page.keyboard.press("Enter")
 
                     def assert_spec_full_bleed_layout(expected_first_title: str) -> None:
-                        page.locator("#specGrid .tabulator-header").wait_for(timeout=10_000)
+                        page.locator(
+                            "#specGrid .tabulator-header .tabulator-col[tabulator-field]"
+                        ).first.wait_for(timeout=10_000)
                         layout = page.evaluate(
                             """
                             () => {
@@ -17077,6 +17126,7 @@ COPY (
                     page.on("pageerror", lambda error: page_errors.append(str(error)))
                     try:
                         page.goto(base_url, wait_until="domcontentloaded")
+                        self.wait_for_app_ready(page)
                         page.locator("#datasetMeta").get_by_text("unit_viewport.csv").wait_for(timeout=10_000)
                         page.wait_for_function(
                             '() => document.querySelector("#mapGroupMeta")?.textContent.includes("areas matched")',
@@ -17320,7 +17370,23 @@ COPY (
             server.should_exit = True
             thread.join(timeout=5)
             raise RuntimeError("Uvicorn did not start for browser smoke test")
-        return f"http://127.0.0.1:{port}", server, thread
+        base_url = f"http://127.0.0.1:{port}"
+        deadline = time.monotonic() + 10
+        last_error: BaseException | None = None
+        headers = {"X-Lucidum-Token": token} if token else {}
+        while time.monotonic() < deadline:
+            if not thread.is_alive():
+                break
+            try:
+                with urlopen(Request(f"{base_url}/api/health", headers=headers), timeout=0.5) as response:
+                    if response.status == 200 and response.read() == b'{"status":"ok"}':
+                        return base_url, server, thread
+            except BaseException as exc:  # pragma: no cover - only reported on timeout.
+                last_error = exc
+            time.sleep(0.05)
+        server.should_exit = True
+        thread.join(timeout=5)
+        raise RuntimeError(f"Lucidum health check did not succeed for browser smoke test: {last_error!r}")
 
     @staticmethod
     def write_tabulated_prediction_sidecar(path: Path, column_name: str, values: list[float]) -> None:

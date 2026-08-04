@@ -7,9 +7,9 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-from scripts import run_browser_smoke, run_tests
+from scripts import browser_diagnostics, run_browser_smoke, run_tests
 
 
 class TestRunnerTests(unittest.TestCase):
@@ -196,6 +196,21 @@ class TestRunnerTests(unittest.TestCase):
         self.assertTrue(any("unittest" in command for command in commands))
         self.assertFalse(any("scripts/run_browser_smoke.py" in command for command in commands))
 
+    def test_prepush_can_leave_browser_coverage_to_ci_shards(self) -> None:
+        commands: list[list[str]] = []
+
+        def fake_run(command: list[str], **_: object) -> int:
+            commands.append(list(command))
+            return 0
+
+        with patch.object(run_tests, "run_process", side_effect=fake_run):
+            with redirect_stdout(io.StringIO()):
+                code = run_tests.run_prepush(self.root, include_browser=False)
+
+        self.assertEqual(code, 0)
+        self.assertTrue(any("unittest" in command for command in commands))
+        self.assertFalse(any("scripts/run_browser_smoke.py" in command for command in commands))
+
     def test_browser_arguments_are_forwarded(self) -> None:
         target = "tests/test_browser_smoke.py::BrowserSmokeTests::test_missing_token_boot_error_is_visible"
         with patch.object(run_tests, "run_process", return_value=0) as run_process:
@@ -216,6 +231,51 @@ class TestRunnerTests(unittest.TestCase):
         self.assertEqual(
             command,
             ["/test/python", "-m", "pytest", "tests/test_browser_smoke.py", "--durations=5", "-q"],
+        )
+
+    def test_browser_helper_splits_every_collected_test_across_balanced_shards(self) -> None:
+        nodeids = run_browser_smoke.browser_test_nodeids(self.root / "tests" / "test_browser_smoke.py")
+
+        shards = [
+            run_browser_smoke.select_shard(nodeids, index=index, count=4)
+            for index in range(1, 5)
+        ]
+
+        self.assertEqual(len(nodeids), 77)
+        self.assertEqual(sorted(nodeid for shard in shards for nodeid in shard), nodeids)
+        self.assertEqual(len({nodeid for shard in shards for nodeid in shard}), len(nodeids))
+        self.assertLessEqual(max(map(len, shards)) - min(map(len, shards)), 1)
+
+    def test_browser_helper_runs_only_requested_shard(self) -> None:
+        with patch.object(run_browser_smoke, "local_python", return_value="/test/python"):
+            with patch.object(run_browser_smoke, "run", return_value=0) as run:
+                with redirect_stdout(io.StringIO()):
+                    code = run_browser_smoke.main(
+                        ["--direct", "--shard-index", "2", "--shard-count", "4", "--", "-q"]
+                    )
+
+        self.assertEqual(code, 0)
+        command = run.call_args.args[0]
+        selected = run_browser_smoke.select_shard(
+            run_browser_smoke.browser_test_nodeids(self.root / "tests" / "test_browser_smoke.py"),
+            index=2,
+            count=4,
+        )
+        self.assertEqual(command[:3], ["/test/python", "-m", "pytest"])
+        self.assertEqual(command[3:-1], selected)
+        self.assertEqual(command[-1], "-q")
+
+    def test_browser_diagnostics_redact_tokens_and_stay_disabled_by_default(self) -> None:
+        raw_manager = object()
+        factory = Mock(return_value=raw_manager)
+
+        with patch.dict(os.environ, {"PY_LUCIDUM_BROWSER_ARTIFACT_DIR": ""}):
+            manager = browser_diagnostics.instrument_sync_playwright(factory)()
+
+        self.assertIs(manager, raw_manager)
+        self.assertEqual(
+            browser_diagnostics._safe_url("http://localhost/?tool=gbm&token=secret&view=tree"),
+            "http://localhost/?tool=gbm&token=[redacted]&view=tree",
         )
 
     def test_pipx_command_enables_install_test_and_preserves_environment(self) -> None:

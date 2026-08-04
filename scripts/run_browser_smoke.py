@@ -10,6 +10,7 @@ pointing at the mirrored src tree while still using the current Python venv.
 from __future__ import annotations
 
 import argparse
+import ast
 import os
 import subprocess
 import sys
@@ -64,6 +65,32 @@ def pytest_args_have_target(args: list[str], worktree: Path) -> bool:
     return False
 
 
+def browser_test_nodeids(test_file: Path) -> list[str]:
+    """Return browser smoke node IDs without launching pytest for collection."""
+    tree = ast.parse(test_file.read_text(encoding="utf-8"), filename=str(test_file))
+    relative_test_file = test_file.as_posix()
+    if test_file.is_absolute():
+        relative_test_file = "/".join(test_file.parts[-2:])
+    nodeids: list[str] = []
+    for node in tree.body:
+        if not isinstance(node, ast.ClassDef) or node.name != "BrowserSmokeTests":
+            continue
+        nodeids.extend(
+            f"{relative_test_file}::{node.name}::{item.name}"
+            for item in node.body
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name.startswith("test_")
+        )
+    return sorted(nodeids)
+
+
+def select_shard(nodeids: list[str], *, index: int, count: int) -> list[str]:
+    if count < 1:
+        raise ValueError("browser shard count must be positive")
+    if index < 1 or index > count:
+        raise ValueError(f"browser shard index must be between 1 and {count}")
+    return [nodeid for position, nodeid in enumerate(sorted(nodeids)) if position % count == index - 1]
+
+
 def local_python() -> str:
     python = local_venv() / "bin" / "python"
     return str(python) if python.exists() else sys.executable
@@ -113,6 +140,8 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Run pytest in the current checkout without creating a mirror.",
     )
+    parser.add_argument("--shard-index", type=int, help="One-based browser test shard to run.")
+    parser.add_argument("--shard-count", type=int, help="Total number of browser test shards.")
     parser.add_argument(
         "pytest_args",
         nargs=argparse.REMAINDER,
@@ -135,11 +164,36 @@ def main(argv: list[str] | None = None) -> int:
     venv = local_venv()
     env["VIRTUAL_ENV"] = str(venv)
     env["PATH"] = f"{venv / 'bin'}{os.pathsep}{env.get('PATH', '')}"
+    artifact_dir = env.get("PY_LUCIDUM_BROWSER_ARTIFACT_DIR")
+    if artifact_dir:
+        artifact_path = Path(artifact_dir)
+        if not artifact_path.is_absolute():
+            artifact_path = (source / artifact_path).resolve()
+        artifact_path.mkdir(parents=True, exist_ok=True)
+        env["PY_LUCIDUM_BROWSER_ARTIFACT_DIR"] = str(artifact_path)
 
     pytest_args = list(args.pytest_args)
     if pytest_args and pytest_args[0] == "--":
         pytest_args = pytest_args[1:]
-    if not pytest_args_have_target(pytest_args, worktree):
+    shard_requested = args.shard_index is not None or args.shard_count is not None
+    if shard_requested and (args.shard_index is None or args.shard_count is None):
+        parser.error("--shard-index and --shard-count must be supplied together")
+    if shard_requested and pytest_args_have_target(pytest_args, worktree):
+        parser.error("browser sharding cannot be combined with an explicit pytest target")
+    if shard_requested:
+        try:
+            nodeids = browser_test_nodeids(worktree / "tests" / "test_browser_smoke.py")
+            selected = select_shard(nodeids, index=args.shard_index, count=args.shard_count)
+        except ValueError as exc:
+            parser.error(str(exc))
+        if not selected:
+            parser.error(f"browser shard {args.shard_index}/{args.shard_count} selected no tests")
+        print(
+            f"Browser shard {args.shard_index}/{args.shard_count}: {len(selected)} of {len(nodeids)} tests",
+            flush=True,
+        )
+        pytest_args = [*selected, *pytest_args]
+    elif not pytest_args_have_target(pytest_args, worktree):
         pytest_args = ["tests/test_browser_smoke.py", *pytest_args]
     return run([local_python(), "-m", "pytest", *pytest_args], cwd=worktree, env=env)
 
