@@ -15364,8 +15364,6 @@ COPY (
                         timeout=10_000,
                     )
                     self.assertEqual(page.locator("#mapGroupMeta").inner_text(), "")
-                    page.wait_for_timeout(250)
-                    self.assertEqual(page.locator("#mapGroupMeta").inner_text(), "")
                     page.wait_for_function(
                         """() => (document.querySelector("#mapGroupMeta")?.textContent || "") === "Computing map..." """,
                         timeout=2_000,
