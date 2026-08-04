@@ -40,12 +40,13 @@ For each selected model:
    - Numeric features use feature spec `min`, `max`, and `banding`.
    - Missing or blank numeric metadata is estimated from scored rows and recorded in warnings.
    - Categorical features use all dataset levels.
+   - A feature with missing scored values gets an explicit missing level. The fitted formula scores that cell, so transforms such as `ifelse(np.isnan(feature), ..., feature)` retain a finite missing-value contribution.
    - Categorical levels not seen in training are retained as `NA` cells and recorded in warnings.
 6. Skip any table whose cartesian grid exceeds 100,000 cells. The manifest records the skipped table and warning.
 7. For each table grid, copy the dummy row, vary only that table's features, evaluate the fitted model matrix, multiply the table term columns by coefficients, and add offset contributions in linear predictor space.
 8. Evaluate the same table contribution at the table's base cell. Subtract that base-cell contribution from every table cell, and add it to the cumulative base adjustment.
 9. Write a `base` table with `intercept + cumulative_base_adjustment`.
-10. Score every dataset row by starting with the adjusted base value, banding numeric values to table keys, looking up each table contribution, and summing in linear predictor space. Rows with an unseen or missing lookup get a missing flag and no tabulated prediction.
+10. Score every dataset row by starting with the adjusted base value, banding numeric values to table keys, looking up each table contribution, and summing in linear predictor space. Missing feature values use the explicit missing table cell when the fitted formula produced a finite contribution. Rows with an unseen categorical lookup or an unscorable missing cell get a missing flag and no tabulated prediction.
 11. Transform the tabulated linear predictor through the fitted link inverse, then multiply by the Weight/denominator when one was used for the fitted GLM target.
 12. Store the diagnostic `linear_sd_error = sd(exact_linear_prediction - tabulated_linear_prediction)` over finite rows.
 

@@ -2274,6 +2274,61 @@ ORDER BY __lucidum_row_id
             rows = dataset.con.execute(f"SELECT COUNT(glm_tabulated_prediction) FROM {dataset.relation_sql_for_source(source_id)}").fetchone()
         self.assertGreater(rows[0], 0)
 
+    def test_glm_tabulation_scores_missing_numeric_feature_when_formula_handles_it(self) -> None:
+        self.require_glm_dependencies()
+        path = self.root / "tabulation_missing_feature.csv"
+        path.write_text(
+            "y,x\n"
+            "10,1\n"
+            "20,2\n"
+            "30,\n"
+            "40,4\n"
+            "50,5\n"
+            "60,\n",
+            encoding="utf-8",
+        )
+        dataset = Dataset(path)
+        store = GlmModelStore(path)
+        result = train_model(
+            dataset,
+            store,
+            {
+                "formula": "1 + ifelse(np.isnan(x), 3, x) + ifelse(np.isnan(x), 1, 0)",
+                "response_column": "y",
+                "family": "normal",
+                "training_scope": "all",
+                "regularization": {"mode": "manual", "alpha": 0.001, "l1_ratio": 0.0},
+            },
+        )
+        model_id = result["model_id"]
+
+        build_tabulations(
+            dataset,
+            store,
+            {"model_ids": [model_id]},
+            {"rows": [{"feature": "x", "base": 3, "min": 1, "max": 5, "banding": 1}]},
+        )
+
+        table_rows = store.read_parquet_records(store.tabulations_dir(model_id) / "x.parquet")
+        missing_cell = next(row for row in table_rows if row["x"] is None)
+        self.assertEqual(missing_cell["status"], "ok")
+        self.assertIsNotNone(missing_cell["tabulated_linear"])
+        with dataset.lock:
+            row_count, prediction_count, missing_count, max_delta = dataset.con.execute(
+                f"""
+SELECT
+  COUNT(*),
+  COUNT(tabulated.glm_tabulated_prediction),
+  SUM(CASE WHEN tabulated.glm_tabulation_missing THEN 1 ELSE 0 END),
+  MAX(ABS(tabulated.glm_tabulated_prediction - exact.glm_prediction))
+FROM read_parquet({sql_literal(str(store.artifact_path(model_id, 'tabulated_predictions')))}) tabulated
+INNER JOIN read_parquet({sql_literal(str(store.artifact_path(model_id, 'predictions')))}) exact
+USING (__lucidum_row_id)
+"""
+            ).fetchone()
+        self.assertEqual((row_count, prediction_count, missing_count), (6, 6, 0))
+        self.assertLessEqual(float(max_delta or 0.0), 1e-8)
+
     def test_glm_tabulation_prediction_artifact_aligns_denominator_offset_and_ineligible_rows(self) -> None:
         self.require_glm_dependencies()
         _glum, glr, _glrcv, _np, pd = glm_dependencies()
@@ -2900,16 +2955,16 @@ COPY (
         self.assertEqual(after_status, 200)
         self.assertNotIn("glm:replace-glm:predictions", after_source_ids)
 
-    def test_glm_tabulation_vectorized_categorical_unseen_rows_stay_missing(self) -> None:
+    def test_glm_tabulation_vectorized_categorical_missing_cell_and_unseen_rows(self) -> None:
         self.require_glm_dependencies()
         _glum, _glr, _glrcv, np, pd = glm_dependencies()
         del _glum, _glr, _glrcv
         frame = pd.DataFrame({"Segment": ["A", "B", "C", None]})
         table = pd.DataFrame(
             {
-                "Segment": ["A", "B", "C"],
-                "tabulated_linear": [0.0, 0.25, None],
-                "status": ["ok", "ok", "unseen"],
+                "Segment": ["A", "B", "C", None],
+                "tabulated_linear": [0.0, 0.25, None, -0.5],
+                "status": ["ok", "ok", "unseen", "ok"],
             }
         )
 
@@ -2925,7 +2980,7 @@ COPY (
         self.assertEqual(component.iloc[0], 0.0)
         self.assertEqual(component.iloc[1], 0.25)
         self.assertTrue(pd.isna(component.iloc[2]))
-        self.assertTrue(pd.isna(component.iloc[3]))
+        self.assertEqual(component.iloc[3], -0.5)
 
     def test_glm_tabulation_categorical_normalization_scales_with_distinct_values(self) -> None:
         self.require_glm_dependencies()

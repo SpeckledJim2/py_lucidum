@@ -44,6 +44,7 @@ MODEL_CROSSTAB = "__model__"
 TABULATION_REBASING_VERSION = 1
 TABULATION_REBASE_TOLERANCE = 1e-7
 _NUMBER_PATTERN = r"[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][+-]?\d+)?"
+_MISSING_LOOKUP_KEY = object()
 
 
 @dataclass(frozen=True)
@@ -539,12 +540,16 @@ def _feature_levels(
     clipped_bounds: list[dict[str, Any]] = []
     unseen: list[dict[str, Any]] = []
     meta: dict[str, Any] = {"feature": feature, "kind": kind, "base": _json_value(base_value)}
+    has_missing = feature in frame.columns and bool(frame[feature].isna().any())
     if is_numeric_kind(kind):
         minimum, maximum, band, estimated_fields, clipped_bounds = _estimated_numeric_spec(frame, feature, kind, spec_row, bounds, pd)
         if estimated_fields:
             estimated.append({"feature": feature, "fields": estimated_fields, "min": minimum, "max": maximum, "banding": band})
         meta.update({"min": minimum, "max": maximum, "banding": band})
-        return [{"value": value, "status": "ok"} for value in _numeric_levels(minimum, maximum, band, base_value)], meta, estimated, clipped_bounds, unseen
+        rows = [{"value": value, "status": "ok"} for value in _numeric_levels(minimum, maximum, band, base_value)]
+        if has_missing:
+            rows.append({"value": None, "status": "missing"})
+        return rows, meta, estimated, clipped_bounds, unseen
     if category_levels:
         meta["category_levels"] = [_json_value(value) for value in category_levels]
     levels, seen = _categorical_levels(frame, fit_frame, feature, base_value, pd, category_levels=category_levels)
@@ -554,6 +559,8 @@ def _feature_levels(
         if status == "unseen":
             unseen.append({"feature": feature, "level": _json_value(value)})
         rows.append({"value": value, "status": status})
+    if has_missing:
+        rows.append({"value": None, "status": "missing"})
     return rows, meta, estimated, clipped_bounds, unseen
 
 
@@ -566,7 +573,12 @@ def _cartesian_table(levels_by_feature: dict[str, list[dict[str, Any]]], pd: Any
         for feature, cell in zip(features, combination):
             row[feature] = cell["value"]
             statuses.append(str(cell.get("status") or "ok"))
-        row["__status"] = "unseen" if any(status != "ok" for status in statuses) else "ok"
+        if "unseen" in statuses:
+            row["__status"] = "unseen"
+        elif "missing" in statuses:
+            row["__status"] = "missing"
+        else:
+            row["__status"] = "ok"
         rows.append(row)
     return pd.DataFrame(rows)
 
@@ -618,12 +630,17 @@ def _scored_feature_series(series: Any, meta: dict[str, Any], np: Any, pd: Any) 
     return keys.where(values.notna())
 
 
+def _lookup_feature_series(series: Any, meta: dict[str, Any], np: Any, pd: Any) -> Any:
+    keys = _scored_feature_series(series, meta, np, pd)
+    return keys.astype("object").where(keys.notna(), _MISSING_LOOKUP_KEY)
+
+
 def _normalise_lookup_keys(table: Any, features: list[str], feature_meta: dict[str, dict[str, Any]], np: Any, pd: Any) -> Any:
     lookup = table.loc[table["status"].astype(str) == "ok", [*features, "tabulated_linear"]].copy()
     for feature in features:
-        lookup[feature] = _scored_feature_series(lookup[feature], feature_meta[feature], np, pd)
+        lookup[feature] = _lookup_feature_series(lookup[feature], feature_meta[feature], np, pd)
     lookup["tabulated_linear"] = pd.to_numeric(lookup["tabulated_linear"], errors="coerce")
-    return lookup.dropna(subset=features)
+    return lookup
 
 
 def _component_from_table(frame: Any, table: Any, features: list[str], feature_meta: dict[str, dict[str, Any]], np: Any, pd: Any) -> Any:
@@ -634,12 +651,12 @@ def _component_from_table(frame: Any, table: Any, features: list[str], feature_m
         return pd.Series(np.nan, index=frame.index, dtype=float)
     if len(features) == 1:
         feature = features[0]
-        key = _scored_feature_series(frame[feature], feature_meta[feature], np, pd)
+        key = _lookup_feature_series(frame[feature], feature_meta[feature], np, pd)
         lookup_series = lookup.drop_duplicates(subset=[feature]).set_index(feature)["tabulated_linear"]
         return pd.to_numeric(key.map(lookup_series), errors="coerce")
     keys = pd.DataFrame(index=frame.index)
     for feature in features:
-        keys[feature] = _scored_feature_series(frame[feature], feature_meta[feature], np, pd)
+        keys[feature] = _lookup_feature_series(frame[feature], feature_meta[feature], np, pd)
     merged = keys.merge(lookup.drop_duplicates(subset=features), on=features, how="left", sort=False)
     return pd.Series(pd.to_numeric(merged["tabulated_linear"], errors="coerce").to_numpy(), index=frame.index, dtype=float)
 
@@ -1450,6 +1467,33 @@ def _build_model_tabulations(
             cumulative_adjustment += base_contribution
             table.loc[ok_mask, "tabulated_linear"] = contribution - base_contribution
             table["base_adjustment"] = base_contribution
+
+            missing_mask = table["__status"].astype(str) == "missing"
+            missing_grid = table.loc[missing_mask].reset_index(drop=True)
+            if len(missing_grid):
+                try:
+                    missing_frame = _prediction_frame(base, list(features), missing_grid, pd)
+                    missing_contribution = np.asarray(
+                        _group_contribution(
+                            estimator,
+                            missing_frame,
+                            list(info["term_indices"]),
+                            list(info["offset_terms"]),
+                            context,
+                            np,
+                            pd,
+                        ),
+                        dtype=float,
+                    )
+                    finite_missing = np.isfinite(missing_contribution)
+                    missing_indexes = table.index[missing_mask]
+                    scored_indexes = missing_indexes[finite_missing]
+                    table.loc[scored_indexes, "tabulated_linear"] = missing_contribution[finite_missing] - base_contribution
+                    table.loc[scored_indexes, "__status"] = "ok"
+                except Exception:
+                    # A missing cell remains NA when the fitted formula itself
+                    # cannot produce a finite contribution for that input.
+                    pass
         else:
             table["base_adjustment"] = None
         table["table_id"] = table_id
