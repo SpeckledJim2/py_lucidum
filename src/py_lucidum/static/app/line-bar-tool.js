@@ -17,6 +17,65 @@ const LINE_BAR_SPECIAL_COLUMN_NAMES = [
   "gbm_tabulated_prediction",
 ];
 
+const LINE_BAR_GLM_EXPECTED_COLUMNS = new Set([
+  "glm_prediction",
+  "glm_prediction_rate",
+  "glm_tabulated_prediction",
+]);
+
+const LINE_BAR_GBM_EXPECTED_COLUMNS = new Set([
+  "gbm_prediction",
+  "gbm_prediction_rate",
+  "gbm_tabulated_prediction",
+]);
+
+function lineBarExpectedModelFamily(selection) {
+  const sourceId = String(selection?.sourceId || selection?.source || "");
+  if (sourceId.startsWith("glm:")) return "glm";
+  if (sourceId.startsWith("gbm:")) return "gbm";
+  if (selection?.metricKind !== "prediction") return "";
+  const column = String(selection?.value || selection?.column || "");
+  if (LINE_BAR_GLM_EXPECTED_COLUMNS.has(column)) return "glm";
+  if (LINE_BAR_GBM_EXPECTED_COLUMNS.has(column)) return "gbm";
+  return "";
+}
+
+export function lineBarImportanceModelOrder(expectedSelections = []) {
+  const families = new Set(expectedSelections.map(lineBarExpectedModelFamily).filter(Boolean));
+  return families.size === 1 && families.has("glm") ? ["glm", "gbm"] : ["gbm", "glm"];
+}
+
+function lineBarExpectedSelectionKey(selection) {
+  return `${selection?.sourceId || ""}\u0000${selection?.value || ""}`;
+}
+
+export function nextLineBarExpectedSelections(currentSelections = [], targetSelection = null, { additive = false } = {}) {
+  const current = Array.isArray(currentSelections) ? currentSelections : [];
+  const targetValue = String(targetSelection?.value || "");
+  if (!targetValue) return current.length ? [] : current;
+  const targetKey = lineBarExpectedSelectionKey(targetSelection);
+  const existingIndex = current.findIndex((selection) => lineBarExpectedSelectionKey(selection) === targetKey);
+  if (!additive) {
+    if (current.length === 1 && existingIndex === 0) return current;
+    return [existingIndex >= 0 ? current[existingIndex] : targetSelection];
+  }
+  if (existingIndex >= 0) {
+    if (current.length <= 1) return current;
+    return current.filter((_, index) => index !== existingIndex);
+  }
+  if (current.length >= 2) return current;
+  return [...current, targetSelection];
+}
+
+export function lineBarAdditiveSelectionRequested(event, platform = "") {
+  const browserPlatform = platform || (
+    typeof navigator === "undefined"
+      ? ""
+      : String(navigator.userAgentData?.platform || navigator.platform || "")
+  );
+  return /mac|iphone|ipad|ipod/i.test(browserPlatform) ? Boolean(event?.metaKey) : Boolean(event?.ctrlKey);
+}
+
 export function createLineBarTool({
   api,
   el,
@@ -108,6 +167,7 @@ export function createLineBarTool({
   let featureImportancePendingKey = "";
   let featureImportanceRequestSeq = 0;
   let featureImportanceError = "";
+  const featureImportanceSelectionGroups = new Map();
   let tableRequestSeq = 0;
   let tableSearchTimer = null;
   let tableCacheKey = "";
@@ -418,6 +478,7 @@ export function createLineBarTool({
     state.dateBucketFeature2 = null;
     state.dateBucketManualKey2 = null;
     state.dateBucketSuggestionPendingKey2 = null;
+    featureImportanceSelectionGroups.clear();
     renderFeatures();
     renderExpectedNumerators();
     updateAxisControls();
@@ -494,7 +555,7 @@ export function createLineBarTool({
       featureImportancePendingKey = "";
       featureImportanceError = "";
       syncFeatureImportanceButton(data);
-      if (state.featureSort === "importance") renderFeatures();
+      if (state.featureSort === "importance") renderFeatures({ preserveScroll: true });
       return data;
     } catch (error) {
       if (requestSeq !== featureImportanceRequestSeq || featureImportancePendingKey !== key) return null;
@@ -503,7 +564,7 @@ export function createLineBarTool({
       featureImportancePendingKey = "";
       featureImportanceError = error.message || "Feature importances unavailable.";
       syncFeatureImportanceButton(null);
-      if (state.featureSort === "importance") renderFeatures();
+      if (state.featureSort === "importance") renderFeatures({ preserveScroll: true });
       return null;
     }
   }
@@ -1154,52 +1215,17 @@ export function createLineBarTool({
     else el("expectedNumerator").value = "";
   }
 
-  function toggleExpectedSelection(value, sourceId = "") {
+  function updateExpectedSelection(value, sourceId = "", { additive = false } = {}) {
     const current = expectedSelections();
-    if (!value) {
-      if (!current.length) return false;
-      state.expectedSelections = [];
-      syncExpectedSelectToFirstSelection();
-      return true;
-    }
-    const existingIndex = current.findIndex((selection) => (
-      selection.value === value && (selection.sourceId || "") === (sourceId || "")
-    ));
-    if (existingIndex >= 0) {
-      state.expectedSelections = current.filter((_, index) => index !== existingIndex);
-      syncExpectedSelectToFirstSelection();
-      return true;
-    }
-    if (current.length >= 2) return false;
     const option = expectedSelectionOption(value, sourceId);
-    const nextSelection = {
+    const targetSelection = value ? {
       value,
       sourceId: option?.dataset.sourceId || sourceId || state.source || "dataset",
       metricKind: option?.dataset.metricKind || "metric",
-    };
-    state.expectedSelections = [...current, nextSelection];
-    syncExpectedSelectToFirstSelection();
-    return true;
-  }
-
-  function replaceExpectedSelection(value, sourceId = "") {
-    const current = expectedSelections();
-    if (!value) {
-      if (!current.length) return false;
-      state.expectedSelections = [];
-      syncExpectedSelectToFirstSelection();
-      return true;
-    }
-    const option = expectedSelectionOption(value, sourceId);
-    const nextSelection = {
-      value,
-      sourceId: option?.dataset.sourceId || sourceId || state.source || "dataset",
-      metricKind: option?.dataset.metricKind || "metric",
-    };
-    const unchanged = current.length === 1
-      && expectedSelectionKey(current[0].value, current[0].sourceId) === expectedSelectionKey(nextSelection.value, nextSelection.sourceId);
-    if (unchanged) return false;
-    state.expectedSelections = [nextSelection];
+    } : null;
+    const nextSelections = nextLineBarExpectedSelections(current, targetSelection, { additive });
+    if (nextSelections === current) return false;
+    state.expectedSelections = nextSelections;
     syncExpectedSelectToFirstSelection();
     return true;
   }
@@ -1207,7 +1233,7 @@ export function createLineBarTool({
   function activateExpectedKeyboardSelection(button) {
     const value = button?.dataset.value || "";
     const sourceId = button?.dataset.sourceId || "";
-    if (!replaceExpectedSelection(value, sourceId)) return;
+    if (!updateExpectedSelection(value, sourceId)) return;
     const sourceChanged = syncExpectedSourceFromSelection({
       expectedValue: value,
       expectedSource: sourceId,
@@ -1215,6 +1241,7 @@ export function createLineBarTool({
     });
     if (!sourceChanged) {
       renderExpectedNumerators({ preserveScroll: true });
+      if (state.featureSort === "importance") renderFeatures({ preserveScroll: true });
       updateAxisControls();
     }
     clearActiveFavouriteSelection();
@@ -1228,24 +1255,22 @@ export function createLineBarTool({
     const { pinned, scroll } = resetLineBarPickerList(list, true);
     const selections = expectedSelections();
     const selectedKeys = new Set(selections.map((selection) => expectedSelectionKey(selection.value, selection.sourceId)));
-    const maxSelected = selections.length >= 2;
 
     function addExpectedButton(target, label, value, kind, sourceId = "", extraClass = "") {
       const isActive = value
         ? selectedKeys.has(expectedSelectionKey(value, sourceId))
         : selections.length === 0;
-      const disabled = Boolean(value && maxSelected && !isActive);
       const button = document.createElement("button");
       button.type = "button";
       button.className = `feature ${extraClass} ${isActive ? "active" : ""}`.trim();
-      button.disabled = disabled;
       button.setAttribute("aria-pressed", String(isActive));
       if (sourceId) button.dataset.sourceId = sourceId;
       button.dataset.value = value;
       button.innerHTML = `<span>${escapeHtml(label)}</span><span class="kind">${escapeHtml(kind)}</span>`;
       button.addEventListener("click", (event) => {
         const previousSelections = expectedSelections().map((selection) => ({ ...selection }));
-        const changed = toggleExpectedSelection(value, sourceId);
+        const additive = lineBarAdditiveSelectionRequested(event);
+        const changed = updateExpectedSelection(value, sourceId, { additive });
         if (!changed) return;
         const sourceChanged = syncExpectedSourceFromSelection({
           expectedValue: value,
@@ -1254,6 +1279,7 @@ export function createLineBarTool({
         });
         if (!sourceChanged) {
           renderExpectedNumerators({ preserveScroll: true });
+          if (state.featureSort === "importance") renderFeatures({ preserveScroll: true });
           updateAxisControls();
         }
         clearActiveFavouriteSelection();
@@ -1293,19 +1319,8 @@ export function createLineBarTool({
     syncFeatureImportanceButton();
     ensureFeatureImportance();
     if (state.featureSort === "importance") {
-      const ratioColumns = orderedLineBarSpecialColumns([...sourceColumns()]).filter((column) => (
-        isGbmGlmRatioColumn(column) && featureMatchesQuery(column.name, query)
-      ));
-      if (ratioColumns.length) {
-        const { pinned, scroll } = resetLineBarPickerList(list, true);
-        for (const col of ratioColumns) {
-          addLineBarFeatureButton(pinned, col, "line-bar-special-row");
-        }
-        renderFeatureImportanceRows(query, scroll);
-      } else {
-        resetLineBarPickerList(list, false);
-        renderFeatureImportanceRows(query, list);
-      }
+      resetLineBarPickerList(list, false);
+      renderFeatureImportanceRows(query, list);
       restoreLineBarPickerScroll(list, scrollPosition);
       return;
     }
@@ -1347,16 +1362,34 @@ export function createLineBarTool({
     }
     const datasetColumns = datasetFeatureColumns(data);
     const datasetByName = new Map(datasetColumns.map((column) => [column.name, column]));
+    const modelGroups = lineBarImportanceModelOrder(expectedSelections()).map((key) => ({
+      key,
+      label: key.toUpperCase(),
+      model: data.models?.[key],
+    }));
+    const modelFeatureSets = new Map(modelGroups.map((group) => [
+      group.key,
+      new Set(
+        (Array.isArray(group.model?.rows) ? group.model.rows : [])
+          .map((row) => String(row?.feature || ""))
+          .filter((feature) => feature && !isLineBarSpecialColumn({ name: feature })),
+      ),
+    ]));
     const usedFeatures = new Set();
-    const renderedAny = [
-      renderImportanceGroup(list, "GBM", data.models?.gbm, query, datasetByName, usedFeatures),
-      renderImportanceGroup(list, "GLM", data.models?.glm, query, datasetByName, usedFeatures),
-    ].some(Boolean);
+    modelFeatureSets.forEach((features) => features.forEach((feature) => usedFeatures.add(feature)));
+    const activeGroups = selectedFeatureImportanceGroups(modelGroups, modelFeatureSets);
+    const renderedAny = modelGroups.map((group) => renderImportanceGroup(
+      list,
+      group,
+      query,
+      datasetByName,
+      activeGroups,
+    )).some(Boolean);
     const notUsed = datasetColumns
       .filter((column) => !isLineBarSpecialColumn(column))
       .filter((column) => !usedFeatures.has(column.name))
       .map((column) => ({ feature: column.name, importance: null, kind: column.kind }));
-    renderNotUsedGroup(list, notUsed, query);
+    renderNotUsedGroup(list, notUsed, query, activeGroups);
     if (!renderedAny && !featureImportanceHasRows(data)) {
       list.innerHTML = "";
       addFeatureListMessage(list, "No active GBM or GLM importances are available.");
@@ -1369,12 +1402,31 @@ export function createLineBarTool({
     return (dataSourceForId("dataset")?.columns || []).map((column) => ({ ...column, source_id: "dataset" }));
   }
 
-  function renderImportanceGroup(list, label, model, query, datasetByName, usedFeatures) {
+  function selectedFeatureImportanceGroups(modelGroups, modelFeatureSets) {
+    const selectedFeatures = [
+      { feature: state.x, sourceId: state.xSource || state.source || "dataset" },
+      { feature: state.x2, sourceId: state.x2Source || state.source || "dataset" },
+    ].filter((selection) => selection.feature && selection.sourceId === "dataset");
+    const activeGroups = new Map();
+    for (const selection of selectedFeatures) {
+      const feature = String(selection.feature);
+      const identity = groupingIdentity(feature, selection.sourceId);
+      const availableGroups = modelGroups
+        .filter((group) => modelFeatureSets.get(group.key)?.has(feature))
+        .map((group) => group.key);
+      const rememberedGroup = featureImportanceSelectionGroups.get(identity) || "";
+      if (rememberedGroup && availableGroups.includes(rememberedGroup)) {
+        activeGroups.set(feature, rememberedGroup);
+      } else {
+        activeGroups.set(feature, availableGroups[0] || "not-used");
+      }
+    }
+    return activeGroups;
+  }
+
+  function renderImportanceGroup(list, group, query, datasetByName, activeGroups) {
+    const { key, label, model } = group;
     const rows = Array.isArray(model?.rows) ? model.rows : [];
-    rows.forEach((row) => {
-      if (isLineBarSpecialColumn({ name: row?.feature })) return;
-      if (row?.feature) usedFeatures.add(String(row.feature));
-    });
     const filtered = rows.filter((row) => !isLineBarSpecialColumn({ name: row?.feature }) && featureMatchesQuery(row.feature, query));
     const message = String(model?.message || "");
     if (!filtered.length && (!message || query)) return false;
@@ -1390,13 +1442,15 @@ export function createLineBarTool({
         detail: featureImportanceDetail(row, model?.metric),
         sourceId: "dataset",
         extraClass: "line-bar-importance-row",
+        active: activeGroups.get(column.name) === key,
+        importanceGroup: key,
         onClick: (options) => selectDatasetFeature(column.name, options),
       });
     }
     return true;
   }
 
-  function renderNotUsedGroup(list, rows, query) {
+  function renderNotUsedGroup(list, rows, query, activeGroups) {
     const filtered = rows.filter((row) => featureMatchesQuery(row.feature, query));
     if (!filtered.length) return;
     addFeatureListHeader(list, "Not used");
@@ -1406,6 +1460,8 @@ export function createLineBarTool({
         detail: row.kind || "",
         sourceId: "dataset",
         extraClass: "line-bar-not-used-row",
+        active: activeGroups.get(row.feature) === "not-used",
+        importanceGroup: "not-used",
         onClick: (options) => selectDatasetFeature(row.feature, options),
       });
     }
@@ -1476,9 +1532,11 @@ export function createLineBarTool({
     requestAnimationFrame(() => {
       const buttons = lineBarPickerButtons(list);
       if (!buttons.length) return;
+      const importanceGroup = String(targetState.importanceGroup || "");
       const target = buttons.find((button) => (
         (button.dataset.value || "") === targetState.value
         && (button.dataset.sourceId || "") === targetState.sourceId
+        && (!importanceGroup || (button.dataset.importanceGroup || "") === importanceGroup)
       )) || buttons.find((button) => button.classList.contains("active")) || buttons[Math.min(targetState.index, buttons.length - 1)];
       target.focus({ preventScroll: true });
       target.scrollIntoView({ block: "nearest" });
@@ -1503,6 +1561,7 @@ export function createLineBarTool({
     const targetState = {
       value: target.dataset.value || "",
       sourceId: target.dataset.sourceId || "",
+      importanceGroup: target.dataset.importanceGroup || "",
       index: nextIndex,
     };
     const startedFromButton = event.target instanceof HTMLButtonElement && list.contains(event.target);
@@ -1526,7 +1585,15 @@ export function createLineBarTool({
     });
   }
 
-  function addFeatureButton(list, { label, detail, sourceId, extraClass = "", active = null, onClick }) {
+  function addFeatureButton(list, {
+    label,
+    detail,
+    sourceId,
+    extraClass = "",
+    active = null,
+    importanceGroup = "",
+    onClick,
+  }) {
     const activeSource = state.xSource || state.source || "dataset";
     const firstActive = label === state.x && activeSource === sourceId;
     const secondActive = label === state.x2 && (state.x2Source || state.source || "dataset") === sourceId;
@@ -1537,18 +1604,18 @@ export function createLineBarTool({
     button.className = `feature ${extraClass} ${isActive ? "active" : ""}`.trim();
     button.dataset.sourceId = sourceId;
     button.dataset.value = label;
+    if (importanceGroup) button.dataset.importanceGroup = importanceGroup;
     button.setAttribute("aria-selected", String(isActive));
-    const selectedMarker = multipleSelected && selectedIndex >= 0
+    const selectedMarker = multipleSelected && selectedIndex >= 0 && isActive
       ? `<span class="line-bar-feature-marker" data-label="Feature ${selectedIndex + 1}" aria-label="Feature ${selectedIndex + 1}"></span>`
       : "";
     button.innerHTML = `<span>${escapeHtml(label)}</span><span class="kind">${selectedMarker}${escapeHtml(detail)}</span>`;
     button.addEventListener("click", (event) => {
       const pickerList = list.closest("#featureList") || list;
-      const platform = String(navigator.userAgentData?.platform || navigator.platform || "");
-      const additive = /mac|iphone|ipad|ipod/i.test(platform) ? event.metaKey : event.ctrlKey;
-      onClick({ additive });
+      const additive = lineBarAdditiveSelectionRequested(event);
+      onClick({ additive, importanceGroup });
       if (event.isTrusted) {
-        focusLineBarPickerButton(pickerList, { value: label, sourceId, index: 0 });
+        focusLineBarPickerButton(pickerList, { value: label, sourceId, importanceGroup, index: 0 });
       }
     });
     list.append(button);
@@ -1639,16 +1706,27 @@ export function createLineBarTool({
     clearSecondGroupingFeature();
   }
 
-  function toggleLineBarGroupingFeature(column, { additive = false } = {}) {
+  function toggleLineBarGroupingFeature(column, { additive = false, importanceGroup = "" } = {}) {
     const feature = String(column?.name || "");
     const sourceId = column?.source_id || state.source || "dataset";
     if (!feature) return;
+    const importanceIdentity = groupingIdentity(feature, sourceId);
+    const previousImportanceGroup = featureImportanceSelectionGroups.get(importanceIdentity) || "";
+    if (importanceGroup && sourceId === "dataset") {
+      featureImportanceSelectionGroups.set(importanceIdentity, importanceGroup);
+    } else {
+      featureImportanceSelectionGroups.delete(importanceIdentity);
+    }
+    const importanceGroupChanged = previousImportanceGroup !== (featureImportanceSelectionGroups.get(importanceIdentity) || "");
     const isFirst = isSelectedGrouping(feature, sourceId, 0);
     const isSecond = isSelectedGrouping(feature, sourceId, 1);
     const multipleSelected = hasTwoFeatures();
     if (additive) {
       if (isFirst) {
-        if (!multipleSelected) return;
+        if (!multipleSelected) {
+          if (importanceGroupChanged) renderFeatures({ preserveScroll: true });
+          return;
+        }
         promoteSecondGroupingFeature();
       } else if (isSecond) {
         clearSecondGroupingFeature();
@@ -1670,7 +1748,10 @@ export function createLineBarTool({
         return;
       }
     } else if (isFirst) {
-      if (!multipleSelected) return;
+      if (!multipleSelected) {
+        if (importanceGroupChanged) renderFeatures({ preserveScroll: true });
+        return;
+      }
       clearSecondGroupingFeature();
     } else if (isSecond) {
       promoteSecondGroupingFeature();
@@ -4978,6 +5059,7 @@ export function createLineBarTool({
       const sourceChanged = syncExpectedSourceFromSelection();
       if (!sourceChanged) {
         renderExpectedNumerators();
+        if (state.featureSort === "importance") renderFeatures({ preserveScroll: true });
         updateAxisControls();
       }
       clearActiveFavouriteSelection();

@@ -435,6 +435,290 @@ class BrowserSmokeTests(unittest.TestCase):
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_line_bar_importance_order_and_duplicate_selection_follow_expected_models(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "importance_order.csv"
+            data_path.write_text(
+                "actualNumerator,denominator,Shared,GbmOnly,GlmOnly,Unused,SAMPLE\n"
+                "10,1,1,10,100,1000,training\n"
+                "20,2,2,20,200,2000,test\n"
+                "30,3,3,30,300,3000,training\n",
+                encoding="utf-8",
+            )
+            gbm_store = GbmModelStore(data_path)
+            self.write_gbm_prediction_model(
+                gbm_store,
+                "importance-order-gbm",
+                "Importance order GBM",
+                "2026-08-05T00:00:00Z",
+                [9.0, 19.0, 29.0],
+            )
+            gbm_store.artifact_path("importance-order-gbm", "feature_config").unlink(missing_ok=True)
+            write_gbm_feature_config(
+                gbm_store,
+                "importance-order-gbm",
+                [
+                    {"name": "Shared", "kind": "integer", "include": True, "gain": 2.0, "mean_abs_shap": 2.0},
+                    {"name": "GbmOnly", "kind": "integer", "include": True, "gain": 1.0, "mean_abs_shap": 1.0},
+                ],
+            )
+            gbm_shap_summary = gbm_store.artifact_path("importance-order-gbm", "shap_summary")
+            gbm_shap_summary.unlink(missing_ok=True)
+            con = duckdb.connect(database=":memory:")
+            try:
+                con.execute(
+                    f"""
+COPY (
+  SELECT 'Shared' AS feature, 2.0 AS mean_abs_shap, 0.0 AS mean_shap, 3 AS row_count
+  UNION ALL SELECT 'GbmOnly', 1.0, 0.0, 3
+) TO {sql_literal(str(gbm_shap_summary))} (FORMAT PARQUET)
+"""
+                )
+            finally:
+                con.close()
+            gbm_store.activate_model("importance-order-gbm")
+
+            glm_store = GlmModelStore(data_path)
+            self.write_glm_prediction_model(
+                glm_store,
+                "importance-order-glm",
+                "Importance order GLM",
+                "2026-08-05T00:00:01Z",
+                [11.0, 21.0, 31.0],
+                formula="actualNumerator ~ 1 + Shared + GlmOnly",
+            )
+            glm_importance = glm_store.artifact_path("importance-order-glm", "feature_importance")
+            con = duckdb.connect(database=":memory:")
+            try:
+                con.execute(
+                    f"""
+COPY (
+  SELECT 'Shared' AS feature, 2.5 AS importance, 1 AS term_count
+  UNION ALL SELECT 'GlmOnly', 1.5, 1
+) TO {sql_literal(str(glm_importance))} (FORMAT PARQUET)
+"""
+                )
+            finally:
+                con.close()
+            glm_store.activate_model("importance-order-glm")
+
+            base_url, server, thread = self.start_app(
+                data_path,
+                defaults={"x": "Shared", "actual": "actualNumerator", "denominator": "denominator"},
+                tools=["line_bar", "glm", "gbm"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.goto(f"{base_url}/?tool=line_bar", wait_until="domcontentloaded")
+                    page.wait_for_function(
+                        '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
+                        timeout=10_000,
+                    )
+                    if page.locator("#lineBarSideControlsToggleBtn").get_attribute("aria-expanded") == "false":
+                        page.locator("#lineBarSideControlsToggleBtn").click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#lineBarSideControlsToggleBtn")?.getAttribute("aria-expanded") === "true"
+                          && getComputedStyle(document.querySelector("#chartSideControls")).display !== "none"
+                        """,
+                        timeout=10_000,
+                    )
+                    importance_button = page.locator(
+                        '.segmented[data-control="featureSort"] button[data-value="importance"]'
+                    )
+                    page.wait_for_function(
+                        '() => !document.querySelector(\'.segmented[data-control="featureSort"] button[data-value="importance"]\')?.classList.contains("hidden")',
+                        timeout=10_000,
+                    )
+                    self.assertEqual(
+                        page.locator('#featureList .feature[data-value="gbm_to_glm_ratio"]').count(),
+                        1,
+                    )
+                    importance_button.click()
+
+                    def importance_headers() -> list[str]:
+                        return page.locator("#featureList .feature-list-section-header").all_text_contents()
+
+                    def importance_active_state() -> list[dict[str, str]]:
+                        return page.locator("#featureList .feature.active").evaluate_all(
+                            """
+                            (buttons) => buttons.map((button) => ({
+                              value: button.dataset.value || "",
+                              group: button.dataset.importanceGroup || "",
+                              marker: button.querySelector(".line-bar-feature-marker")?.getAttribute("data-label") || "",
+                            }))
+                            """
+                        )
+
+                    page.wait_for_function(
+                        """
+                        () => document.querySelectorAll("#featureList .line-bar-importance-row").length === 4
+                          && document.querySelectorAll("#featureList .feature.active").length === 1
+                        """,
+                        timeout=10_000,
+                    )
+                    self.assertTrue(importance_headers()[0].startswith("GBM"))
+                    self.assertTrue(importance_headers()[1].startswith("GLM"))
+                    self.assertEqual(importance_active_state(), [{"value": "Shared", "group": "gbm", "marker": ""}])
+                    self.assertEqual(page.locator('#featureList .feature[data-value="gbm_to_glm_ratio"]').count(), 0)
+                    self.assertFalse(page.locator("#featureList").evaluate("node => node.classList.contains('line-bar-split-list')"))
+
+                    if page.locator("#chartSideControls").evaluate("node => node.classList.contains('chart-expected-collapsed')"):
+                        page.locator("#chartExpectedToggle").click()
+                    page.wait_for_function(
+                        """
+                        () => !document.querySelector("#chartSideControls")?.classList.contains("chart-expected-collapsed")
+                          && !document.querySelector("#expectedSideSection")?.hidden
+                        """,
+                        timeout=10_000,
+                    )
+                    glm_expected = page.locator(
+                        '#expectedList .feature[data-value="glm_prediction"][data-source-id^="glm:"]'
+                    )
+                    gbm_expected = page.locator(
+                        '#expectedList .feature[data-value="gbm_prediction"][data-source-id^="gbm:"]'
+                    )
+                    dataset_expected = page.locator(
+                        '#expectedList .feature[data-value="Shared"][data-source-id="dataset"]'
+                    )
+                    platform = page.evaluate("() => navigator.userAgentData?.platform || navigator.platform || ''")
+                    additive_modifier = "Meta" if re.search(r"mac|iphone|ipad|ipod", platform, re.I) else "Control"
+                    glm_expected.click()
+                    page.wait_for_function(
+                        '() => document.querySelector("#featureList .feature-list-section-header")?.textContent.startsWith("GLM")',
+                        timeout=10_000,
+                    )
+                    self.assertTrue(importance_headers()[0].startswith("GLM"))
+                    self.assertEqual(importance_active_state(), [{"value": "Shared", "group": "glm", "marker": ""}])
+
+                    gbm_expected.click(modifiers=[additive_modifier])
+                    page.wait_for_function(
+                        '() => document.querySelector("#featureList .feature-list-section-header")?.textContent.startsWith("GBM")',
+                        timeout=10_000,
+                    )
+                    self.assertTrue(importance_headers()[0].startswith("GBM"))
+                    expected_pair_state = page.locator("#expectedList .feature").evaluate_all(
+                        """
+                        (buttons) => ({
+                          active: buttons.filter((button) => button.classList.contains("active"))
+                            .map((button) => button.dataset.value || ""),
+                          disabled: buttons.filter((button) => button.disabled).length,
+                          faded: buttons.filter((button) => getComputedStyle(button).opacity !== "1").length,
+                        })
+                        """
+                    )
+                    self.assertEqual(expected_pair_state["active"], ["glm_prediction", "gbm_prediction"])
+                    self.assertEqual(expected_pair_state["disabled"], 0)
+                    self.assertEqual(expected_pair_state["faded"], 0)
+                    dataset_expected.click(modifiers=[additive_modifier])
+                    self.assertEqual(
+                        page.locator("#expectedList .feature.active").evaluate_all(
+                            "buttons => buttons.map((button) => button.dataset.value || '')"
+                        ),
+                        ["glm_prediction", "gbm_prediction"],
+                    )
+                    dataset_expected.click()
+                    self.assertEqual(
+                        page.locator("#expectedList .feature.active").evaluate_all(
+                            "buttons => buttons.map((button) => button.dataset.value || '')"
+                        ),
+                        ["Shared"],
+                    )
+                    self.assertTrue(importance_headers()[0].startswith("GBM"))
+                    glm_expected.click()
+                    page.wait_for_function(
+                        '() => document.querySelector("#featureList .feature-list-section-header")?.textContent.startsWith("GLM")',
+                        timeout=10_000,
+                    )
+                    gbm_expected.click()
+                    self.assertTrue(importance_headers()[0].startswith("GBM"))
+                    glm_expected.click(modifiers=[additive_modifier])
+                    gbm_expected.click(modifiers=[additive_modifier])
+                    page.wait_for_function(
+                        '() => document.querySelector("#featureList .feature-list-section-header")?.textContent.startsWith("GLM")',
+                        timeout=10_000,
+                    )
+                    self.assertTrue(importance_headers()[0].startswith("GLM"))
+                    gbm_expected.click(modifiers=[additive_modifier])
+                    page.wait_for_function(
+                        '() => document.querySelector("#featureList .feature-list-section-header")?.textContent.startsWith("GBM")',
+                        timeout=10_000,
+                    )
+
+                    scroll_before = page.locator(
+                        '#featureList .feature[data-value="Shared"][data-importance-group="glm"]'
+                    ).evaluate(
+                        """
+                        (button) => {
+                          const list = button.closest("#featureList");
+                          list.style.minHeight = "0";
+                          list.style.height = "80px";
+                          list.style.maxHeight = "80px";
+                          button.scrollIntoView({ block: "center" });
+                          return list.scrollTop;
+                        }
+                        """
+                    )
+                    self.assertGreater(scroll_before, 0)
+                    page.locator(
+                        '#featureList .feature[data-value="Shared"][data-importance-group="glm"]'
+                    ).click()
+                    page.wait_for_function(
+                        """
+                        () => document.activeElement?.dataset?.value === "Shared"
+                          && document.activeElement?.dataset?.importanceGroup === "glm"
+                          && document.querySelectorAll("#featureList .feature.active").length === 1
+                          && document.querySelector("#featureList .feature.active")?.dataset.importanceGroup === "glm"
+                        """,
+                        timeout=10_000,
+                    )
+                    scroll_after = page.locator("#featureList").evaluate("node => node.scrollTop")
+                    self.assertLessEqual(abs(scroll_after - scroll_before), 2)
+
+                    page.locator(
+                        '#featureList .feature[data-value="GbmOnly"][data-importance-group="gbm"]'
+                    ).click(modifiers=[additive_modifier])
+                    page.wait_for_function(
+                        """
+                        () => document.querySelectorAll("#featureList .feature.active").length === 2
+                          && document.querySelectorAll("#featureList .line-bar-feature-marker").length === 2
+                        """,
+                        timeout=10_000,
+                    )
+                    self.assertEqual(
+                        importance_active_state(),
+                        [
+                            {"value": "GbmOnly", "group": "gbm", "marker": "Feature 2"},
+                            {"value": "Shared", "group": "glm", "marker": "Feature 1"},
+                        ],
+                    )
+                    page.locator(
+                        '#featureList .feature[data-value="GlmOnly"][data-importance-group="glm"]'
+                    ).click()
+                    self.assertEqual(importance_active_state(), [{"value": "GlmOnly", "group": "glm", "marker": ""}])
+                    page.locator(
+                        '#featureList .feature[data-value="Unused"][data-importance-group="not-used"]'
+                    ).click()
+                    self.assertEqual(importance_active_state(), [{"value": "Unused", "group": "not-used", "marker": ""}])
+
+                    page.locator('.segmented[data-control="featureSort"] button[data-value="original"]').click()
+                    self.assertEqual(
+                        page.locator('#featureList .feature[data-value="gbm_to_glm_ratio"]').count(),
+                        1,
+                    )
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_chart_and_map_tools_load_and_switch_without_extra_api_requests(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "sample.csv"
@@ -6344,15 +6628,28 @@ COPY (
                         ["actual", next_expected_value],
                     )
 
-                    page.locator('#expectedList .feature[data-value="actual"]').click()
+                    expected_platform = page.evaluate("() => navigator.userAgentData?.platform || navigator.platform || ''")
+                    expected_modifier = "Meta" if re.search(r"mac|iphone|ipad|ipod", expected_platform, re.I) else "Control"
+                    with page.expect_request(
+                        lambda request: request.url.endswith("/api/chart") and request.method == "POST",
+                        timeout=10_000,
+                    ) as expected_pair_request_info:
+                        page.locator('#expectedList .feature[data-value="actual"]').click(modifiers=[expected_modifier])
+                    expected_pair_request = json.loads(expected_pair_request_info.value.post_data or "{}")
                     page.wait_for_function(
                         """
                         () => document.querySelectorAll("#expectedList .feature.active").length === 2
-                          && document.querySelectorAll('#expectedList .feature[disabled]').length > 0
+                          && document.querySelectorAll('#expectedList .feature[disabled]').length === 0
+                          && [...document.querySelectorAll("#expectedList .feature")]
+                            .every((button) => getComputedStyle(button).opacity === "1")
                           && document.activeElement?.closest?.("#expectedList")
                           && document.activeElement?.dataset?.value === "actual"
                         """,
                         timeout=10_000,
+                    )
+                    self.assertEqual(
+                        [response.get("numerator") for response in expected_pair_request.get("responses", [])],
+                        ["actual", next_expected_value, "actual"],
                     )
                     page.keyboard.press("ArrowDown")
                     page.wait_for_function(
@@ -20761,14 +21058,17 @@ COPY (
                     """
                     () => ({
                       split: document.querySelector("#featureList")?.classList.contains("line-bar-split-list"),
+                      headers: [...document.querySelectorAll("#featureList .feature-list-section-header")]
+                        .map((header) => header.textContent.trim()),
                       specialValues: [...document.querySelectorAll("#featureList .feature")]
                         .map((button) => button.dataset.value || "")
                         .filter((value) => ["gbm_to_glm_ratio", "glm_prediction", "gbm_prediction", "glm_prediction_rate", "gbm_prediction_rate", "glm_tabulated_prediction", "gbm_tabulated_prediction"].includes(value)),
                     })
                     """
                 )
-                self.assertTrue(importance_feature_state["split"])
-                self.assertEqual(importance_feature_state["specialValues"], ["gbm_to_glm_ratio"])
+                self.assertFalse(importance_feature_state["split"])
+                self.assertTrue(importance_feature_state["headers"][0].startswith("GLM"))
+                self.assertEqual(importance_feature_state["specialValues"], [])
                 page.locator('.segmented[data-control="featureSort"] button[data-value="original"]').click()
                 page.locator(
                     f'#featureList .feature[data-source-id="{ratio_source_id}"][data-value="gbm_to_glm_ratio"]',
@@ -20819,10 +21119,12 @@ COPY (
                 )
                 self.assertNotIn("Banding estimate failed", page.locator("#status").text_content(timeout=10_000))
 
+                expected_platform = page.evaluate("() => navigator.userAgentData?.platform || navigator.platform || ''")
+                expected_modifier = "Meta" if re.search(r"mac|iphone|ipad|ipod", expected_platform, re.I) else "Control"
                 with page.expect_request(lambda request: request.url.endswith("/api/chart"), timeout=10_000) as gbm_expected_info:
                     page.locator(
                         '#expectedList .feature[data-source-id="gbm:browser-smoke-model-2:predictions"][data-value="gbm_prediction"]',
-                    ).click()
+                    ).click(modifiers=[expected_modifier])
                 gbm_expected_body = json.loads(gbm_expected_info.value.post_data or "{}")
                 self.assertEqual(gbm_expected_body["source"], "glm:browser-smoke-glm:predictions")
                 self.assertEqual(gbm_expected_body["responses"][0]["numerator"], "actualNumerator")
@@ -20853,6 +21155,7 @@ COPY (
                         active: buttons.filter((button) => button.classList.contains("active"))
                           .map((button) => `${button.dataset.sourceId || ""}:${button.dataset.value || ""}`),
                         disabledInactiveCount: buttons.filter((button) => button.dataset.value && !button.classList.contains("active") && button.disabled).length,
+                        fadedCount: buttons.filter((button) => getComputedStyle(button).opacity !== "1").length,
                         noneDisabled: document.querySelector("#expectedList .expected-none-option")?.disabled || false,
                         glmColor: lineColor("glm_prediction"),
                         gbmColor: lineColor("gbm_prediction"),
@@ -20868,7 +21171,8 @@ COPY (
                         "gbm:browser-smoke-model-2:predictions:gbm_prediction",
                     ],
                 )
-                self.assertGreater(expected_two_line_state["disabledInactiveCount"], 0)
+                self.assertEqual(expected_two_line_state["disabledInactiveCount"], 0)
+                self.assertEqual(expected_two_line_state["fadedCount"], 0)
                 self.assertFalse(expected_two_line_state["noneDisabled"])
                 self.assertEqual(expected_two_line_state["glmColor"], "#d13f3f")
                 self.assertEqual(expected_two_line_state["gbmColor"], expected_two_line_state["accent"])

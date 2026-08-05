@@ -482,15 +482,6 @@
         background: color-mix(in srgb, var(--accent) 7%, transparent);
       }
 
-      #expectedList .feature:disabled {
-        cursor: not-allowed;
-        opacity: 0.45;
-      }
-
-      #expectedList .feature:disabled:hover {
-        background: transparent;
-      }
-
       #featureList .feature.active,
       #expectedList .feature.active {
         background: color-mix(in srgb, var(--accent) 18%, transparent);

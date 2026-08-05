@@ -184,6 +184,55 @@ if (!isEchartsTargetReady(target(true, 640, 480))) throw new Error("positive con
 """
         self.run_node_script(script)
 
+    def test_line_bar_importance_model_order_follows_expected_model_family(self) -> None:
+        module = Path("src/py_lucidum/static/app/line-bar-tool.js").resolve().as_uri()
+        script = f"""
+import {{ lineBarImportanceModelOrder }} from "{module}";
+const order = (selections) => lineBarImportanceModelOrder(selections).join("|");
+const dataset = {{ value: "benchmark", sourceId: "dataset", metricKind: "metric" }};
+const datasetNamedLikeGlm = {{ value: "glm_prediction", sourceId: "dataset", metricKind: "metric" }};
+const glm = (value) => ({{ value, sourceId: "glm:model:predictions", metricKind: "prediction" }});
+const gbm = (value) => ({{ value, sourceId: "gbm:model:predictions", metricKind: "prediction" }});
+if (order([]) !== "gbm|glm") throw new Error("empty Expected order failed");
+if (order([dataset]) !== "gbm|glm") throw new Error("dataset-only Expected order failed");
+if (order([datasetNamedLikeGlm]) !== "gbm|glm") throw new Error("dataset column name should not identify a model family");
+if (order([dataset, glm("glm_prediction")]) !== "glm|gbm") throw new Error("dataset plus GLM order failed");
+if (order([glm("glm_prediction")]) !== "glm|gbm") throw new Error("GLM prediction order failed");
+if (order([glm("glm_prediction_rate")]) !== "glm|gbm") throw new Error("GLM rate order failed");
+if (order([glm("glm_tabulated_prediction")]) !== "glm|gbm") throw new Error("GLM tabulated order failed");
+if (order([gbm("gbm_prediction")]) !== "gbm|glm") throw new Error("GBM prediction order failed");
+if (order([gbm("gbm_prediction_rate")]) !== "gbm|glm") throw new Error("GBM rate order failed");
+if (order([gbm("gbm_tabulated_prediction")]) !== "gbm|glm") throw new Error("GBM tabulated order failed");
+if (order([glm("glm_prediction"), gbm("gbm_prediction")]) !== "gbm|glm") throw new Error("mixed model order failed");
+"""
+        self.run_node_script(script)
+
+    def test_line_bar_expected_selection_helper_distinguishes_ordinary_and_additive_clicks(self) -> None:
+        module = Path("src/py_lucidum/static/app/line-bar-tool.js").resolve().as_uri()
+        script = f"""
+import {{ lineBarAdditiveSelectionRequested, nextLineBarExpectedSelections }} from "{module}";
+const a = {{ value: "a", sourceId: "dataset", metricKind: "metric" }};
+const b = {{ value: "b", sourceId: "dataset", metricKind: "metric" }};
+const c = {{ value: "c", sourceId: "dataset", metricKind: "metric" }};
+const values = (selections) => selections.map((selection) => selection.value).join("|");
+if (values(nextLineBarExpectedSelections([], a)) !== "a") throw new Error("ordinary initial selection failed");
+if (values(nextLineBarExpectedSelections([a], b)) !== "b") throw new Error("ordinary replacement failed");
+if (values(nextLineBarExpectedSelections([a, b], b)) !== "b") throw new Error("ordinary pair collapse failed");
+const sole = [a];
+if (nextLineBarExpectedSelections(sole, a) !== sole) throw new Error("ordinary active row should be unchanged");
+if (nextLineBarExpectedSelections(sole, a, {{ additive: true }}) !== sole) throw new Error("additive sole removal should be rejected");
+const pair = nextLineBarExpectedSelections(sole, b, {{ additive: true }});
+if (values(pair) !== "a|b") throw new Error("additive second selection failed");
+if (values(nextLineBarExpectedSelections(pair, a, {{ additive: true }})) !== "b") throw new Error("additive first removal failed");
+if (nextLineBarExpectedSelections(pair, c, {{ additive: true }}) !== pair) throw new Error("additive third selection should be rejected");
+if (values(nextLineBarExpectedSelections(pair, null)) !== "") throw new Error("explicit clear failed");
+if (!lineBarAdditiveSelectionRequested({{ metaKey: true }}, "MacIntel")) throw new Error("macOS Command modifier failed");
+if (lineBarAdditiveSelectionRequested({{ ctrlKey: true }}, "MacIntel")) throw new Error("macOS Ctrl should not be additive");
+if (!lineBarAdditiveSelectionRequested({{ ctrlKey: true }}, "Linux x86_64")) throw new Error("Linux Ctrl modifier failed");
+if (!lineBarAdditiveSelectionRequested({{ ctrlKey: true }}, "Win32")) throw new Error("Windows Ctrl modifier failed");
+"""
+        self.run_node_script(script)
+
     def test_two_feature_line_bar_chart_options_follow_feature_axis_ordering(self) -> None:
         module = Path("src/py_lucidum/static/app/line-bar-two-feature-chart.js").resolve().as_uri()
         script = f"""
