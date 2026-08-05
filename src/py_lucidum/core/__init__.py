@@ -24,6 +24,7 @@ from .metrics import (
 from .metric_sources import (
     PRIMARY_MODEL_PREDICTION_COLUMNS,
     add_metric_field,
+    complete_source_relation_context,
     field_source_id,
     has_denominator_column,
     metric_relation_context,
@@ -78,6 +79,7 @@ __all__ = [
     "suggested_band_width",
     "weighted_value_sql",
     "add_metric_field",
+    "complete_source_relation_context",
     "field_source_id",
     "has_denominator_column",
     "PRIMARY_MODEL_PREDICTION_COLUMNS",

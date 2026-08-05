@@ -17734,6 +17734,118 @@ COPY (
                 server.should_exit = True
                 thread.join(timeout=5)
 
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_selecting_shap_numerator_populates_line_bar_and_uk_map(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "shap_numerator.csv"
+            data_path.write_text(
+                "actualNumerator,denominator,Age,Segment,PostcodeArea,PostcodeSector,PostcodeUnit,lat,long,SAMPLE\n"
+                "10,100,30,A,AB,AB10 1,AB10 1AA,57.1,-2.1,training\n"
+                "20,200,40,B,AB,AB10 1,AB10 1AB,57.2,-2.2,test\n"
+                "30,300,50,A,AL,AL1 1,AL1 1AA,51.7,-0.4,training\n"
+                "40,400,60,B,AL,AL1 2,AL1 2AA,51.8,-0.3,test\n",
+                encoding="utf-8",
+            )
+            store = GbmModelStore(data_path)
+            model_id = "shap-numerator-model"
+            self.write_gbm_prediction_model(
+                store,
+                model_id,
+                "SHAP numerator model",
+                "2026-08-05T00:00:00Z",
+                [1.0, 2.0, 3.0, 4.0],
+            )
+            store.activate_model(model_id)
+            shap_source = f"gbm:{model_id}:shap_long"
+            base_url, server, thread = self.start_app(
+                data_path,
+                defaults={"x": "Segment", "actual": "actualNumerator", "denominator": "__none__"},
+                tools=["line_bar", "uk_map", "gbm"],
+                use_features=False,
+                use_kpis=False,
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    try:
+                        page.goto(f"{base_url}/?tool=line_bar", wait_until="domcontentloaded")
+                        page.wait_for_function(
+                            '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
+                            timeout=10_000,
+                        )
+                        page.locator('#actualNumerator option[value="SHAP__Age"]').wait_for(
+                            state="attached",
+                            timeout=10_000,
+                        )
+
+                        with page.expect_response(
+                            lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                            timeout=10_000,
+                        ) as chart_response_info, page.expect_response(
+                            lambda response: response.url.endswith("/api/metrics/summary") and response.status == 200,
+                            timeout=10_000,
+                        ) as metric_response_info:
+                            page.locator("#actualNumerator").select_option("SHAP__Age")
+
+                        chart_response = chart_response_info.value
+                        chart_request = json.loads(chart_response.request.post_data or "{}")
+                        chart_payload = chart_response.json()
+                        metric_payload = metric_response_info.value.json()
+                        self.assertEqual(chart_request["source"], shap_source)
+                        self.assertEqual(chart_request["xSource"], "dataset")
+                        self.assertEqual(chart_request["responses"][0]["numerator"], "SHAP__Age")
+                        self.assertEqual(chart_payload["field_sources"]["responses"], [shap_source])
+                        self.assertTrue(chart_payload["responses"])
+                        self.assertTrue(any(row["resp0"] is not None for row in chart_payload["rows"]))
+                        self.assertIsNotNone(metric_payload["response_summaries"][0]["value"])
+                        page.wait_for_function(
+                            """
+                            () => {
+                              const chart = window.echarts.getInstanceByDom(document.querySelector("#chart"));
+                              return (chart?.getOption()?.series || []).some((series) =>
+                                series.name === "SHAP__Age"
+                                && (series.data || []).some((value) => {
+                                  const plotted = Array.isArray(value) ? value[1] : value;
+                                  return Number.isFinite(Number(plotted));
+                                })
+                              );
+                            }
+                            """,
+                            timeout=10_000,
+                        )
+
+                        with page.expect_response(
+                            lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200,
+                            timeout=10_000,
+                        ) as map_response_info:
+                            page.locator("#ukMapTool").click()
+                        map_response = map_response_info.value
+                        map_request = json.loads(map_response.request.post_data or "{}")
+                        map_payload = map_response.json()
+                        self.assertEqual(map_request["source"], shap_source)
+                        self.assertEqual(map_request["numerator"], "SHAP__Age")
+                        self.assertEqual({row["key"] for row in map_payload["rows"]}, {"AB", "AL"})
+                        self.assertTrue(all(row["value"] is not None for row in map_payload["rows"]))
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector("#mapGroupMeta")?.textContent.includes("areas matched")
+                              && Object.keys(document.querySelector("#ukMap")?._lucidumMap?._layers || {}).length > 0
+                            """,
+                            timeout=10_000,
+                        )
+                        self.assertNotIn("Map failed", page.locator("#mapGroupMeta").text_content())
+                        self.assertEqual(page_errors, [])
+                    finally:
+                        browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
     @staticmethod
     def start_app(
         data_path: Path,

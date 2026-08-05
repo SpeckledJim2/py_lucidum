@@ -58,11 +58,20 @@ def metric_relation_context(
     fields: Iterable[tuple[str, Any]] = (),
 ) -> dict[str, Any]:
     base_source = dataset.normalise_source(source_id)
+    requested_fields = list(fields)
+    complete_context = complete_source_relation_context(
+        dataset,
+        source_id=base_source,
+        fields=requested_fields,
+    )
+    if complete_context is not None:
+        return complete_context
+
     dataset_columns = dataset.column_map()
     columns = dict(dataset_columns)
     prediction_sources: dict[str, ModelPredictionSource] = {}
     resolved_sources: list[str] = []
-    for column_name, raw_source in fields:
+    for column_name, raw_source in requested_fields:
         resolved_source = field_source_id(dataset, raw_source, base_source)
         resolved_sources.append(resolved_source)
         add_metric_field(
@@ -87,6 +96,38 @@ def metric_relation_context(
         "columns": columns,
         "row_count": relation_row_count(dataset, relation),
         "field_sources": resolved_sources,
+    }
+
+
+def complete_source_relation_context(
+    dataset: Dataset,
+    *,
+    source_id: Any = None,
+    fields: Iterable[tuple[str, Any]] = (),
+) -> dict[str, Any] | None:
+    """Return one wide source when it contains all dataset/base-source fields."""
+    base_source = dataset.normalise_source(source_id)
+    if base_source != "dataset" and dataset.model_prediction_source(base_source) is not None:
+        return None
+
+    resolved_fields = [
+        (str(column_name or "").strip(), field_source_id(dataset, raw_source, base_source))
+        for column_name, raw_source in fields
+    ]
+    if any(source not in {"dataset", base_source} for _column, source in resolved_fields):
+        return None
+
+    columns = dataset.column_map_for_source(base_source)
+    if any(column_name and column_name not in columns for column_name, _source in resolved_fields):
+        return None
+
+    relation = dataset.relation_sql_for_source(base_source)
+    return {
+        "source_id": base_source,
+        "relation": relation,
+        "columns": columns,
+        "row_count": relation_row_count(dataset, relation),
+        "field_sources": [source for _column, source in resolved_fields],
     }
 
 

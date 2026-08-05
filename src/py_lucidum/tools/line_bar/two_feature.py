@@ -5,6 +5,7 @@ from typing import Any
 
 from py_lucidum.core import (
     ColumnInfo,
+    complete_source_relation_context,
     Dataset,
     ModelPredictionSource,
     denominator_exclusion_warnings,
@@ -253,19 +254,13 @@ def two_feature_context(
     columns = dict(dataset_columns)
     prediction_sources: dict[str, ModelPredictionSource] = {}
     grouping_sources: list[str] = []
+    requested_fields: list[tuple[str, str]] = []
     for raw in raw_groupings:
         item = raw if isinstance(raw, dict) else {}
         feature = str(item.get("feature") or "").strip()
         source = line_bar_query.field_source_id(dataset, item.get("source"), source_id)
         grouping_sources.append(source)
-        line_bar_query.add_field_column(
-            dataset,
-            columns,
-            dataset_columns,
-            prediction_sources,
-            feature,
-            source,
-        )
+        requested_fields.append((feature, source))
 
     response_sources: list[str] = []
     raw_responses = request.get("responses")
@@ -275,14 +270,7 @@ def two_feature_context(
                 continue
             source = line_bar_query.field_source_id(dataset, raw.get("source"), source_id)
             response_sources.append(source)
-            line_bar_query.add_field_column(
-                dataset,
-                columns,
-                dataset_columns,
-                prediction_sources,
-                str(raw.get("numerator") or ""),
-                source,
-            )
+            requested_fields.append((str(raw.get("numerator") or ""), source))
 
     raw_denominator = request.get("denominator", request.get("weight"))
     denominator_source = normalise_denominator_source(
@@ -291,13 +279,32 @@ def two_feature_context(
         raw_denominator,
     )
     if has_denominator_column(raw_denominator):
+        requested_fields.append((str(raw_denominator), denominator_source))
+
+    field_sources = {
+        "groupings": grouping_sources,
+        "responses": response_sources,
+        "denominator": denominator_source,
+    }
+    complete_context = complete_source_relation_context(
+        dataset,
+        source_id=source_id,
+        fields=requested_fields,
+    )
+    if complete_context is not None:
+        return {
+            **complete_context,
+            "field_sources": field_sources,
+        }
+
+    for column_name, field_source in requested_fields:
         line_bar_query.add_field_column(
             dataset,
             columns,
             dataset_columns,
             prediction_sources,
-            str(raw_denominator),
-            denominator_source,
+            column_name,
+            field_source,
         )
 
     relation = (
@@ -314,11 +321,7 @@ def two_feature_context(
         "relation": relation,
         "columns": columns,
         "row_count": line_bar_query.relation_row_count(dataset, relation),
-        "field_sources": {
-            "groupings": grouping_sources,
-            "responses": response_sources,
-            "denominator": denominator_source,
-        },
+        "field_sources": field_sources,
     }
 
 

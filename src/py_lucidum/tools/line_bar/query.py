@@ -6,6 +6,7 @@ from typing import Any
 
 from py_lucidum.core import (
     ColumnInfo,
+    complete_source_relation_context,
     Dataset,
     ModelPredictionSource,
     build_denominator_summary_sql,
@@ -1716,10 +1717,11 @@ def mixed_chart_context(dataset: Dataset, request: dict[str, Any], source_id: st
     columns = dict(dataset_columns)
     prediction_sources: dict[str, ModelPredictionSource] = {}
     field_sources: dict[str, Any] = {"x": "dataset", "responses": [], "denominator": "dataset"}
+    requested_fields: list[tuple[str, str]] = []
     x_col = str(request.get("x") or "")
     x_source = field_source_id(dataset, request.get("xSource"), source_id)
     field_sources["x"] = x_source
-    add_field_column(dataset, columns, dataset_columns, prediction_sources, x_col, x_source)
+    requested_fields.append((x_col, x_source))
     raw_responses = request.get("responses")
     if isinstance(raw_responses, list):
         for item in raw_responses:
@@ -1727,7 +1729,7 @@ def mixed_chart_context(dataset: Dataset, request: dict[str, Any], source_id: st
                 continue
             response_source = field_source_id(dataset, item.get("source"), source_id)
             field_sources["responses"].append(response_source)
-            add_field_column(dataset, columns, dataset_columns, prediction_sources, str(item.get("numerator") or ""), response_source)
+            requested_fields.append((str(item.get("numerator") or ""), response_source))
     raw_denominator = request.get("denominator", request.get("weight"))
     denominator_source = normalise_denominator_source(
         dataset,
@@ -1736,13 +1738,27 @@ def mixed_chart_context(dataset: Dataset, request: dict[str, Any], source_id: st
     )
     field_sources["denominator"] = denominator_source
     if has_denominator_column(raw_denominator):
+        requested_fields.append((str(raw_denominator), denominator_source))
+
+    complete_context = complete_source_relation_context(
+        dataset,
+        source_id=source_id,
+        fields=requested_fields,
+    )
+    if complete_context is not None:
+        return {
+            **complete_context,
+            "field_sources": field_sources,
+        }
+
+    for column_name, field_source in requested_fields:
         add_field_column(
             dataset,
             columns,
             dataset_columns,
             prediction_sources,
-            str(raw_denominator),
-            denominator_source,
+            column_name,
+            field_source,
         )
     relation = mixed_relation_sql(
         dataset,
