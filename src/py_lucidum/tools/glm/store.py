@@ -4,6 +4,7 @@ import json
 import math
 import re
 import shutil
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,6 +38,7 @@ SOURCE_KINDS = {
 }
 MODEL_ID_RE = re.compile(r"[A-Za-z0-9_.-]+")
 SOURCE_RE = re.compile(r"^glm:([A-Za-z0-9_.-]+):predictions$")
+_ACTIVE_MODEL_ID_UNSET = object()
 
 
 class GlmModelNameError(ValueError):
@@ -146,6 +148,11 @@ class GlmModelStore:
         self._workspace_stat_key: tuple[int, int] | None = None
         self._workspace_metadata: dict[str, Any] | None = None
         self._root: Path | None = None
+        self._model_state_lock = threading.RLock()
+
+    @property
+    def model_state_lock(self) -> Any:
+        return self._model_state_lock
 
     @property
     def root(self) -> Path:
@@ -232,47 +239,52 @@ class GlmModelStore:
         return str(model_id) if model_id else None
 
     def clear_active_model(self) -> None:
-        if self.active_path.exists():
-            self.active_path.unlink()
+        with self.model_state_lock:
+            if self.active_path.exists():
+                self.active_path.unlink()
 
     def activate_model(self, model_id: str) -> dict[str, Any]:
-        manifest = self.manifest(model_id)
-        self.ensure_root()
-        self.write_json(self.active_path, {"model_id": model_id, "activated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
-        return self.model_list_item(self.model_dir(model_id), manifest, model_id)
+        with self.model_state_lock:
+            manifest = self.manifest(model_id)
+            self.ensure_root()
+            self.write_json(self.active_path, {"model_id": model_id, "activated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+            return self.model_list_item(self.model_dir(model_id), manifest, model_id)
 
     def rename_model(self, model_id: str, new_model_id: str) -> dict[str, Any]:
-        old_id = self.validate_model_id(model_id)
-        new_id = self.validate_model_id(new_model_id, for_new_name=True)
-        manifest = self.manifest(old_id)
-        if new_id == old_id:
-            return self.activate_model(old_id) if self.active_model_id() == old_id else dict(manifest)
-        source = self.model_dir(old_id)
-        target = self.model_dir(new_id)
-        if target.exists():
-            raise GlmModelNameError(f"GLM model already exists: {new_id}")
-        source.rename(target)
-        renamed = self._renamed_manifest(manifest, old_id, new_id)
-        self.write_json(self.artifact_path(new_id, "manifest"), renamed)
-        if self.active_model_id() == old_id:
-            self.activate_model(new_id)
-            return self.model_list_item(target, renamed, new_id)
-        return self.model_list_item(target, renamed, self.active_model_id())
+        with self.model_state_lock:
+            old_id = self.validate_model_id(model_id)
+            new_id = self.validate_model_id(new_model_id, for_new_name=True)
+            manifest = self.manifest(old_id)
+            if new_id == old_id:
+                return self.activate_model(old_id) if self.active_model_id() == old_id else dict(manifest)
+            source = self.model_dir(old_id)
+            target = self.model_dir(new_id)
+            if target.exists():
+                raise GlmModelNameError(f"GLM model already exists: {new_id}")
+            source.rename(target)
+            renamed = self._renamed_manifest(manifest, old_id, new_id)
+            self.write_json(self.artifact_path(new_id, "manifest"), renamed)
+            if self.active_model_id() == old_id:
+                self.activate_model(new_id)
+                return self.model_list_item(target, renamed, new_id)
+            return self.model_list_item(target, renamed, self.active_model_id())
 
     def delete_model(self, model_id: str) -> dict[str, Any]:
-        deleted_id = self.validate_model_id(model_id)
-        manifest = self.manifest(deleted_id)
-        deleted = self.model_list_item(self.model_dir(deleted_id), manifest, self.active_model_id())
-        was_active = self.active_model_id() == deleted_id
-        shutil.rmtree(self.model_dir(deleted_id))
-        if was_active:
-            remaining = self.list_models()
-            next_id = str(remaining[0].get("model_id") or "") if remaining else ""
-            if next_id:
-                self.activate_model(next_id)
-            else:
-                self.clear_active_model()
-        return deleted
+        with self.model_state_lock:
+            deleted_id = self.validate_model_id(model_id)
+            manifest = self.manifest(deleted_id)
+            active_model_id = self.active_model_id()
+            deleted = self.model_list_item(self.model_dir(deleted_id), manifest, active_model_id)
+            was_active = active_model_id == deleted_id
+            shutil.rmtree(self.model_dir(deleted_id))
+            if was_active:
+                remaining = self.list_models()
+                next_id = str(remaining[0].get("model_id") or "") if remaining else ""
+                if next_id:
+                    self.activate_model(next_id)
+                else:
+                    self.clear_active_model()
+            return deleted
 
     def _renamed_manifest(self, manifest: dict[str, Any], old_id: str, new_id: str) -> dict[str, Any]:
         renamed = dict(manifest)
@@ -309,10 +321,10 @@ class GlmModelStore:
             sources["predictions"] = self.source_id(model_id)
         return sources
 
-    def list_models(self) -> list[dict[str, Any]]:
+    def list_models(self, *, active_model_id: str | None | object = _ACTIVE_MODEL_ID_UNSET) -> list[dict[str, Any]]:
         if not self.root.exists():
             return []
-        active = self.active_model_id()
+        active = self.active_model_id() if active_model_id is _ACTIVE_MODEL_ID_UNSET else active_model_id
         models: list[dict[str, Any]] = []
         for path in self.root.iterdir():
             manifest_path = path / ARTIFACT_FILES["manifest"]

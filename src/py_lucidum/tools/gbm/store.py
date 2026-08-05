@@ -4,6 +4,7 @@ import json
 import math
 import re
 import shutil
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -63,6 +64,7 @@ SOURCE_KINDS = {
 
 MODEL_ID_RE = re.compile(r"[A-Za-z0-9_.-]+")
 SOURCE_RE = re.compile(r"^gbm:([A-Za-z0-9_.-]+):(predictions|shap_long|shap_summary)$")
+_ACTIVE_MODEL_ID_UNSET = object()
 
 
 class GbmModelNameError(ValueError):
@@ -246,6 +248,11 @@ class GbmModelStore:
         self._workspace_stat_key: tuple[int, int] | None = None
         self._workspace_metadata: dict[str, Any] | None = None
         self._root: Path | None = None
+        self._model_state_lock = threading.RLock()
+
+    @property
+    def model_state_lock(self) -> Any:
+        return self._model_state_lock
 
     @property
     def root(self) -> Path:
@@ -341,10 +348,10 @@ class GbmModelStore:
         manifest.setdefault("training_mode", DEFAULT_TRAINING_MODE)
         return manifest
 
-    def list_models(self) -> list[dict[str, Any]]:
+    def list_models(self, *, active_model_id: str | None | object = _ACTIVE_MODEL_ID_UNSET) -> list[dict[str, Any]]:
         if not self.root.exists():
             return []
-        active = self.active_model_id()
+        active = self.active_model_id() if active_model_id is _ACTIVE_MODEL_ID_UNSET else active_model_id
         models: list[dict[str, Any]] = []
         for path in self.root.iterdir():
             manifest_path = path / ARTIFACT_FILES["manifest"]
@@ -481,47 +488,52 @@ class GbmModelStore:
         return str(model_id) if model_id else None
 
     def clear_active_model(self) -> None:
-        if self.active_path.exists():
-            self.active_path.unlink()
+        with self.model_state_lock:
+            if self.active_path.exists():
+                self.active_path.unlink()
 
     def activate_model(self, model_id: str) -> dict[str, Any]:
-        manifest = self.manifest(model_id)
-        self.ensure_root()
-        self.write_json(self.active_path, {"model_id": model_id, "activated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
-        return self.model_list_item(self.model_dir(model_id), manifest, model_id)
+        with self.model_state_lock:
+            manifest = self.manifest(model_id)
+            self.ensure_root()
+            self.write_json(self.active_path, {"model_id": model_id, "activated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+            return self.model_list_item(self.model_dir(model_id), manifest, model_id)
 
     def rename_model(self, model_id: str, new_model_id: str) -> dict[str, Any]:
-        new_id = self.validate_model_id(new_model_id, for_new_name=True)
-        old_id = self.validate_model_id(model_id)
-        manifest = self.manifest(old_id)
-        if new_id == old_id:
-            return self.model_list_item(self.model_dir(old_id), manifest, self.active_model_id())
-        source = self.model_dir(old_id)
-        target = self.model_dir(new_id)
-        if target.exists():
-            raise GbmModelNameError(f"GBM model already exists: {new_id}")
-        source.rename(target)
-        manifest = self._renamed_manifest(manifest, old_id, new_id)
-        self.write_json(self.artifact_path(new_id, "manifest"), manifest)
-        if self.active_model_id() == old_id:
-            self.activate_model(new_id)
-            return self.model_list_item(target, manifest, new_id)
-        return self.model_list_item(target, manifest, self.active_model_id())
+        with self.model_state_lock:
+            new_id = self.validate_model_id(new_model_id, for_new_name=True)
+            old_id = self.validate_model_id(model_id)
+            manifest = self.manifest(old_id)
+            if new_id == old_id:
+                return self.model_list_item(self.model_dir(old_id), manifest, self.active_model_id())
+            source = self.model_dir(old_id)
+            target = self.model_dir(new_id)
+            if target.exists():
+                raise GbmModelNameError(f"GBM model already exists: {new_id}")
+            source.rename(target)
+            manifest = self._renamed_manifest(manifest, old_id, new_id)
+            self.write_json(self.artifact_path(new_id, "manifest"), manifest)
+            if self.active_model_id() == old_id:
+                self.activate_model(new_id)
+                return self.model_list_item(target, manifest, new_id)
+            return self.model_list_item(target, manifest, self.active_model_id())
 
     def delete_model(self, model_id: str) -> dict[str, Any]:
-        deleted_id = self.validate_model_id(model_id)
-        manifest = self.manifest(deleted_id)
-        deleted = self.model_list_item(self.model_dir(deleted_id), manifest, self.active_model_id())
-        was_active = self.active_model_id() == deleted_id
-        shutil.rmtree(self.model_dir(deleted_id))
-        if was_active:
-            remaining = self.list_models()
-            next_id = str(remaining[0].get("model_id") or "") if remaining else ""
-            if next_id:
-                self.activate_model(next_id)
-            else:
-                self.clear_active_model()
-        return deleted
+        with self.model_state_lock:
+            deleted_id = self.validate_model_id(model_id)
+            manifest = self.manifest(deleted_id)
+            active_model_id = self.active_model_id()
+            deleted = self.model_list_item(self.model_dir(deleted_id), manifest, active_model_id)
+            was_active = active_model_id == deleted_id
+            shutil.rmtree(self.model_dir(deleted_id))
+            if was_active:
+                remaining = self.list_models()
+                next_id = str(remaining[0].get("model_id") or "") if remaining else ""
+                if next_id:
+                    self.activate_model(next_id)
+                else:
+                    self.clear_active_model()
+            return deleted
 
     def _renamed_manifest(self, manifest: dict[str, Any], old_id: str, new_id: str) -> dict[str, Any]:
         renamed = dict(manifest)
@@ -1020,7 +1032,13 @@ LEFT JOIN read_parquet({sql_literal(str(tabulated_path))}) tabulated USING (__lu
         except (duckdb.Error, FileNotFoundError, KeyError, ValueError):
             return dataset.schema_for_source(source_id)
 
-    def shap_overlay_source(self, model_id: str, dataset: Dataset | None = None) -> dict[str, Any] | None:
+    def shap_overlay_source(
+        self,
+        model_id: str,
+        dataset: Dataset | None = None,
+        *,
+        active_model_id: str | None | object = _ACTIVE_MODEL_ID_UNSET,
+    ) -> dict[str, Any] | None:
         try:
             manifest = self.store.manifest(model_id)
         except ValueError:
@@ -1031,11 +1049,12 @@ LEFT JOIN read_parquet({sql_literal(str(tabulated_path))}) tabulated USING (__lu
         prediction_path = self.store.source_path(model_id, "predictions")
         parameters = self.store.model_parameters(model_id)
         source_columns = list(dataset.column_map()) if dataset is not None else None
+        active = self.store.active_model_id() if active_model_id is _ACTIVE_MODEL_ID_UNSET else active_model_id
         return {
             "id": self.store.source_id(model_id, "shap_long"),
             "kind": SOURCE_KINDS["shap_long"]["kind"],
             "model_id": model_id,
-            "active": model_id == self.store.active_model_id(),
+            "active": model_id == active,
             "objective": str(parameters.get("objective") or manifest.get("objective") or ""),
             "prediction_source_id": self.store.source_id(model_id, "predictions"),
             "prediction_path": prediction_path,
@@ -1054,7 +1073,7 @@ LEFT JOIN read_parquet({sql_literal(str(tabulated_path))}) tabulated USING (__lu
         model_id = self.store.active_model_id()
         if not model_id:
             return None
-        return self.shap_overlay_source(model_id, dataset)
+        return self.shap_overlay_source(model_id, dataset, active_model_id=model_id)
 
     def data_sources(self, dataset: Dataset) -> list[dict[str, Any]]:
         sources: list[dict[str, Any]] = []

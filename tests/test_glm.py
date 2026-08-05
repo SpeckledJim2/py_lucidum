@@ -11,6 +11,7 @@ import pickle
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import unittest
 import warnings
@@ -667,6 +668,94 @@ if result.get("iteration") != 10:
         self.assertIn("tweedie", [row["value"] for row in payload["families"]])
         self.assertIn("regularization", payload)
         self.assertEqual(payload["regularization"]["auto_l1_ratio"], [0.0, 0.5, 1.0])
+
+    def test_glm_config_and_model_routes_snapshot_active_model(self) -> None:
+        store = GlmModelStore(self.data_path)
+        for model_id, created_at in (("glm-one", "2026-08-04T00:00:00Z"), ("glm-two", "2026-08-04T00:00:01Z")):
+            model_dir = store.create_model_dir(model_id)
+            store.write_json(
+                model_dir / "manifest.json",
+                {
+                    "model_id": model_id,
+                    "label": model_id,
+                    "created_at": created_at,
+                    "family": "normal",
+                    "link": "auto",
+                    "response_column": "actualNumerator",
+                    "denominator_column": "denominator",
+                },
+            )
+        store.activate_model("glm-one")
+        app = create_app(self.data_path, token="", tools=["glm", "line_bar"], use_saved_filters=False, use_kpis=False)
+        route_store = app.state.glm_store
+
+        for path in ("/api/glm/config", "/api/glm/models"):
+            active_reads = 0
+
+            def changing_active_model_id() -> str:
+                nonlocal active_reads
+                active_reads += 1
+                return "glm-one" if active_reads == 1 else "glm-two"
+
+            with patch.object(route_store, "active_model_id", side_effect=changing_active_model_id):
+                status, body = asgi_get(app, path)
+            payload = json.loads(body)
+            active_models = [model["model_id"] for model in payload["models"] if model["active"]]
+
+            self.assertEqual(status, 200)
+            self.assertEqual(active_reads, 1)
+            self.assertEqual(payload["active_model_id"], "glm-one")
+            self.assertEqual(active_models, ["glm-one"])
+
+    def test_glm_activation_response_precedes_competing_training_activation(self) -> None:
+        store = GlmModelStore(self.data_path)
+        for model_id, created_at in (
+            ("response-glm", "2026-08-04T00:00:00Z"),
+            ("training-glm", "2026-08-04T00:00:01Z"),
+        ):
+            model_dir = store.create_model_dir(model_id)
+            store.write_json(
+                model_dir / "manifest.json",
+                {
+                    "model_id": model_id,
+                    "label": model_id,
+                    "created_at": created_at,
+                    "family": "normal",
+                    "link": "auto",
+                    "response_column": "actualNumerator",
+                    "denominator_column": "denominator",
+                },
+            )
+        app = create_app(self.data_path, token="", tools=["glm", "line_bar"], use_saved_filters=False, use_kpis=False)
+        route_store = app.state.glm_store
+        competing_started = threading.Event()
+        competing_thread: list[threading.Thread] = []
+        original_active_model_id = route_store.active_model_id
+
+        def active_model_id_with_competing_activation() -> str | None:
+            if not competing_thread:
+                thread = threading.Thread(
+                    target=lambda: (competing_started.set(), route_store.activate_model("training-glm")),
+                    name="glm-training-completion",
+                )
+                competing_thread.append(thread)
+                thread.start()
+                self.assertTrue(competing_started.wait(timeout=2))
+            return original_active_model_id()
+
+        with patch.object(route_store, "active_model_id", side_effect=active_model_id_with_competing_activation):
+            status, body = asgi_post_json(app, "/api/glm/models/response-glm/activate", {})
+        competing_thread[0].join(timeout=2)
+        payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["model"]["model_id"], "response-glm")
+        self.assertEqual(payload["config"]["active_model_id"], "response-glm")
+        self.assertEqual(
+            [model["model_id"] for model in payload["config"]["models"] if model["active"]],
+            ["response-glm"],
+        )
+        self.assertEqual(route_store.active_model_id(), "training-glm")
 
     def test_glm_build_reports_actionable_missing_dependency(self) -> None:
         app = create_app(self.data_path, token="", tools=["glm", "line_bar"], use_saved_filters=False, use_kpis=False)

@@ -4,6 +4,7 @@ import asyncio
 import builtins
 import json
 import math
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -2727,6 +2728,69 @@ COPY (
         self.assertEqual(status, 200)
         self.assertNotIn("mean_abs_shap", features["Age"])
 
+    def test_gbm_config_snapshots_active_model_during_concurrent_activation(self) -> None:
+        store = self.write_model_artifacts()
+        second_dir = store.create_model_dir("m2")
+        store.write_json(
+            second_dir / "manifest.json",
+            {
+                "model_id": "m2",
+                "label": "Model 2",
+                "created_at": "2026-05-25T00:00:01Z",
+                "response_column": "actualNumerator",
+                "offset_column": "denominator",
+                "best_iteration": 3,
+                "training_rows": 2,
+                "test_rows": 1,
+            },
+        )
+        write_gbm_parameters(store, "m2", objective="gamma", metric="gamma")
+        write_gbm_feature_config(
+            store,
+            "m2",
+            [{"name": "lat", "kind": "numeric", "include": True, "monotonicity": "", "gain": 99.0}],
+        )
+        dataset = Dataset(self.data_path)
+        builder = GbmConfigBuilder(dataset, store)
+        active_reads = 0
+
+        def changing_active_model_id() -> str:
+            nonlocal active_reads
+            active_reads += 1
+            return "m1" if active_reads == 1 else "m2"
+
+        with patch.object(store, "active_model_id", side_effect=changing_active_model_id):
+            payload = builder.payload()
+
+        features = {row["name"]: row for row in payload["features"]}
+        active_models = [model["model_id"] for model in payload["models"] if model["active"]]
+
+        self.assertEqual(active_reads, 1)
+        self.assertEqual(payload["active_model_id"], "m1")
+        self.assertEqual(active_models, ["m1"])
+        self.assertTrue(features["Age"]["include"])
+        self.assertEqual(features["Age"]["mean_abs_shap"], 0.2)
+        self.assertFalse(features["lat"]["include"])
+        self.assertEqual(features["lat"]["gain"], 0.0)
+
+    def test_active_shap_overlay_uses_one_active_model_snapshot(self) -> None:
+        store = self.write_model_artifacts()
+        provider = GbmSourceProvider(store)
+        dataset = Dataset(self.data_path)
+        active_reads = 0
+
+        def changing_active_model_id() -> str | None:
+            nonlocal active_reads
+            active_reads += 1
+            return "m1" if active_reads == 1 else None
+
+        with patch.object(store, "active_model_id", side_effect=changing_active_model_id):
+            source = provider.active_shap_overlay_source(dataset)
+
+        self.assertEqual(active_reads, 1)
+        self.assertEqual(source["model_id"], "m1")
+        self.assertTrue(source["active"])
+
     def test_config_uses_active_model_parameters(self) -> None:
         store = self.write_model_artifacts()
         store.write_json(
@@ -2885,6 +2949,238 @@ COPY (
         self.assertFalse(features["Age"]["include"])
         self.assertTrue(features["Segment"]["include"])
         self.assertEqual(features["Segment"]["gain"], 4.0)
+
+    def test_gbm_activation_response_precedes_competing_training_activation(self) -> None:
+        store = GbmModelStore(self.data_path)
+        for model_id, feature_name, created_at in (
+            ("response-model", "Age", "2026-08-04T00:00:00Z"),
+            ("training-model", "Segment", "2026-08-04T00:00:01Z"),
+        ):
+            model_dir = store.create_model_dir(model_id)
+            store.write_json(
+                model_dir / "manifest.json",
+                {
+                    "model_id": model_id,
+                    "label": model_id,
+                    "created_at": created_at,
+                    "response_column": "actualNumerator",
+                    "offset_column": "denominator",
+                    "best_iteration": 3,
+                    "training_rows": 2,
+                    "test_rows": 1,
+                },
+            )
+            write_gbm_feature_config(
+                store,
+                model_id,
+                [{"name": feature_name, "kind": "numeric", "include": True, "monotonicity": "", "gain": 1.0}],
+            )
+            store.write_json(model_dir / "parameters.json", {"objective": "gamma", "metric": "gamma"})
+        app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
+        route_store = app.state.gbm_store
+        competing_started = threading.Event()
+        competing_thread: list[threading.Thread] = []
+        original_active_model_id = route_store.active_model_id
+
+        def active_model_id_with_competing_activation() -> str | None:
+            if not competing_thread:
+                thread = threading.Thread(
+                    target=lambda: (competing_started.set(), route_store.activate_model("training-model")),
+                    name="gbm-training-completion",
+                )
+                competing_thread.append(thread)
+                thread.start()
+                self.assertTrue(competing_started.wait(timeout=2))
+            return original_active_model_id()
+
+        with patch.object(route_store, "active_model_id", side_effect=active_model_id_with_competing_activation):
+            status, body = asgi_post_json(app, "/api/gbm/models/response-model/activate", {})
+        competing_thread[0].join(timeout=2)
+        payload = json.loads(body)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["model"]["model_id"], "response-model")
+        self.assertEqual(payload["config"]["active_model_id"], "response-model")
+        self.assertEqual(
+            [model["model_id"] for model in payload["config"]["models"] if model["active"]],
+            ["response-model"],
+        )
+        self.assertEqual(route_store.active_model_id(), "training-model")
+
+    def test_model_state_locks_serialize_conflicting_mutations(self) -> None:
+        def write_model(store: Any, model_id: str, created_at: str) -> None:
+            model_dir = store.create_model_dir(model_id)
+            store.write_json(
+                model_dir / "manifest.json",
+                {
+                    "model_id": model_id,
+                    "label": model_id,
+                    "created_at": created_at,
+                    "response_column": "actualNumerator",
+                    "denominator_column": "denominator",
+                    "offset_column": "denominator",
+                    "family": "normal",
+                    "link": "auto",
+                    "objective": "gamma",
+                    "metric": "gamma",
+                },
+            )
+
+        def run_thread(operation: Any, errors: list[BaseException]) -> None:
+            try:
+                operation()
+            except BaseException as exc:
+                errors.append(exc)
+
+        for store_class, prefix in ((GbmModelStore, "gbm-lock"), (GlmModelStore, "glm-lock")):
+            with self.subTest(store=prefix, conflict="training-user-activation"):
+                store = store_class(self.data_path)
+                trained_id = f"{prefix}-trained"
+                user_id = f"{prefix}-user"
+                write_model(store, trained_id, "2026-08-04T00:00:00Z")
+                write_model(store, user_id, "2026-08-04T00:00:01Z")
+                first_write_entered = threading.Event()
+                release_first_write = threading.Event()
+                second_write_entered = threading.Event()
+                errors: list[BaseException] = []
+                original_write_json = store.write_json
+
+                def controlled_activation_write(path: Path, payload: Any) -> None:
+                    if path == store.active_path and payload.get("model_id") == trained_id:
+                        first_write_entered.set()
+                        if not release_first_write.wait(timeout=2):
+                            raise AssertionError("timed out releasing training activation")
+                    elif path == store.active_path and payload.get("model_id") == user_id:
+                        second_write_entered.set()
+                    original_write_json(path, payload)
+
+                with patch.object(store, "write_json", side_effect=controlled_activation_write):
+                    training_thread = threading.Thread(
+                        target=run_thread,
+                        args=(lambda: store.activate_model(trained_id), errors),
+                    )
+                    training_thread.start()
+                    self.assertTrue(first_write_entered.wait(timeout=2))
+                    user_thread = threading.Thread(
+                        target=run_thread,
+                        args=(lambda: store.activate_model(user_id), errors),
+                    )
+                    user_thread.start()
+                    self.assertFalse(second_write_entered.wait(timeout=0.05))
+                    release_first_write.set()
+                    training_thread.join(timeout=2)
+                    user_thread.join(timeout=2)
+
+                self.assertEqual(errors, [])
+                self.assertTrue(second_write_entered.is_set())
+                self.assertEqual(store.active_model_id(), user_id)
+
+            with self.subTest(store=prefix, conflict="activate-delete"):
+                store = store_class(self.data_path)
+                baseline_id = f"{prefix}-baseline"
+                target_id = f"{prefix}-target"
+                write_model(store, baseline_id, "2026-08-04T00:00:02Z")
+                write_model(store, target_id, "2026-08-04T00:00:03Z")
+                store.activate_model(baseline_id)
+                activation_write_entered = threading.Event()
+                release_activation_write = threading.Event()
+                delete_manifest_entered = threading.Event()
+                errors = []
+                original_write_json = store.write_json
+                original_manifest = store.manifest
+
+                def controlled_activation_write(path: Path, payload: Any) -> None:
+                    if path == store.active_path and payload.get("model_id") == target_id:
+                        activation_write_entered.set()
+                        if not release_activation_write.wait(timeout=2):
+                            raise AssertionError("timed out releasing activation before delete")
+                    original_write_json(path, payload)
+
+                def controlled_manifest(model_id: str) -> dict[str, Any]:
+                    if threading.current_thread().name.endswith("-delete"):
+                        delete_manifest_entered.set()
+                    return original_manifest(model_id)
+
+                with (
+                    patch.object(store, "write_json", side_effect=controlled_activation_write),
+                    patch.object(store, "manifest", side_effect=controlled_manifest),
+                ):
+                    activation_thread = threading.Thread(
+                        target=run_thread,
+                        args=(lambda: store.activate_model(target_id), errors),
+                        name=f"{prefix}-activate",
+                    )
+                    activation_thread.start()
+                    self.assertTrue(activation_write_entered.wait(timeout=2))
+                    delete_thread = threading.Thread(
+                        target=run_thread,
+                        args=(lambda: store.delete_model(target_id), errors),
+                        name=f"{prefix}-delete",
+                    )
+                    delete_thread.start()
+                    self.assertFalse(delete_manifest_entered.wait(timeout=0.05))
+                    release_activation_write.set()
+                    activation_thread.join(timeout=2)
+                    delete_thread.join(timeout=2)
+
+                self.assertEqual(errors, [])
+                self.assertEqual(store.active_model_id(), baseline_id)
+                self.assertTrue(store.model_dir(baseline_id).exists())
+                self.assertFalse(store.model_dir(target_id).exists())
+
+            with self.subTest(store=prefix, conflict="rename-delete"):
+                store = store_class(self.data_path)
+                old_id = f"{prefix}-old"
+                new_id = f"{prefix}-new"
+                write_model(store, old_id, "2026-08-04T00:00:04Z")
+                store.activate_model(old_id)
+                rename_manifest_entered = threading.Event()
+                release_rename_manifest = threading.Event()
+                delete_manifest_entered = threading.Event()
+                rename_errors: list[BaseException] = []
+                delete_errors: list[BaseException] = []
+                original_write_json = store.write_json
+                original_manifest = store.manifest
+
+                def controlled_rename_write(path: Path, payload: Any) -> None:
+                    if path == store.artifact_path(new_id, "manifest"):
+                        rename_manifest_entered.set()
+                        if not release_rename_manifest.wait(timeout=2):
+                            raise AssertionError("timed out releasing rename before delete")
+                    original_write_json(path, payload)
+
+                def controlled_manifest(model_id: str) -> dict[str, Any]:
+                    if threading.current_thread().name.endswith("-delete"):
+                        delete_manifest_entered.set()
+                    return original_manifest(model_id)
+
+                with (
+                    patch.object(store, "write_json", side_effect=controlled_rename_write),
+                    patch.object(store, "manifest", side_effect=controlled_manifest),
+                ):
+                    rename_thread = threading.Thread(
+                        target=run_thread,
+                        args=(lambda: store.rename_model(old_id, new_id), rename_errors),
+                    )
+                    rename_thread.start()
+                    self.assertTrue(rename_manifest_entered.wait(timeout=2))
+                    delete_thread = threading.Thread(
+                        target=run_thread,
+                        args=(lambda: store.delete_model(old_id), delete_errors),
+                        name=f"{prefix}-delete",
+                    )
+                    delete_thread.start()
+                    self.assertFalse(delete_manifest_entered.wait(timeout=0.05))
+                    release_rename_manifest.set()
+                    rename_thread.join(timeout=2)
+                    delete_thread.join(timeout=2)
+
+                self.assertEqual(rename_errors, [])
+                self.assertEqual(len(delete_errors), 1)
+                self.assertIsInstance(delete_errors[0], ValueError)
+                self.assertFalse(store.model_dir(old_id).exists())
+                self.assertTrue(store.model_dir(new_id).exists())
+                self.assertEqual(store.active_model_id(), new_id)
 
     def test_rename_active_model_updates_folder_computed_sources_and_schema(self) -> None:
         store = self.write_model_artifacts()

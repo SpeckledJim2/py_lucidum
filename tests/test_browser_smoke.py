@@ -13320,6 +13320,228 @@ COPY (
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_gbm_model_state_ignores_stale_config_and_detail_responses_across_windows(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "gbm_model_state_race.csv"
+            data_path.write_text(
+                "actualNumerator,denominator,Age,Segment,SAMPLE\n"
+                "10,100,30,A,training\n"
+                "20,200,40,B,test\n"
+                "30,300,50,C,training\n",
+                encoding="utf-8",
+            )
+            store = GbmModelStore(data_path)
+            self.write_gbm_prediction_model(
+                store,
+                "race-model-a",
+                "Race model A",
+                "2026-08-04T00:00:00Z",
+                [1.0, 2.0, 3.0],
+            )
+            self.write_gbm_prediction_model(
+                store,
+                "race-model-b",
+                "Race model B",
+                "2026-08-04T00:00:01Z",
+                [101.0, 201.0, 301.0],
+            )
+            store.write_json(
+                store.artifact_path("race-model-a", "parameters"),
+                {"objective": "gamma", "metric": "gamma", "learning_rate": 0.11, "num_iterations": 3},
+            )
+            store.write_json(
+                store.artifact_path("race-model-b", "parameters"),
+                {"objective": "gamma", "metric": "gamma", "learning_rate": 0.22, "num_iterations": 3},
+            )
+            write_gbm_feature_config(
+                store,
+                "race-model-b",
+                [{"name": "Segment", "kind": "categorical", "include": True, "gain": 9.0, "mean_abs_shap": 0.9}],
+            )
+            con = duckdb.connect(database=":memory:")
+            try:
+                con.execute(
+                    f"""
+COPY (
+  SELECT 1 AS __lucidum_row_id, 0.1 AS Segment
+  UNION ALL SELECT 2, 0.2
+  UNION ALL SELECT 3, 0.3
+) TO {sql_literal(str(store.artifact_path("race-model-b", "shap_long")))} (FORMAT PARQUET)
+"""
+                )
+                con.execute(
+                    f"""
+COPY (
+  SELECT 'Segment' AS feature, 0.9 AS mean_abs_shap, 0.2 AS mean_shap, 3 AS row_count
+) TO {sql_literal(str(store.artifact_path("race-model-b", "shap_summary")))} (FORMAT PARQUET)
+"""
+                )
+            finally:
+                con.close()
+            store.activate_model("race-model-a")
+            base_url, server, thread = self.start_app(
+                data_path,
+                defaults={"x": "Age", "actual": "actualNumerator", "denominator": "denominator"},
+                tools=["line_bar", "gbm"],
+                use_features=False,
+            )
+            held_detail: dict[str, Any] = {}
+            held_config: dict[str, Any] = {}
+            detail_held_once = False
+            config_held_once = False
+
+            def release_held(held: dict[str, Any]) -> None:
+                route = held.pop("route", None)
+                if route is None:
+                    return
+                route.fulfill(
+                    status=held.pop("status"),
+                    headers=held.pop("headers"),
+                    body=held.pop("body"),
+                )
+
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page_a = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    page_a.on("pageerror", lambda error: page_errors.append(f"window A: {error}"))
+
+                    def hold_old_detail(route: Any) -> None:
+                        nonlocal detail_held_once
+                        if detail_held_once:
+                            route.continue_()
+                            return
+                        detail_held_once = True
+                        response = route.fetch()
+                        held_detail.update(
+                            route=route,
+                            status=response.status,
+                            headers=response.headers,
+                            body=response.body(),
+                        )
+
+                    page_a.route("**/api/gbm/models/race-model-a", hold_old_detail)
+                    page_a.goto(f"{base_url}/?tool=gbm", wait_until="domcontentloaded")
+                    page_a.locator("#gbmFeatureGrid .tabulator-row", has_text="Age").wait_for(timeout=10_000)
+                    for _ in range(100):
+                        if held_detail:
+                            break
+                        page_a.wait_for_timeout(20)
+                    self.assertTrue(held_detail)
+
+                    def hold_old_config(route: Any) -> None:
+                        nonlocal config_held_once
+                        if config_held_once:
+                            route.continue_()
+                            return
+                        config_held_once = True
+                        response = route.fetch()
+                        held_config.update(
+                            route=route,
+                            status=response.status,
+                            headers=response.headers,
+                            body=response.body(),
+                        )
+
+                    page_a.route("**/api/gbm/config", hold_old_config)
+                    page_a.get_by_role("tab", name="Model navigator").click()
+                    page_a.locator("#gbmModelGrid .tabulator-row", has_text="Race model B").wait_for(timeout=10_000)
+                    for _ in range(100):
+                        if held_config:
+                            break
+                        page_a.wait_for_timeout(20)
+                    self.assertTrue(held_config)
+
+                    page_a.locator("#gbmModelGrid .tabulator-row", has_text="Race model B").click()
+                    page_a.locator("#gbmActivateModelBtn").click()
+                    page_a.locator("#gbmModelSelectedMeta", has_text="Race model B").wait_for(timeout=10_000)
+                    page_a.wait_for_function(
+                        """
+                        () => {
+                          const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmEvaluationChart"));
+                          return chart?.getOption()?.series?.some(
+                            (series) => series.data.some((point) => Number(point[1]) > 100)
+                          );
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+
+                    release_held(held_config)
+                    release_held(held_detail)
+                    page_a.wait_for_timeout(150)
+                    page_a.get_by_role("tab", name="Features and parameters").click()
+                    page_a.wait_for_function(
+                        """
+                        () => {
+                          const rows = [...document.querySelectorAll("#gbmFeatureGrid .tabulator-row")];
+                          const segment = rows.find((row) => row.textContent.includes("Segment"));
+                          const age = rows.find((row) => row.textContent.includes("Age"));
+                          const learningRate = [...document.querySelectorAll("#gbmParameterGrid .tabulator-row")]
+                            .find((row) => row.textContent.includes("learning_rate"));
+                          const chart = window.echarts.getInstanceByDom(document.querySelector("#gbmEvaluationChart"));
+                          return segment?.querySelector(".gbm-use-checkbox")?.checked === true
+                            && age?.querySelector(".gbm-use-checkbox")?.checked === false
+                            && learningRate?.textContent.includes("0.22")
+                            && chart?.getOption()?.series?.some(
+                              (series) => series.data.some((point) => Number(point[1]) > 100)
+                            );
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    page_a.get_by_role("tab", name="SHAP", exact=True).click()
+                    page_a.wait_for_function(
+                        """
+                        () => document.querySelector("#gbmShapFeatureList1 .feature.active")
+                          ?.textContent.includes("Segment")
+                        """,
+                        timeout=10_000,
+                    )
+                    self.assertEqual(store.active_model_id(), "race-model-b")
+
+                    page_b = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_b.on("pageerror", lambda error: page_errors.append(f"window B: {error}"))
+                    page_b.goto(f"{base_url}/?tool=gbm", wait_until="domcontentloaded")
+                    if page_b.locator("#gbmModelCollapseBtn").get_attribute("aria-expanded") == "false":
+                        page_b.locator("#gbmModelCollapseBtn").click()
+                    page_b.locator('#gbmModelSelect [data-gbm-model-id="race-model-a"]').click()
+                    page_b.locator("#gbmModelSelectedMeta", has_text="Race model A").wait_for(timeout=10_000)
+                    self.assertEqual(store.active_model_id(), "race-model-a")
+
+                    page_a.get_by_role("tab", name="Model navigator").click()
+                    page_a.locator("#gbmModelSelectedMeta", has_text="Race model A").wait_for(timeout=10_000)
+                    page_a.get_by_role("tab", name="Features and parameters").click()
+                    page_a.wait_for_function(
+                        """
+                        () => {
+                          const rows = [...document.querySelectorAll("#gbmFeatureGrid .tabulator-row")];
+                          const age = rows.find((row) => row.textContent.includes("Age"));
+                          const segment = rows.find((row) => row.textContent.includes("Segment"));
+                          const learningRate = [...document.querySelectorAll("#gbmParameterGrid .tabulator-row")]
+                            .find((row) => row.textContent.includes("learning_rate"));
+                          return age?.querySelector(".gbm-use-checkbox")?.checked === true
+                            && segment?.querySelector(".gbm-use-checkbox")?.checked === false
+                            && learningRate?.textContent.includes("0.11");
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                try:
+                    release_held(held_config)
+                    release_held(held_detail)
+                except Exception:
+                    pass
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_line_bar_shap_ribbon_stays_bound_when_another_window_activates_a_gbm(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "two_window_shap.csv"
@@ -13807,6 +14029,202 @@ COPY (
                             denominator="den_b",
                             expected="gbm_prediction",
                             expected_source="gbm:metric-gbm-b:predictions",
+                        )
+                        self.assertEqual(page_errors, [])
+                    finally:
+                        browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_glm_builder_refreshes_after_activation_from_tabulations(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "glm_builder_tabulations.csv"
+            data_path.write_text(
+                "num_a,num_b,den,Age,Segment,SAMPLE\n"
+                "10,100,1,30,A,training\n"
+                "20,200,2,40,B,test\n"
+                "30,300,3,50,C,training\n",
+                encoding="utf-8",
+            )
+            store = GlmModelStore(data_path)
+            self.write_glm_prediction_model(
+                store,
+                "builder-glm-a",
+                "Builder GLM A",
+                "2026-08-04T00:00:00Z",
+                [11, 21, 31],
+                formula="1",
+                family="tweedie",
+                family_parameter=1.5,
+                response_column="num_a",
+                denominator_column="den",
+                aic=111.11,
+                deviance=77.77,
+                dispersion=1.11,
+                coefficient_rows=1,
+            )
+            self.write_glm_tabulation_artifacts(store, "builder-glm-a", offset=0.1)
+            self.write_glm_prediction_model(
+                store,
+                "builder-glm-b",
+                "Builder GLM B",
+                "2026-08-04T00:00:01Z",
+                [101, 201, 301],
+                formula="1 + Age + C(Segment)",
+                family="poisson",
+                family_parameter=None,
+                response_column="num_b",
+                denominator_column="den",
+                aic=222.22,
+                deviance=88.88,
+                dispersion=2.22,
+                coefficient_rows=3,
+            )
+            self.write_glm_tabulation_artifacts(store, "builder-glm-b", include_segment=True, offset=0.2)
+            store.activate_model("builder-glm-a")
+
+            base_url, server, thread = self.start_app(
+                data_path,
+                tools=["line_bar", "glm"],
+                defaults={"x": "Age", "actual": "num_a", "denominator": "den"},
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+
+                    def builder_state() -> dict[str, Any]:
+                        return page.evaluate(
+                            """
+                            () => {
+                              const editorNode = document.querySelector("#glmFormulaEditor");
+                              const formula = editorNode?.env?.editor?.getValue?.()
+                                ?? document.querySelector("#glmFormulaText")?.value
+                                ?? "";
+                              const visibleFormula = editorNode?.env?.editor
+                                ? [...editorNode.querySelectorAll(".ace_text-layer .ace_line")]
+                                  .map((line) => line.textContent).join("\\n")
+                                : document.querySelector("#glmFormulaText")?.value ?? "";
+                              const coefficientRows = [...document.querySelectorAll("#glmCoefficientTable tbody tr")]
+                                .filter((row) => !row.querySelector(".glm-empty-cell")).length;
+                              return {
+                                selectedModel: document.querySelector("#glmModelSelectedMeta")?.textContent.trim() || "",
+                                numerator: document.querySelector("#actualNumerator")?.value || "",
+                                denominator: document.querySelector("#denominator")?.value || "",
+                                family: document.querySelector("#glmFamilySelect")?.value || "",
+                                formula,
+                                visibleFormula,
+                                diagnostics: document.querySelector("#glmCoefficientMeta")?.textContent.replace(/\\s+/g, " ").trim() || "",
+                                coefficientRows,
+                              };
+                            }
+                            """
+                        )
+
+                    try:
+                        page.goto(f"{base_url}/?tool=glm", wait_until="domcontentloaded")
+                        page.locator("#modelToolWrap:not(.hidden) .glm-tool").wait_for(timeout=10_000)
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector("#glmModelSelectedMeta")?.textContent.includes("Builder GLM A")
+                              && document.querySelector("#glmFamilySelect")?.value === "tweedie"
+                              && document.querySelector("#glmCoefficientMeta")?.textContent.includes("AIC: 111.11")
+                              && [...document.querySelectorAll("#glmCoefficientTable tbody tr")]
+                                .filter((row) => !row.querySelector(".glm-empty-cell")).length === 1
+                            """,
+                            timeout=10_000,
+                        )
+                        self.assertEqual(
+                            builder_state(),
+                            {
+                                "selectedModel": "Builder GLM A",
+                                "numerator": "num_a",
+                                "denominator": "den",
+                                "family": "tweedie",
+                                "formula": "1",
+                                "visibleFormula": "1",
+                                "diagnostics": "Deviance: 77.77AIC: 111.11Dispersion: 1.11",
+                                "coefficientRows": 1,
+                            },
+                        )
+
+                        if page.locator("#glmModelCollapseBtn").get_attribute("aria-expanded") == "false":
+                            page.locator("#glmModelCollapseBtn").click()
+                        page.get_by_role("tab", name="Tabulations").click()
+                        page.locator("#glmTabulationsPanel").wait_for(state="visible", timeout=10_000)
+                        target = page.locator('[data-glm-model-id="builder-glm-b"]')
+                        if target.evaluate("node => node.hidden"):
+                            group = target.get_attribute("data-glm-model-group")
+                            page.evaluate(
+                                """
+                                (group) => [...document.querySelectorAll(".glm-model-theme")]
+                                  .find((node) => node.dataset.glmModelGroup === group)?.click()
+                                """,
+                                group,
+                            )
+                        with page.expect_response("**/api/glm/models/builder-glm-b/activate", timeout=10_000):
+                            target.click()
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector("#glmModelSelectedMeta")?.textContent.includes("Builder GLM B")
+                              && document.querySelector("#actualNumerator")?.value === "num_b"
+                              && document.querySelector("#denominator")?.value === "den"
+                            """,
+                            timeout=10_000,
+                        )
+                        self.wait_for_app_ready(page)
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector("#glmFamilySelect")?.value === "poisson"
+                              && document.querySelector("#glmFormulaEditor")?.env?.editor?.getValue?.() === "1 + Age + C(Segment)"
+                              && document.querySelector("#glmCoefficientMeta")?.textContent.includes("AIC: 222.22")
+                              && [...document.querySelectorAll("#glmCoefficientTable tbody tr")]
+                                .filter((row) => !row.querySelector(".glm-empty-cell")).length === 3
+                            """,
+                            timeout=3_000,
+                        )
+
+                        page.get_by_role("tab", name="Formula builder").click()
+                        page.wait_for_function(
+                            """
+                            () => {
+                              const editorNode = document.querySelector("#glmFormulaEditor");
+                              const formula = editorNode?.env?.editor?.getValue?.()
+                                ?? document.querySelector("#glmFormulaText")?.value
+                                ?? "";
+                              const visibleFormula = editorNode?.env?.editor
+                                ? [...editorNode.querySelectorAll(".ace_text-layer .ace_line")]
+                                  .map((line) => line.textContent).join("\\n")
+                                : document.querySelector("#glmFormulaText")?.value ?? "";
+                              return document.querySelector("#glmFamilySelect")?.value === "poisson"
+                                && formula === "1 + Age + C(Segment)"
+                                && visibleFormula === "1 + Age + C(Segment)"
+                                && document.querySelector("#glmCoefficientMeta")?.textContent.includes("AIC: 222.22")
+                                && [...document.querySelectorAll("#glmCoefficientTable tbody tr")]
+                                  .filter((row) => !row.querySelector(".glm-empty-cell")).length === 3;
+                            }
+                            """,
+                            timeout=3_000,
+                        )
+                        page.wait_for_timeout(1_100)
+                        self.assertEqual(
+                            builder_state(),
+                            {
+                                "selectedModel": "Builder GLM B",
+                                "numerator": "num_b",
+                                "denominator": "den",
+                                "family": "poisson",
+                                "formula": "1 + Age + C(Segment)",
+                                "visibleFormula": "1 + Age + C(Segment)",
+                                "diagnostics": "Deviance: 88.88AIC: 222.22Dispersion: 2.22",
+                                "coefficientRows": 3,
+                            },
                         )
                         self.assertEqual(page_errors, [])
                     finally:
@@ -17492,12 +17910,16 @@ COPY (
         n_interactions: int | None = None,
         response_column: str = "actualNumerator",
         denominator_column: str = "denominator",
+        aic: float = 123.45,
+        deviance: float = 67.89,
+        dispersion: float = 1.2,
+        coefficient_rows: int = 3,
     ) -> None:
         model_dir = store.create_model_dir(model_id)
         diagnostics = {
-            "aic": 123.45,
-            "deviance": 67.89,
-            "dispersion": 1.2,
+            "aic": aic,
+            "deviance": deviance,
+            "dispersion": dispersion,
             "na_in_fitted": 0,
             "training_rows": 2,
             "scored_rows": len(predictions),
@@ -17529,6 +17951,12 @@ COPY (
             f"SELECT {index + 1} AS __lucidum_row_id, {float(value)} AS glm_prediction"
             for index, value in enumerate(predictions)
         )
+        coefficient_selects = [
+            "SELECT '(Intercept)' AS term, []::VARCHAR[] AS features, 0.1::DOUBLE AS estimate, 0.01::DOUBLE AS std_error, 10.0::DOUBLE AS statistic, 0.001::DOUBLE AS p_value, 0.08::DOUBLE AS ci_lower, 0.12::DOUBLE AS ci_upper",
+            "SELECT 'Age' AS term, ['Age']::VARCHAR[] AS features, 0.2::DOUBLE AS estimate, 0.02::DOUBLE AS std_error, 10.0::DOUBLE AS statistic, 0.001::DOUBLE AS p_value, 0.16::DOUBLE AS ci_lower, 0.24::DOUBLE AS ci_upper",
+            "SELECT 'Age:Segment[A]' AS term, ['Age', 'Segment']::VARCHAR[] AS features, 0.3::DOUBLE AS estimate, 0.03::DOUBLE AS std_error, 10.0::DOUBLE AS statistic, 0.001::DOUBLE AS p_value, 0.24::DOUBLE AS ci_lower, 0.36::DOUBLE AS ci_upper",
+        ]
+        coefficient_sql = " UNION ALL ".join(coefficient_selects[:max(1, min(3, coefficient_rows))])
         con = duckdb.connect(database=":memory:")
         try:
             con.execute(
@@ -17541,11 +17969,7 @@ COPY (
             con.execute(
                 f"""
 COPY (
-  SELECT '(Intercept)' AS term, []::VARCHAR[] AS features, 0.1::DOUBLE AS estimate, 0.01::DOUBLE AS std_error, 10.0::DOUBLE AS statistic, 0.001::DOUBLE AS p_value, 0.08::DOUBLE AS ci_lower, 0.12::DOUBLE AS ci_upper
-  UNION ALL
-  SELECT 'Age' AS term, ['Age']::VARCHAR[] AS features, 0.2::DOUBLE AS estimate, 0.02::DOUBLE AS std_error, 10.0::DOUBLE AS statistic, 0.001::DOUBLE AS p_value, 0.16::DOUBLE AS ci_lower, 0.24::DOUBLE AS ci_upper
-  UNION ALL
-  SELECT 'Age:Segment[A]' AS term, ['Age', 'Segment']::VARCHAR[] AS features, 0.3::DOUBLE AS estimate, 0.03::DOUBLE AS std_error, 10.0::DOUBLE AS statistic, 0.001::DOUBLE AS p_value, 0.24::DOUBLE AS ci_lower, 0.36::DOUBLE AS ci_upper
+  {coefficient_sql}
 ) TO {sql_literal(str(model_dir / "coefficients.parquet"))} (FORMAT PARQUET)
 """
             )
@@ -29844,7 +30268,8 @@ COPY (
                 group_model_option = page.locator("[data-gbm-create-interaction-group-models]")
                 self.assertTrue(group_model_option.is_checked())
                 self.assertTrue(group_model_option.is_enabled())
-                self.assertTrue(page.locator("input[name='gbmShapRows'][value='0']").is_disabled())
+                zero_shap_rows = page.locator("input[name='gbmShapRows'][value='0']")
+                self.assertFalse(zero_shap_rows.is_disabled())
                 driver_constraint_row = page.locator(
                     ".gbm-interaction-constraint-row",
                     has=page.locator('[data-gbm-interaction-grouping="DRIVER"]'),
@@ -29852,8 +30277,19 @@ COPY (
                 self.assertIn("No trees", driver_constraint_row.text_content())
                 group_model_result = driver_constraint_row.locator(".gbm-interaction-group-model-result")
                 self.assertIn("contains no trees", group_model_result.get_attribute("title"))
-                group_model_option.uncheck()
-                self.assertFalse(page.locator("input[name='gbmShapRows'][value='0']").is_disabled())
+                zero_shap_rows.locator("..").click()
+                self.assertTrue(zero_shap_rows.is_checked())
+                self.assertFalse(group_model_option.is_checked())
+                self.assertTrue(group_model_option.is_disabled())
+                self.assertIn("Choose non-zero SHAP rows first", group_model_option.locator("..").get_attribute("title"))
+                self.assertTrue(driver_constraint_row.locator('[data-gbm-interaction-grouping="DRIVER"]').is_checked())
+                self.assertEqual(page.locator("#gbmFeatureInteractionConstraintButton").text_content(), "Constraint groups (1)")
+                page.locator("input[name='gbmShapRows'][value='10k']").locator("..").click()
+                self.assertTrue(page.locator("input[name='gbmShapRows'][value='10k']").is_checked())
+                self.assertTrue(group_model_option.is_enabled())
+                self.assertFalse(group_model_option.is_checked())
+                if not group_model_option.is_visible():
+                    page.locator("#gbmFeatureInteractionConstraintButton").click()
                 group_model_option.check()
                 page.locator("#gbmFeatureInteractionConstraintButton").click()
                 assert_feature_heading_matches_checked(2)
@@ -30181,6 +30617,7 @@ COPY (
                 page.locator("#gbmEvaluationTailBtn").click()
                 self.assertEqual(page.locator("#gbmEvaluationTailBtn").get_attribute("aria-pressed"), "false")
                 live_job_status = {"value": "running"}
+                live_config_requests = {"value": 0}
                 train_payload = {"value": None}
 
                 def train_route(route: Any) -> None:
@@ -30267,8 +30704,34 @@ COPY (
                         }
                     route.fulfill(status=200, content_type="application/json", body=json.dumps(payload))
 
+                def live_config_route(route: Any) -> None:
+                    response = route.fetch()
+                    payload = response.json()
+                    live_config_requests["value"] += 1
+                    payload["models"] = [
+                        *payload.get("models", []),
+                        {
+                            "model_id": "live-grid-model-1",
+                            "label": "Live grid model 1",
+                            "created_at": "2026-05-25T00:00:02Z",
+                            "response_column": "actualNumerator",
+                            "offset_column": "denominator",
+                            "training_mode": "normal",
+                            "training_rows": 2,
+                            "best_iteration": 2,
+                            "objective": "gamma",
+                            "metric": "gamma",
+                            "best_metrics": {"training": 7.3, "test": 7.2},
+                            "parameters": {"num_iterations": 10, "learning_rate": 0.1},
+                            "sources": {},
+                            "active": False,
+                        },
+                    ]
+                    route.fulfill(response=response, body=json.dumps(payload))
+
                 page.route("**/api/gbm/train", train_route)
                 page.route("**/api/gbm/jobs/live-job", job_route)
+                page.route("**/api/gbm/config", live_config_route)
                 self.assertEqual(page.locator("#gbmFeatureInteractionPairButton").text_content(), "Interaction pairs")
                 self.assertFalse(page.locator("#gbmFeatureInteractionPairButton").is_disabled())
                 page.locator("#gbmFeatureInteractionPairButton").click()
@@ -30498,6 +30961,12 @@ COPY (
                 self.assertEqual(gbm_busy_button["spinnerContent"], '""')
                 self.assertEqual(gbm_busy_button["spinnerWidth"], "12px")
                 self.assertEqual(gbm_busy_button["spinnerAnimation"], "model-busy-button-spin")
+                page.get_by_role("tab", name="Model navigator").click()
+                page.locator("#gbmModelGrid .tabulator-row", has_text="Live grid model 1").wait_for(timeout=10_000)
+                self.assertGreaterEqual(live_config_requests["value"], 1)
+                self.assertTrue(page.locator("#gbmTrainBtn").evaluate("button => button.classList.contains('training')"))
+                page.get_by_role("tab", name="Features and parameters").click()
+                page.unroute("**/api/gbm/config", live_config_route)
                 gbm_pointer_moves_while_busy = page.evaluate("window.__gbmBusyPointerMoves")
                 self.assertNotIn("feature_scenario", train_payload["value"])
                 self.assertEqual(train_payload["value"]["feature_interaction_pairs"], [{"left": "Segment", "right": "Age"}])

@@ -151,6 +151,9 @@ export function createGbmTool({
   let trainingOperationId = "";
   let modelListRefreshSeq = 0;
   let modelListLastRefreshAt = 0;
+  let modelStateGeneration = 0;
+  let modelDetailRequestSeq = 0;
+  let modelMutationPending = 0;
   let queuedActivationModelId = "";
   let activationPromise = null;
   let isTraining = false;
@@ -194,8 +197,28 @@ export function createGbmTool({
     };
   }
 
+  function advanceModelStateGeneration() {
+    modelStateGeneration += 1;
+    modelListRefreshSeq += 1;
+    modelDetailRequestSeq += 1;
+    return modelStateGeneration;
+  }
+
+  function modelStateIsCurrent(generation) {
+    return generation === modelStateGeneration;
+  }
+
+  function beginModelMutation() {
+    modelMutationPending += 1;
+  }
+
+  function endModelMutation() {
+    modelMutationPending = Math.max(0, modelMutationPending - 1);
+  }
+
   async function fetchData(request, requestKey) {
     const requestSeq = state.gbmRequestSeq + 1;
+    const generation = modelStateGeneration;
     state.gbmRequestSeq = requestSeq;
     setStatus("");
     setChartMessage("");
@@ -203,7 +226,7 @@ export function createGbmTool({
     startToolTiming(tool);
     try {
       const data = await api("/api/gbm/config", { method: "GET", clientTiming: true });
-      if (requestSeq !== state.gbmRequestSeq) return null;
+      if (requestSeq !== state.gbmRequestSeq || !modelStateIsCurrent(generation)) return null;
       const cache = toolCache(tool);
       cache.requestKey = requestKey;
       cache.data = data;
@@ -213,7 +236,7 @@ export function createGbmTool({
       measureToolRender(tool, () => render(data));
       return data;
     } catch (error) {
-      if (requestSeq !== state.gbmRequestSeq) return null;
+      if (requestSeq !== state.gbmRequestSeq || !modelStateIsCurrent(generation)) return null;
       setToolTimingFailed(tool);
       setGroupMeta(tool, "GBM failed");
       setChartMessage("");
@@ -1614,8 +1637,6 @@ export function createGbmTool({
         ? "Choose non-zero SHAP rows first"
         : "Create and verify one SHAP-centred LightGBM text model for each selected constraint group";
     row?.setAttribute("title", reason);
-    const zeroShap = document.querySelector("input[name='gbmShapRows'][value='0']");
-    if (zeroShap) zeroShap.disabled = Boolean(checkbox.checked);
   }
 
   function syncFeatureInteractionCounts(features = currentFeatureRows()) {
@@ -3399,36 +3420,40 @@ export function createGbmTool({
   }
 
   async function refreshModelList({ force = false } = {}) {
+    if (modelMutationPending > 0) return;
     const now = Date.now();
     if (!force && now - modelListLastRefreshAt < GBM_MODEL_LIST_POLL_MS) return;
     modelListLastRefreshAt = now;
     const requestSeq = modelListRefreshSeq + 1;
     modelListRefreshSeq = requestSeq;
+    const generation = modelStateGeneration;
     try {
-      const payload = await api("/api/gbm/models", { method: "GET", clientTiming: true });
-      if (requestSeq !== modelListRefreshSeq) return;
-      await applyModelListPayload(payload);
+      const payload = await api("/api/gbm/config", { method: "GET", clientTiming: true });
+      if (requestSeq !== modelListRefreshSeq || !modelStateIsCurrent(generation)) return;
+      await applyModelListPayload(payload, generation);
     } catch (error) {
-      if (force) setGbmNotice(error.message);
+      if (force && requestSeq === modelListRefreshSeq && modelStateIsCurrent(generation)) setGbmNotice(error.message);
     }
   }
 
-  async function applyModelListPayload(payload = {}) {
-    const activeModelId = String(payload?.active_model_id || "");
-    const models = Array.isArray(payload?.models)
-      ? payload.models.map((model) => ({
-        ...model,
-        active: Boolean(model?.active) || String(model?.model_id || "") === activeModelId,
-      }))
-      : [];
-    config = config || {};
-    config.models = models;
-    config.active_model_id = activeModelId;
+  async function applyModelListPayload(payload = {}, generation = modelStateGeneration) {
+    if (!modelStateIsCurrent(generation)) return;
+    const previousActiveModelId = featureMetricModelIdFromData(config || {});
+    const activeModelId = featureMetricModelIdFromData(payload);
+    if (previousActiveModelId !== activeModelId) {
+      await applyModelMutationResult({ config: payload }, {
+        activationOnly: true,
+        syncModelMetrics: true,
+        modelStateGeneration: generation,
+      });
+      return;
+    }
+    captureFeatureDraftStateForRender(payload);
+    config = applyFeatureDraftStateToData(payload);
+    const models = Array.isArray(config?.models) ? config.models : [];
     syncGbmModelCountFromConfig({ models });
     const cache = toolCache(tool);
-    if (cache?.data) {
-      cache.data = { ...cache.data, models, active_model_id: activeModelId };
-    }
+    if (cache) cache.data = config;
     syncSidebarModelChooser(models, activeModelId);
     if (activeTab === "models") {
       await refreshModelTableRows(modelRows(models));
@@ -3621,25 +3646,25 @@ export function createGbmTool({
           setGroupMeta(tool, "GBM failed");
           return;
         }
-        modelListRefreshSeq += 1;
+        const generation = advanceModelStateGeneration();
         setAppReadyStatus("Finalising GBM", { elapsedStartedAt: trainingElapsedStartedAt });
         liveProgress = null;
         liveEvaluationParameters = null;
         gridTrainingNotice = "";
-        await reloadSchema(job.result?.sources?.predictions, { modelKind: "gbm" });
-        const preserveProfile = clearCachesAfterGbmModelSourceChange();
         const data = await api("/api/gbm/config", { method: "GET", clientTiming: true });
-        const cache = toolCache(tool);
-        cache.requestKey = stableConfigKey();
-        cache.data = data;
-        syncGbmModelCountFromConfig(data);
+        if (!modelStateIsCurrent(generation)) return;
         setTrainingState(false);
         setAppReadyStatus("Ready");
         trainingElapsedStartedAt = null;
         trainingOperationId = "";
         setTrainingStatus("");
-        measureToolRender(tool, () => render(data));
-        if (!preserveProfile) refreshActiveTool({ force: true });
+        await applyModelMutationResult({ model: job.result, config: data }, {
+          modelStateGeneration: generation,
+        });
+        if (!modelStateIsCurrent(generation)) return;
+        const cache = toolCache(tool);
+        cache.requestKey = stableConfigKey();
+        cache.data = config;
       } catch (error) {
         setTrainingState(false);
         setAppReadyStatus("Ready");
@@ -3707,21 +3732,26 @@ export function createGbmTool({
     if (isTraining) return;
     if (!modelId) return;
     queuedActivationModelId = modelId;
+    advanceModelStateGeneration();
     invalidateLineBar({ pending: state.tool === "line_bar" });
     if (activationPromise) return activationPromise;
+    beginModelMutation();
     activationPromise = (async () => {
       while (queuedActivationModelId) {
         const targetModelId = queuedActivationModelId;
         queuedActivationModelId = "";
+        const generation = modelStateGeneration;
         try {
           const result = await api(`/api/gbm/models/${encodeURIComponent(targetModelId)}/activate`, {
             method: "POST",
             body: "{}",
           });
           if (queuedActivationModelId) continue;
+          if (!modelStateIsCurrent(generation)) continue;
           await applyModelMutationResult(result, {
             activationOnly: true,
             syncModelMetrics: targetModelId !== currentActiveModelId(),
+            modelStateGeneration: generation,
           });
         } catch (error) {
           if (!queuedActivationModelId) setGbmNotice(error.message);
@@ -3729,6 +3759,7 @@ export function createGbmTool({
       }
     })().finally(() => {
       activationPromise = null;
+      endModelMutation();
       if (queuedActivationModelId) void activateModel(queuedActivationModelId);
     });
     return activationPromise;
@@ -3750,14 +3781,19 @@ export function createGbmTool({
     const trimmed = newModelId.trim();
     if (!trimmed || trimmed === modelId) return;
     invalidateLineBar({ pending: state.tool === "line_bar" });
+    const generation = advanceModelStateGeneration();
+    beginModelMutation();
     try {
       const result = await api(`/api/gbm/models/${encodeURIComponent(modelId)}/rename`, {
         method: "POST",
         body: JSON.stringify({ new_model_id: trimmed }),
       });
-      await applyModelMutationResult(result);
+      if (!modelStateIsCurrent(generation)) return;
+      await applyModelMutationResult(result, { modelStateGeneration: generation });
     } catch (error) {
-      setGbmNotice(error.message);
+      if (modelStateIsCurrent(generation)) setGbmNotice(error.message);
+    } finally {
+      endModelMutation();
     }
   }
 
@@ -3769,6 +3805,8 @@ export function createGbmTool({
     const confirmed = confirm(`Delete ${label}? This deletes the selected .lucidum model folder${modelIds.length === 1 ? "" : "s"}.`);
     if (!confirmed) return;
     invalidateLineBar({ pending: state.tool === "line_bar" });
+    const generation = advanceModelStateGeneration();
+    beginModelMutation();
     const activeModelIdBeforeDelete = currentActiveModelId();
     let result = null;
     let deletedCount = 0;
@@ -3777,24 +3815,34 @@ export function createGbmTool({
         result = await api(`/api/gbm/models/${encodeURIComponent(modelId)}`, { method: "DELETE", body: "{}" });
         deletedCount += 1;
       }
+      if (!modelStateIsCurrent(generation)) return;
       await applyModelMutationResult(result, {
         syncModelMetrics: modelIds.includes(activeModelIdBeforeDelete),
+        modelStateGeneration: generation,
       });
     } catch (error) {
       try {
         const latest = await api("/api/gbm/config", { method: "GET", clientTiming: true });
-        await applyModelMutationResult({ config: latest }, {
-          syncModelMetrics: modelIds.slice(0, deletedCount).includes(activeModelIdBeforeDelete),
-        });
+        if (modelStateIsCurrent(generation)) {
+          await applyModelMutationResult({ config: latest }, {
+            syncModelMetrics: modelIds.slice(0, deletedCount).includes(activeModelIdBeforeDelete),
+            modelStateGeneration: generation,
+          });
+        }
       } catch (_) {
         // Keep the original delete error visible when the refresh also fails.
       }
       const prefix = deletedCount > 0 ? `${deletedCount} deleted. ` : "";
-      setGbmNotice(`${prefix}${error.message}`);
+      if (modelStateIsCurrent(generation)) setGbmNotice(`${prefix}${error.message}`);
+    } finally {
+      endModelMutation();
     }
   }
 
   async function applyModelMutationResult(result, options = {}) {
+    const generation = options?.modelStateGeneration ?? modelStateGeneration;
+    if (!modelStateIsCurrent(generation)) return false;
+    modelDetailRequestSeq += 1;
     invalidateLineBar({ pending: state.tool === "line_bar" });
     const nextConfig = result.config || config || {};
     const activeMetricModel = options?.syncModelMetrics ? activeModelFromData(nextConfig) : null;
@@ -3802,7 +3850,7 @@ export function createGbmTool({
       modelKind: "gbm",
       activeModel: activeMetricModel,
     });
-    if (schemaResult === false) return;
+    if (schemaResult === false || !modelStateIsCurrent(generation)) return false;
     const chartReady = schemaResult?.chartReady !== false;
     const preserveProfile = clearCachesAfterGbmModelSourceChange();
     syncGbmModelCountFromConfig(nextConfig);
@@ -3827,6 +3875,7 @@ export function createGbmTool({
         await refreshActiveTool({ force: true });
       }
     }
+    return modelStateIsCurrent(generation);
   }
 
   function clearCachesAfterGbmModelSourceChange() {
@@ -3840,9 +3889,7 @@ export function createGbmTool({
   function preferredModelSource(result, data) {
     const currentKind = dataSourceById(state.source)?.kind || "";
     const configActiveModel = (data?.models || []).find((item) => item.active);
-    const activeModel = result?.deleted_model_id
-      ? null
-      : (result?.model || configActiveModel);
+    const activeModel = configActiveModel;
     const shapSource = activeModel?.sources?.shap_long || configActiveModel?.sources?.shap_long || "";
     const predictionSource = activeModel?.sources?.predictions || configActiveModel?.sources?.predictions || "";
     if (currentKind === "gbm_shap_long") return shapSource || predictionSource || "dataset";
@@ -3853,11 +3900,21 @@ export function createGbmTool({
   }
 
   async function loadModelDetail(modelId) {
+    const requestedModelId = String(modelId || "");
+    const requestSeq = modelDetailRequestSeq + 1;
+    modelDetailRequestSeq = requestSeq;
     try {
-      activeDetail = await api(`/api/gbm/models/${encodeURIComponent(modelId)}`, { method: "GET" });
+      const detail = await api(`/api/gbm/models/${encodeURIComponent(requestedModelId)}`, { method: "GET" });
+      const detailModelId = String(detail?.manifest?.model_id || requestedModelId);
+      if (
+        requestSeq !== modelDetailRequestSeq
+        || requestedModelId !== currentActiveModelId()
+        || detailModelId !== requestedModelId
+      ) return;
+      activeDetail = detail;
       renderEvaluationChart();
     } catch (_) {
-      activeDetail = null;
+      if (requestSeq === modelDetailRequestSeq && requestedModelId === currentActiveModelId()) activeDetail = null;
     }
   }
 

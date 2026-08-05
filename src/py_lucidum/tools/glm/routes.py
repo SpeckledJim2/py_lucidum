@@ -52,6 +52,7 @@ def register(app: FastAPI, context: AppContext) -> None:
             pass
 
     def config_payload() -> dict[str, Any]:
+        active_model_id = store.active_model_id()
         return {
             "tool": "glm",
             "status": "ready",
@@ -61,8 +62,8 @@ def register(app: FastAPI, context: AppContext) -> None:
             "sample": sample_metadata(context.dataset),
             "families": family_options_payload(),
             "regularization": regularization_options_payload(),
-            "models": store.list_models(),
-            "active_model_id": store.active_model_id(),
+            "models": store.list_models(active_model_id=active_model_id),
+            "active_model_id": active_model_id,
         }
 
     @app.get("/api/glm/summary")
@@ -78,9 +79,10 @@ def register(app: FastAPI, context: AppContext) -> None:
     @app.get("/api/glm/models")
     async def models_endpoint(request: Request) -> dict[str, Any]:
         context.check_token(request)
+        active_model_id = store.active_model_id()
         return {
-            "models": store.list_models(),
-            "active_model_id": store.active_model_id(),
+            "models": store.list_models(active_model_id=active_model_id),
+            "active_model_id": active_model_id,
         }
 
     @app.post("/api/glm/validate")
@@ -230,8 +232,9 @@ def register(app: FastAPI, context: AppContext) -> None:
     async def activate_endpoint(request: Request, model_id: str) -> dict[str, Any]:
         context.check_token(request)
         try:
-            manifest = store.activate_model(model_id)
-            return {"model": manifest, "config": config_payload()}
+            with store.model_state_lock:
+                manifest = store.activate_model(model_id)
+                return {"model": manifest, "config": config_payload()}
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -240,8 +243,9 @@ def register(app: FastAPI, context: AppContext) -> None:
         context.check_token(request)
         payload = await request.json()
         try:
-            manifest = store.rename_model(model_id, str(payload.get("new_model_id") or ""))
-            return {"model": manifest, "config": config_payload()}
+            with store.model_state_lock:
+                manifest = store.rename_model(model_id, str(payload.get("new_model_id") or ""))
+                return {"model": manifest, "config": config_payload()}
         except GlmModelNameError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except ValueError as exc:
@@ -251,7 +255,8 @@ def register(app: FastAPI, context: AppContext) -> None:
     async def delete_endpoint(request: Request, model_id: str) -> dict[str, Any]:
         context.check_token(request)
         try:
-            manifest = store.delete_model(model_id)
-            return {"deleted_model_id": model_id, "model": manifest, "config": config_payload()}
+            with store.model_state_lock:
+                manifest = store.delete_model(model_id)
+                return {"deleted_model_id": model_id, "model": manifest, "config": config_payload()}
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc

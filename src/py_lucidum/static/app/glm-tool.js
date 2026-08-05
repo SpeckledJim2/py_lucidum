@@ -152,6 +152,9 @@ export function createGlmTool({
   let tabulationOperationId = "";
   let modelListRefreshSeq = 0;
   let modelListLastRefreshAt = 0;
+  let modelStateGeneration = 0;
+  let modelDetailRequestSeq = 0;
+  let modelMutationPending = 0;
   let queuedActivationModelId = "";
   let activationPromise = null;
   let isBuilding = false;
@@ -229,8 +232,28 @@ export function createGlmTool({
     };
   }
 
+  function advanceModelStateGeneration() {
+    modelStateGeneration += 1;
+    modelListRefreshSeq += 1;
+    modelDetailRequestSeq += 1;
+    return modelStateGeneration;
+  }
+
+  function modelStateIsCurrent(generation) {
+    return generation === modelStateGeneration;
+  }
+
+  function beginModelMutation() {
+    modelMutationPending += 1;
+  }
+
+  function endModelMutation() {
+    modelMutationPending = Math.max(0, modelMutationPending - 1);
+  }
+
   async function fetchData(request, requestKey) {
     const requestSeq = state.glmRequestSeq + 1;
+    const generation = modelStateGeneration;
     state.glmRequestSeq = requestSeq;
     setStatus("");
     setChartMessage("");
@@ -238,7 +261,7 @@ export function createGlmTool({
     startToolTiming(tool);
     try {
       const data = await api("/api/glm/config", { method: "GET", clientTiming: true });
-      if (requestSeq !== state.glmRequestSeq) return null;
+      if (requestSeq !== state.glmRequestSeq || !modelStateIsCurrent(generation)) return null;
       const cache = toolCache(tool);
       cache.requestKey = requestKey;
       cache.data = data;
@@ -248,7 +271,7 @@ export function createGlmTool({
       measureToolRender(tool, () => render(data));
       return data;
     } catch (error) {
-      if (requestSeq !== state.glmRequestSeq) return null;
+      if (requestSeq !== state.glmRequestSeq || !modelStateIsCurrent(generation)) return null;
       setToolTimingFailed(tool);
       setGroupMeta(tool, "GLM failed");
       setChartMessage("");
@@ -2131,6 +2154,10 @@ export function createGlmTool({
       activeTab = nextTab;
       syncToolScreenNavigation(mount.querySelector(".glm-tabs"), activeTab);
       mount.querySelectorAll("[data-glm-panel]").forEach((panel) => panel.classList.toggle("hidden", panel.dataset.glmPanel !== activeTab));
+      if (activeTab === "builder") {
+        formulaBuilder.resize();
+        void syncBuilderToActiveModel();
+      }
       if (activeTab === "models") refreshModelListIfNeeded();
       if (activeTab === "tabulations") refreshTabulationConfig({ force: true });
     });
@@ -2269,9 +2296,13 @@ export function createGlmTool({
         pollTimer = null;
         isBuilding = false;
         if (job.status === "succeeded") {
+          const generation = advanceModelStateGeneration();
           const latest = await api("/api/glm/config", { method: "GET", clientTiming: true });
+          if (!modelStateIsCurrent(generation)) return;
           liveProgress = null;
-          await applyModelMutationResult({ model: job.result, config: latest });
+          await applyModelMutationResult({ model: job.result, config: latest }, {
+            modelStateGeneration: generation,
+          });
           renderLiveProgress(liveProgress);
           setAppReadyStatus("Ready");
           buildElapsedStartedAt = null;
@@ -2730,10 +2761,18 @@ export function createGlmTool({
   }
 
   async function loadModelDetail(modelId) {
+    const requestedModelId = String(modelId || "");
+    const requestSeq = modelDetailRequestSeq + 1;
+    modelDetailRequestSeq = requestSeq;
     try {
-      activeDetail = await api(`/api/glm/models/${encodeURIComponent(modelId)}`, { method: "GET" });
-      const detailModelId = String(activeDetail?.manifest?.model_id || modelId || "");
-      if (detailModelId !== String(config?.active_model_id || modelId || "")) return;
+      const detail = await api(`/api/glm/models/${encodeURIComponent(requestedModelId)}`, { method: "GET" });
+      const detailModelId = String(detail?.manifest?.model_id || requestedModelId);
+      if (
+        requestSeq !== modelDetailRequestSeq
+        || requestedModelId !== currentActiveModelId()
+        || detailModelId !== requestedModelId
+      ) return;
+      activeDetail = detail;
       const syncBuilderDraft = detailModelId !== builderDraftSourceModelId;
       syncBuilderFromModelDetail(activeDetail, { syncBuilderDraft });
       if (syncBuilderDraft) builderDraftSourceModelId = detailModelId;
@@ -2743,9 +2782,17 @@ export function createGlmTool({
       if (meta) meta.innerHTML = diagnosticsHtml(diagnostics, activeDetail?.manifest || {}, coefficients);
       renderCoefficientTable(coefficients);
     } catch (error) {
-      activeDetail = null;
-      setGlmNotice(error.message);
+      if (requestSeq === modelDetailRequestSeq && requestedModelId === currentActiveModelId()) {
+        activeDetail = null;
+        setGlmNotice(error.message);
+      }
     }
+  }
+
+  async function syncBuilderToActiveModel() {
+    const activeModelId = currentActiveModelId();
+    if (!activeModelId || activeModelId === builderDraftSourceModelId) return;
+    await loadModelDetail(activeModelId);
   }
 
   async function renderModelTable(models = modelRows, activeModelId = config?.active_model_id) {
@@ -2857,43 +2904,61 @@ export function createGlmTool({
   }
 
   async function refreshModelListIfNeeded(options = {}) {
-    if (isBuilding) return;
+    if (isBuilding || modelMutationPending > 0) return;
     const now = Date.now();
     if (!options.force && now - modelListLastRefreshAt < GLM_MODEL_LIST_POLL_MS) return;
     modelListLastRefreshAt = now;
     const seq = modelListRefreshSeq + 1;
     modelListRefreshSeq = seq;
+    const generation = modelStateGeneration;
     try {
       const data = await api("/api/glm/config", { method: "GET", clientTiming: true });
-      if (seq !== modelListRefreshSeq) return;
+      if (seq !== modelListRefreshSeq || !modelStateIsCurrent(generation)) return;
+      const previousActiveModelId = currentActiveModelId(config);
+      const nextActiveModelId = currentActiveModelId(data);
+      if (previousActiveModelId !== nextActiveModelId) {
+        await applyModelMutationResult({ config: data }, {
+          activationOnly: true,
+          syncModelMetrics: true,
+          modelStateGeneration: generation,
+        });
+        return;
+      }
       config = data;
       modelRows = normaliseModels(data.models || []);
+      const cache = toolCache(tool);
+      if (cache) cache.data = data;
       setGlmModelCount(modelRows.length);
       renderModelTable(modelRows, data.active_model_id);
       syncSidebarModelChooser(modelRows, data.active_model_id);
     } catch (error) {
-      setGlmNotice(error.message);
+      if (seq === modelListRefreshSeq && modelStateIsCurrent(generation)) setGlmNotice(error.message);
     }
   }
 
   async function activateModel(modelId) {
     if (isBuilding || !modelId) return;
     queuedActivationModelId = modelId;
+    advanceModelStateGeneration();
     invalidateLineBar({ pending: state.tool === "line_bar" });
     if (activationPromise) return activationPromise;
+    beginModelMutation();
     activationPromise = (async () => {
       while (queuedActivationModelId) {
         const targetModelId = queuedActivationModelId;
         queuedActivationModelId = "";
+        const generation = modelStateGeneration;
         try {
           const result = await api(`/api/glm/models/${encodeURIComponent(targetModelId)}/activate`, {
             method: "POST",
             body: "{}",
           });
           if (queuedActivationModelId) continue;
+          if (!modelStateIsCurrent(generation)) continue;
           await applyModelMutationResult(result, {
             activationOnly: true,
             syncModelMetrics: targetModelId !== currentActiveModelId(),
+            modelStateGeneration: generation,
           });
         } catch (error) {
           if (!queuedActivationModelId) setGlmNotice(error.message);
@@ -2901,6 +2966,7 @@ export function createGlmTool({
       }
     })().finally(() => {
       activationPromise = null;
+      endModelMutation();
       if (queuedActivationModelId) void activateModel(queuedActivationModelId);
     });
     return activationPromise;
@@ -2920,14 +2986,22 @@ export function createGlmTool({
     const trimmed = newModelId.trim();
     if (!trimmed || trimmed === modelId) return;
     invalidateLineBar({ pending: state.tool === "line_bar" });
+    const generation = advanceModelStateGeneration();
+    beginModelMutation();
     try {
       const result = await api(`/api/glm/models/${encodeURIComponent(modelId)}/rename`, {
         method: "POST",
         body: JSON.stringify({ new_model_id: trimmed }),
       });
-      await applyModelMutationResult(result, { renamedFrom: modelId });
+      if (!modelStateIsCurrent(generation)) return;
+      await applyModelMutationResult(result, {
+        renamedFrom: modelId,
+        modelStateGeneration: generation,
+      });
     } catch (error) {
-      setGlmNotice(error.message);
+      if (modelStateIsCurrent(generation)) setGlmNotice(error.message);
+    } finally {
+      endModelMutation();
     }
   }
 
@@ -2939,6 +3013,8 @@ export function createGlmTool({
     const confirmed = confirm(`Delete ${label}? This deletes the selected .lucidum model folder${modelIds.length === 1 ? "" : "s"}.`);
     if (!confirmed) return;
     invalidateLineBar({ pending: state.tool === "line_bar" });
+    const generation = advanceModelStateGeneration();
+    beginModelMutation();
     const activeModelIdBeforeDelete = currentActiveModelId();
     let result = null;
     let deletedCount = 0;
@@ -2947,19 +3023,26 @@ export function createGlmTool({
         result = await api(`/api/glm/models/${encodeURIComponent(modelId)}`, { method: "DELETE", body: "{}" });
         deletedCount += 1;
       }
+      if (!modelStateIsCurrent(generation)) return;
       await applyModelMutationResult(result, {
         syncModelMetrics: modelIds.includes(activeModelIdBeforeDelete),
+        modelStateGeneration: generation,
       });
     } catch (error) {
       try {
         const latest = await api("/api/glm/config", { method: "GET", clientTiming: true });
-        await applyModelMutationResult({ config: latest }, {
-          syncModelMetrics: modelIds.slice(0, deletedCount).includes(activeModelIdBeforeDelete),
-        });
+        if (modelStateIsCurrent(generation)) {
+          await applyModelMutationResult({ config: latest }, {
+            syncModelMetrics: modelIds.slice(0, deletedCount).includes(activeModelIdBeforeDelete),
+            modelStateGeneration: generation,
+          });
+        }
       } catch (_) {
       }
       const prefix = deletedCount > 0 ? `${deletedCount} deleted. ` : "";
-      setGlmNotice(`${prefix}${error.message}`);
+      if (modelStateIsCurrent(generation)) setGlmNotice(`${prefix}${error.message}`);
+    } finally {
+      endModelMutation();
     }
   }
 
@@ -3004,6 +3087,9 @@ export function createGlmTool({
   }
 
   async function applyModelMutationResult(result, options = {}) {
+    const generation = options?.modelStateGeneration ?? modelStateGeneration;
+    if (!modelStateIsCurrent(generation)) return false;
+    modelDetailRequestSeq += 1;
     invalidateLineBar({ pending: state.tool === "line_bar" });
     formulaBuilder.captureDraft();
     const nextConfig = result.config || config || {};
@@ -3017,7 +3103,7 @@ export function createGlmTool({
       modelKind: "glm",
       activeModel: activeMetricModel,
     });
-    if (schemaResult === false) return;
+    if (schemaResult === false || !modelStateIsCurrent(generation)) return false;
     const chartReady = schemaResult?.chartReady !== false;
     const preserveProfile = clearCachesAfterGlmModelSourceChange();
     if (!currentActiveModelId(nextConfig)) builderDraftSourceModelId = "";
@@ -3027,6 +3113,7 @@ export function createGlmTool({
     setGlmNotice("");
     if (options?.activationOnly && await applyActivationOnlyTabulationUpdate(nextConfig)) {
       // The visible GLM Tabulations selection did not change, so keep the mounted table UI intact.
+      await syncBuilderToActiveModel();
     } else if (state.tool === tool) {
       measureToolRender(tool, () => render(nextConfig));
     } else if (preserveProfile) {
@@ -3040,6 +3127,7 @@ export function createGlmTool({
     renderExpectedNumerators();
     renderFeatures();
     updateAxisControls();
+    return modelStateIsCurrent(generation);
   }
 
   function clearCachesAfterGlmModelSourceChange() {
@@ -3051,7 +3139,7 @@ export function createGlmTool({
   function preferredModelSource(result, data) {
     const currentKind = dataSourceById(state.source)?.kind || "";
     const configActiveModel = (data?.models || []).find((item) => item.active);
-    const activeModel = result?.deleted_model_id ? null : (result?.model || configActiveModel);
+    const activeModel = configActiveModel;
     const predictionSource = activeModel?.sources?.predictions || configActiveModel?.sources?.predictions || "";
     if (currentKind === "glm_predictions") return predictionSource || "dataset";
     if (!dataSourceById(state.source) && predictionSource) return predictionSource;

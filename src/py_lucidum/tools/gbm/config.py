@@ -34,8 +34,7 @@ class GbmConfigBuilder:
         self.store = store
         self.feature_spec = feature_spec or (lambda: {})
 
-    def active_gains(self) -> dict[str, float]:
-        model_id = self.store.active_model_id()
+    def active_gains(self, model_id: str | None) -> dict[str, float]:
         if not model_id:
             return {}
         try:
@@ -92,8 +91,7 @@ WHERE feature IS NOT NULL
             enriched.append(row)
         return enriched
 
-    def active_feature_config(self) -> list[dict[str, Any]] | None:
-        model_id = self.store.active_model_id()
+    def active_feature_config(self, model_id: str | None) -> list[dict[str, Any]] | None:
         if not model_id:
             return None
         try:
@@ -104,8 +102,7 @@ WHERE feature IS NOT NULL
             return None
         return None
 
-    def active_training_mode(self) -> str:
-        model_id = self.store.active_model_id()
+    def active_training_mode(self, model_id: str | None) -> str:
         if not model_id:
             return DEFAULT_TRAINING_MODE
         try:
@@ -114,10 +111,9 @@ WHERE feature IS NOT NULL
             return DEFAULT_TRAINING_MODE
         return normalise_training_mode(manifest.get("training_mode"))
 
-    def parameter_rows(self) -> list[dict[str, Any]]:
+    def parameter_rows(self, model_id: str | None) -> list[dict[str, Any]]:
         values: dict[str, Any] = {}
-        model_id = self.store.active_model_id()
-        active_init_score = self.active_init_score_value()
+        active_init_score = self.active_init_score_value(model_id)
         if model_id:
             try:
                 stored = self.store.read_json(self.store.artifact_path(model_id, "parameters"), {})
@@ -151,8 +147,7 @@ WHERE feature IS NOT NULL
                 rows.append({"name": text_name, "value": value, "important": False})
         return rows
 
-    def active_init_score_value(self) -> str:
-        model_id = self.store.active_model_id()
+    def active_init_score_value(self, model_id: str | None) -> str:
         if not model_id:
             return INIT_SCORE_NONE
         try:
@@ -208,8 +203,7 @@ WHERE feature IS NOT NULL
             if isinstance(scenario, dict) and scenario.get("name")
         ]
 
-    def active_feature_scenario(self, current_scenarios: list[dict[str, Any]]) -> dict[str, Any] | None:
-        model_id = self.store.active_model_id()
+    def active_feature_scenario(self, current_scenarios: list[dict[str, Any]], model_id: str | None) -> dict[str, Any] | None:
         if not model_id:
             return None
         try:
@@ -253,8 +247,12 @@ WHERE feature IS NOT NULL
     def scenario_feature_set(features: list[str]) -> set[str]:
         return {feature for feature in features if feature}
 
-    def active_feature_interaction_constraints(self, current_groupings: dict[str, str], valid_groupings: list[str]) -> dict[str, Any] | None:
-        model_id = self.store.active_model_id()
+    def active_feature_interaction_constraints(
+        self,
+        current_groupings: dict[str, str],
+        valid_groupings: list[str],
+        model_id: str | None,
+    ) -> dict[str, Any] | None:
         if not model_id:
             return None
         try:
@@ -423,7 +421,8 @@ WHERE feature IS NOT NULL
         return groups
 
     def payload(self) -> dict[str, Any]:
-        model_features = self.active_feature_config()
+        active_model_id = self.store.active_model_id()
+        model_features = self.active_feature_config(active_model_id)
         scenarios = self.feature_scenarios()
         current_feature_groupings = self.feature_groupings()
         interaction_groupings = self.feature_interaction_groupings(current_feature_groupings)
@@ -432,7 +431,7 @@ WHERE feature IS NOT NULL
             sample_reserved = {SAMPLE_COLUMN} if sample.get("source") == "dataset" else set()
             features = feature_rows(
                 self.dataset,
-                self.active_gains(),
+                self.active_gains(active_model_id),
                 model_features=model_features,
                 reserved_names=sample_reserved,
                 feature_groupings=current_feature_groupings,
@@ -441,7 +440,7 @@ WHERE feature IS NOT NULL
             can_use_ebm = ebm_available(self.dataset, generated_sample_path=self.store.generated_sample_path)
             current_init_score_options = init_score_current_options(
                 self.dataset,
-                self.active_init_score_value(),
+                self.active_init_score_value(active_model_id),
                 response_column=RESPONSE_COLUMN,
                 sample_column=sample_column,
             )
@@ -452,9 +451,9 @@ WHERE feature IS NOT NULL
             "offset": OFFSET_COLUMN,
             "sample_column": sample_column,
             "sample": sample,
-            "training_mode": self.active_training_mode(),
+            "training_mode": self.active_training_mode(active_model_id),
             "ebm_available": can_use_ebm,
-            "parameters": self.parameter_rows(),
+            "parameters": self.parameter_rows(active_model_id),
             "parameter_options": {
                 "init_score": current_init_score_options,
                 "objective": sorted(GBM_OBJECTIVES),
@@ -463,11 +462,15 @@ WHERE feature IS NOT NULL
             },
             "features": features,
             "feature_scenarios": scenarios,
-            "active_feature_scenario": self.active_feature_scenario(scenarios),
+            "active_feature_scenario": self.active_feature_scenario(scenarios, active_model_id),
             "feature_interaction_groupings": interaction_groupings,
-            "active_feature_interaction_constraints": self.active_feature_interaction_constraints(current_feature_groupings, interaction_groupings),
-            "models": self.store.list_models(),
-            "active_model_id": self.store.active_model_id(),
+            "active_feature_interaction_constraints": self.active_feature_interaction_constraints(
+                current_feature_groupings,
+                interaction_groupings,
+                active_model_id,
+            ),
+            "models": self.store.list_models(active_model_id=active_model_id),
+            "active_model_id": active_model_id,
             "shap_options": [
                 {"value": "0", "label": "0"},
                 {"value": "10k", "label": "10k"},
