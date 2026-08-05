@@ -3653,11 +3653,6 @@ export function createGbmTool({
         gridTrainingNotice = "";
         const data = await api("/api/gbm/config", { method: "GET", clientTiming: true });
         if (!modelStateIsCurrent(generation)) return;
-        setTrainingState(false);
-        setAppReadyStatus("Ready");
-        trainingElapsedStartedAt = null;
-        trainingOperationId = "";
-        setTrainingStatus("");
         await applyModelMutationResult({ model: job.result, config: data }, {
           modelStateGeneration: generation,
         });
@@ -3665,6 +3660,11 @@ export function createGbmTool({
         const cache = toolCache(tool);
         cache.requestKey = stableConfigKey();
         cache.data = config;
+        setTrainingState(false);
+        setAppReadyStatus("Ready");
+        trainingElapsedStartedAt = null;
+        trainingOperationId = "";
+        setTrainingStatus("");
       } catch (error) {
         setTrainingState(false);
         setAppReadyStatus("Ready");

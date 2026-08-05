@@ -2240,7 +2240,7 @@ export function createGlmTool({
       setBuildFailure(error.message);
       return;
     }
-    isBuilding = true;
+    setBuildingState(true);
     liveProgress = { phase: "queued", message: "Starting GLM build" };
     renderLiveProgress(liveProgress);
     setGlmNotice("");
@@ -2261,13 +2261,18 @@ export function createGlmTool({
       window.clearTimeout(pollTimer);
       pollTimer = null;
     }
-    isBuilding = false;
+    setBuildingState(false);
     setAppReadyStatus("Ready");
     buildElapsedStartedAt = null;
     buildOperationId = "";
     liveProgress = { phase: "failed", message: String(message || "GLM training did not save a model") };
     renderLiveProgress(liveProgress);
     setGlmNotice("");
+  }
+
+  function setBuildingState(active) {
+    isBuilding = Boolean(active);
+    updateModelActionButtons();
   }
 
   function validateFamilyParameter(family, rawValue) {
@@ -2294,15 +2299,17 @@ export function createGlmTool({
           return;
         }
         pollTimer = null;
-        isBuilding = false;
         if (job.status === "succeeded") {
           const generation = advanceModelStateGeneration();
+          setAppReadyStatus("Finalising GLM", { elapsedStartedAt: buildElapsedStartedAt });
           const latest = await api("/api/glm/config", { method: "GET", clientTiming: true });
           if (!modelStateIsCurrent(generation)) return;
           liveProgress = null;
           await applyModelMutationResult({ model: job.result, config: latest }, {
             modelStateGeneration: generation,
           });
+          if (!modelStateIsCurrent(generation)) return;
+          setBuildingState(false);
           renderLiveProgress(liveProgress);
           setAppReadyStatus("Ready");
           buildElapsedStartedAt = null;

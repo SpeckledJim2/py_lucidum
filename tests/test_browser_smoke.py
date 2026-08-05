@@ -22623,7 +22623,56 @@ COPY (
                 self.assertEqual(glm_scoring_badge["background"], "rgb(255, 251, 235)")
                 self.assertGreaterEqual(glm_scoring_badge["elapsed"], glm_training_elapsed)
                 self.assertEqual(glm_scoring_badge["elapsedAriaHidden"], "true")
+                held_glm_schema: dict[str, Any] = {}
+
+                def hold_glm_schema(route: Any) -> None:
+                    response = route.fetch()
+                    held_glm_schema.update(
+                        route=route,
+                        status=response.status,
+                        headers=response.headers,
+                        body=response.body(),
+                    )
+
+                def release_glm_schema() -> None:
+                    route = held_glm_schema.pop("route", None)
+                    if route is None:
+                        return
+                    route.fulfill(
+                        status=held_glm_schema.pop("status"),
+                        headers=held_glm_schema.pop("headers"),
+                        body=held_glm_schema.pop("body"),
+                    )
+
+                page.route("**/api/schema", hold_glm_schema)
                 glm_job_phase["value"] = "succeeded"
+                for _ in range(200):
+                    if held_glm_schema:
+                        break
+                    page.wait_for_timeout(20)
+                self.assertTrue(held_glm_schema)
+                page.get_by_role("tab", name="Model navigator").click()
+                page.locator("#glmModelGrid .tabulator-row", has_text="Second smoke GLM").click()
+                glm_finalising_state = page.evaluate(
+                    """
+                    () => ({
+                      statusText: document.querySelector("#appStatusBadge")?.textContent.trim() || "",
+                      statusBusy: document.querySelector("#appStatusBadge")?.classList.contains("busy"),
+                      building: document.querySelector("#glmBuildBtn")?.classList.contains("building"),
+                      buildDisabled: document.querySelector("#glmBuildBtn")?.disabled,
+                      activateDisabled: document.querySelector("#glmActivateModelBtn")?.disabled,
+                    })
+                    """
+                )
+                release_glm_schema()
+                page.unroute("**/api/schema", hold_glm_schema)
+                self.assertIn("Finalising GLM", glm_finalising_state["statusText"])
+                self.assertTrue(glm_finalising_state["statusBusy"])
+                self.assertTrue(glm_finalising_state["building"])
+                self.assertTrue(glm_finalising_state["buildDisabled"])
+                self.assertTrue(glm_finalising_state["activateDisabled"])
+                page.get_by_role("tab", name="Formula builder").click()
+                glm_pointer_moves_while_busy = page.evaluate("window.__glmBusyPointerMoves")
                 page.locator("#glmBuildBtn", has_text="Build GLM").wait_for(timeout=10_000)
                 page.locator("#appStatusBadge.ready", has_text="Ready").wait_for(timeout=10_000)
                 self.assertEqual(page.locator("#appStatusBadge .app-status-badge-elapsed").text_content(), "")
@@ -30028,18 +30077,64 @@ COPY (
                         ),
                     )
 
+                held_pair_schema: dict[str, Any] = {}
+
+                def hold_pair_schema(route: Any) -> None:
+                    response = route.fetch()
+                    held_pair_schema.update(
+                        route=route,
+                        status=response.status,
+                        headers=response.headers,
+                        body=response.body(),
+                    )
+
+                def release_pair_schema() -> None:
+                    route = held_pair_schema.pop("route", None)
+                    if route is None:
+                        return
+                    route.fulfill(
+                        status=held_pair_schema.pop("status"),
+                        headers=held_pair_schema.pop("headers"),
+                        body=held_pair_schema.pop("body"),
+                    )
+
                 page.route("**/api/gbm/validate", pair_validate_route)
                 page.route("**/api/gbm/train", pair_train_route)
                 page.route("**/api/gbm/jobs/pair-live-job", pair_job_route)
+                page.route("**/api/schema", hold_pair_schema)
                 with page.expect_request("**/api/gbm/train", timeout=10_000):
                     page.locator("#gbmTrainBtn").click()
+                for _ in range(200):
+                    if held_pair_schema:
+                        break
+                    page.wait_for_timeout(20)
+                self.assertTrue(held_pair_schema)
+                page.get_by_role("tab", name="Model navigator").click()
+                page.locator("#gbmModelGrid .tabulator-row", has_text="Browser smoke model").click()
+                pair_finalising_state = page.evaluate(
+                    """
+                    () => ({
+                      statusText: document.querySelector("#appStatusBadge")?.textContent.trim() || "",
+                      statusBusy: document.querySelector("#appStatusBadge")?.classList.contains("busy"),
+                      training: document.querySelector("#gbmTrainBtn")?.classList.contains("training"),
+                      trainDisabled: document.querySelector("#gbmTrainBtn")?.disabled,
+                      activateDisabled: document.querySelector("#gbmActivateModelBtn")?.disabled,
+                    })
+                    """
+                )
+                release_pair_schema()
+                page.unroute("**/api/schema", hold_pair_schema)
+                self.assertIn("Finalising GBM", pair_finalising_state["statusText"])
+                self.assertTrue(pair_finalising_state["statusBusy"])
+                self.assertTrue(pair_finalising_state["training"])
+                self.assertTrue(pair_finalising_state["trainDisabled"])
+                self.assertTrue(pair_finalising_state["activateDisabled"])
                 page.wait_for_function("() => !document.querySelector('#gbmTrainBtn')?.classList.contains('training')", timeout=10_000)
                 self.assertEqual(pair_validate_payload["value"]["feature_interaction_pairs"], [{"left": "Age", "right": "Segment"}])
                 self.assertEqual(pair_train_payload["value"]["feature_interaction_pairs"], [{"left": "Age", "right": "Segment"}])
                 page.unroute("**/api/gbm/validate", pair_validate_route)
                 page.unroute("**/api/gbm/train", pair_train_route)
                 page.unroute("**/api/gbm/jobs/pair-live-job", pair_job_route)
-                page.get_by_role("tab", name="Model navigator").click()
                 page.wait_for_load_state("networkidle")
                 page.wait_for_function(
                     """
@@ -30061,19 +30156,8 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                page.evaluate(
-                    """
-                    () => {
-                      const row = [...document.querySelectorAll("#gbmModelGrid .tabulator-row")]
-                        .find((item) => item.textContent.includes("Browser smoke model"));
-                      if (!row) throw new Error("Browser smoke model row is unavailable");
-                      if (!row.classList.contains("tabulator-selected")) row.click();
-                      const button = document.querySelector("#gbmActivateModelBtn");
-                      if (!button || button.disabled) throw new Error("Activate model action is unavailable");
-                      button.click();
-                    }
-                    """
-                )
+                with page.expect_response("**/api/gbm/models/browser-smoke-model/activate", timeout=10_000):
+                    page.locator("#gbmActivateModelBtn").click()
                 page.wait_for_function(
                     """
                     () => document.querySelector("#gbmModelSelectedMeta")?.textContent.includes("Browser smoke model")
