@@ -241,7 +241,7 @@ class TestRunnerTests(unittest.TestCase):
             for index in range(1, 5)
         ]
 
-        self.assertEqual(len(nodeids), 83)
+        self.assertEqual(len(nodeids), 84)
         self.assertEqual(sorted(nodeid for shard in shards for nodeid in shard), nodeids)
         self.assertEqual(len({nodeid for shard in shards for nodeid in shard}), len(nodeids))
         self.assertLessEqual(max(map(len, shards)) - min(map(len, shards)), 1)

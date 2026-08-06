@@ -12,7 +12,7 @@ import time
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any
+from typing import Any, Callable
 from unittest.mock import patch
 from urllib.request import Request, urlopen
 
@@ -21,6 +21,7 @@ import uvicorn
 
 from py_lucidum import __version__
 from py_lucidum.app import create_app
+from py_lucidum.app.local_folders import LocalFolderOpenError
 from py_lucidum.core import Dataset, quote_ident, sql_literal
 from py_lucidum.tools.gbm.store import GbmModelStore
 from py_lucidum.tools.glm.store import GlmModelStore
@@ -18771,6 +18772,170 @@ COPY (
                 server.should_exit = True
                 thread.join(timeout=5)
 
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_model_navigator_open_folder_commands(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "model-folders.csv"
+            data_path.write_text("feature,response\nA,1\nB,2\n", encoding="utf-8")
+            glm_store = GlmModelStore(data_path)
+            gbm_store = GbmModelStore(data_path)
+            for index, model_id in enumerate(("glm-one", "glm-two"), start=1):
+                model_dir = glm_store.create_model_dir(model_id)
+                glm_store.write_json(
+                    model_dir / "manifest.json",
+                    {
+                        "model_id": model_id,
+                        "label": f"GLM {index}",
+                        "created_at": f"2026-08-06T00:00:0{index}Z",
+                        "family": "normal",
+                        "response_column": "response",
+                        "denominator_column": "",
+                    },
+                )
+            for index, model_id in enumerate(("gbm-one", "gbm-two"), start=1):
+                model_dir = gbm_store.create_model_dir(model_id)
+                gbm_store.write_json(
+                    model_dir / "manifest.json",
+                    {
+                        "model_id": model_id,
+                        "label": f"GBM {index}",
+                        "created_at": f"2026-08-06T00:00:0{index}Z",
+                        "response_column": "response",
+                        "offset_column": "",
+                    },
+                )
+
+            opened: list[Path] = []
+            fail_open = {"enabled": False}
+
+            def configure_app(app: Any) -> None:
+                app.state.local_folder_opener_available = lambda: True
+
+                def opener(path: Path) -> None:
+                    opened.append(path)
+                    if fail_open["enabled"]:
+                        raise LocalFolderOpenError("Browser smoke folder failure")
+
+                app.state.local_folder_opener = opener
+
+            base_url, server, thread = self.start_app(
+                data_path,
+                tools=["line_bar", "glm", "gbm"],
+                defaults={"x": "feature", "actual": "response", "denominator": "__none__"},
+                configure_app=configure_app,
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1440, "height": 900})
+                    page_errors: list[str] = []
+                    requests: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.on("request", lambda request: requests.append(request.url))
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    self.wait_for_app_ready(page)
+                    platform = page.evaluate("() => navigator.userAgentData?.platform || navigator.platform || ''")
+                    additive_modifier = "Meta" if "mac" in str(platform).lower() else "Control"
+
+                    page.locator("#glmTool").click()
+                    page.get_by_role("tab", name="Model navigator").click()
+                    page.locator("#glmModelGrid .tabulator-row", has_text="GLM 1").wait_for(timeout=10_000)
+                    glm_button = page.locator("#glmOpenModelFolderBtn")
+                    self.assertTrue(glm_button.is_disabled())
+                    glm_button_state = page.evaluate(
+                        """
+                        () => {
+                          const open = document.querySelector("#glmOpenModelFolderBtn");
+                          const rename = document.querySelector("#glmRenameModelBtn");
+                          return {
+                            beforeRename: Boolean(open.compareDocumentPosition(rename) & Node.DOCUMENT_POSITION_FOLLOWING),
+                            shared: open.classList.contains("app-control-button"),
+                            command: open.classList.contains("app-command-button"),
+                            height: open.getBoundingClientRect().height,
+                            renameHeight: rename.getBoundingClientRect().height,
+                          };
+                        }
+                        """
+                    )
+                    self.assertTrue(glm_button_state["beforeRename"])
+                    self.assertTrue(glm_button_state["shared"])
+                    self.assertTrue(glm_button_state["command"])
+                    self.assertEqual(glm_button_state["height"], glm_button_state["renameHeight"])
+
+                    glm_row = page.locator("#glmModelGrid .tabulator-row", has_text="GLM 1")
+                    page.wait_for_timeout(250)
+                    glm_row.locator('.tabulator-cell[tabulator-field="model_label"]').click()
+                    page.wait_for_function(
+                        "() => document.querySelectorAll('#glmModelGrid .tabulator-row.tabulator-selected').length === 1"
+                    )
+                    glm_selection_state = page.evaluate(
+                        """
+                        () => ({
+                          openDisabled: document.querySelector("#glmOpenModelFolderBtn")?.disabled,
+                          renameDisabled: document.querySelector("#glmRenameModelBtn")?.disabled,
+                          activateDisabled: document.querySelector("#glmActivateModelBtn")?.disabled,
+                        })
+                        """
+                    )
+                    self.assertEqual(
+                        glm_selection_state,
+                        {"openDisabled": False, "renameDisabled": False, "activateDisabled": False},
+                    )
+                    request_start = len(requests)
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/glm/models/glm-one/open-folder"),
+                        timeout=10_000,
+                    ) as glm_open_response:
+                        glm_button.click()
+                    self.assertEqual(glm_open_response.value.status, 200)
+                    self.assertEqual(opened, [glm_store.model_dir("glm-one").resolve()])
+                    self.assertEqual(page.locator("#glmModelGrid .tabulator-row.tabulator-selected").count(), 1)
+                    glm_action_requests = requests[request_start:]
+                    self.assertFalse(any(url.endswith("/activate") or url.endswith("/api/schema") for url in glm_action_requests))
+
+                    page.locator(
+                        '#glmModelGrid .tabulator-row:has-text("GLM 2") '
+                        '.tabulator-cell[tabulator-field="model_label"]'
+                    ).click(modifiers=[additive_modifier])
+                    page.wait_for_function("() => document.querySelector('#glmOpenModelFolderBtn')?.disabled")
+                    self.assertEqual(page.locator("#glmModelGrid .tabulator-row.tabulator-selected").count(), 2)
+
+                    page.locator("#gbmTool").click()
+                    page.get_by_role("tab", name="Model navigator").click()
+                    gbm_row = page.locator("#gbmModelGrid .tabulator-row", has_text="GBM 1")
+                    gbm_row.wait_for(timeout=10_000)
+                    gbm_button = page.locator("#gbmOpenModelFolderBtn")
+                    self.assertTrue(gbm_button.is_disabled())
+                    page.wait_for_timeout(250)
+                    gbm_row.locator('.tabulator-cell[tabulator-field="model_label"]').click()
+                    page.wait_for_function("() => !document.querySelector('#gbmOpenModelFolderBtn')?.disabled")
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/gbm/models/gbm-one/open-folder"),
+                        timeout=10_000,
+                    ) as gbm_open_response:
+                        gbm_button.click()
+                    self.assertEqual(gbm_open_response.value.status, 200)
+                    self.assertEqual(opened[-1], gbm_store.model_dir("gbm-one").resolve())
+                    self.assertEqual(page.locator("#gbmModelGrid .tabulator-row.tabulator-selected").count(), 1)
+
+                    fail_open["enabled"] = True
+                    with page.expect_response(
+                        lambda response: response.url.endswith("/api/gbm/models/gbm-one/open-folder"),
+                        timeout=10_000,
+                    ) as failed_open_response:
+                        gbm_button.click()
+                    self.assertEqual(failed_open_response.value.status, 503)
+                    page.locator("#gbmNotice", has_text="Browser smoke folder failure").wait_for(timeout=10_000)
+                    page.wait_for_function("() => !document.querySelector('#gbmOpenModelFolderBtn')?.disabled")
+                    self.assertEqual(page.locator("#gbmModelGrid .tabulator-row.tabulator-selected").count(), 1)
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
     @staticmethod
     def start_app(
         data_path: Path,
@@ -18787,6 +18952,7 @@ COPY (
         tools: list[str] | None = None,
         buttons: bool = False,
         title_prefix: str | None = None,
+        configure_app: Callable[[Any], None] | None = None,
     ) -> tuple[str, uvicorn.Server, threading.Thread]:
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
@@ -18810,6 +18976,8 @@ COPY (
             header_buttons=buttons,
             title_prefix=title_prefix,
         )
+        if configure_app is not None:
+            configure_app(app)
         config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", access_log=False)
         server = uvicorn.Server(config)
         app.state.shutdown_callback = lambda: setattr(server, "should_exit", True)

@@ -1811,10 +1811,15 @@ if (readySelected !== 1 || readyDeselected !== 1) throw new Error("ready table r
 const activate = {{}};
 const rename = {{}};
 const deleteButton = {{}};
-syncModelActionButtons({{ selectedCount: 1, disabled: false, activate, rename, deleteButton }});
-if (activate.disabled || rename.disabled || deleteButton.disabled) throw new Error("enabled action state failed");
-syncModelActionButtons({{ selectedCount: 2, disabled: true, activate, rename, deleteButton }});
-if (!activate.disabled || !rename.disabled || !deleteButton.disabled) throw new Error("disabled action state failed");
+const openFolder = {{}};
+syncModelActionButtons({{ selectedCount: 1, disabled: false, openFolder, activate, rename, deleteButton }});
+if (openFolder.disabled || activate.disabled || rename.disabled || deleteButton.disabled) throw new Error("enabled action state failed");
+syncModelActionButtons({{ selectedCount: 2, disabled: false, openFolder, activate, rename, deleteButton }});
+if (!openFolder.disabled || !activate.disabled || !rename.disabled || deleteButton.disabled) throw new Error("multiple action state failed");
+syncModelActionButtons({{ selectedCount: 1, disabled: false, openFolder, openFolderPending: true, activate, rename, deleteButton }});
+if (!openFolder.disabled || activate.disabled || rename.disabled || deleteButton.disabled) throw new Error("folder pending state failed");
+syncModelActionButtons({{ selectedCount: 2, disabled: true, openFolder, activate, rename, deleteButton }});
+if (!openFolder.disabled || !activate.disabled || !rename.disabled || !deleteButton.disabled) throw new Error("disabled action state failed");
 
 let observedCount = 0;
 class FakeResizeObserver {{
@@ -2785,6 +2790,10 @@ for (const [column, expected] of cases) {{
         self.assertIn('onCopyFormula(getFormulaText())', glm_formula_builder)
         for tool, prefix in ((glm, "glm"), (gbm, "gbm")):
             self.assertIn(
+                f'id="{prefix}OpenModelFolderBtn" class="app-control-button app-command-button"',
+                tool,
+            )
+            self.assertIn(
                 f'id="{prefix}RenameModelBtn" class="app-control-button app-command-button"',
                 tool,
             )
@@ -2799,6 +2808,8 @@ for (const [column, expected] of cases) {{
             self.assertNotIn(f'id="{prefix}RenameModelBtn" class="tab ', tool)
             self.assertNotIn(f'id="{prefix}ActivateModelBtn" class="tab ', tool)
             self.assertNotIn(f'id="{prefix}DeleteModelBtn" class="danger-action ', tool)
+            self.assertLess(tool.index(f'id="{prefix}OpenModelFolderBtn"'), tool.index(f'id="{prefix}RenameModelBtn"'))
+            self.assertIn("state.schema?.capabilities?.open_model_folders", tool)
         self.assertIn('class="gbm-feature-main-control-strip app-control-strip"', gbm)
         self.assertIn('id="gbmFeatureSetupBtn" class="app-control-button gbm-feature-option-button gbm-feature-setup-button', gbm)
         self.assertIn('aria-label="Feature setup" title="Feature setup" aria-controls="gbmFeatureSetupPanel" aria-expanded=', gbm)

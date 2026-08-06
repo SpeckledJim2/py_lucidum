@@ -570,6 +570,7 @@ COPY (
         self.assertIn("/api/gbm/sample", paths)
         self.assertIn("/api/gbm/models", paths)
         self.assertIn("/api/gbm/models/{model_id}", paths)
+        self.assertIn("/api/gbm/models/{model_id}/open-folder", paths)
         self.assertIn("/api/gbm/models/{model_id}/activate", paths)
         self.assertIn("/api/gbm/models/{model_id}/rename", paths)
         self.assertIn("/api/gbm/models/{model_id}/ebm-gain-summary", paths)

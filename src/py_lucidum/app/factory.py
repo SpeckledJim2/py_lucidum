@@ -38,6 +38,7 @@ from py_lucidum.tools.registry import normalise_tools, register_tools, tool_payl
 
 from .assets import NoStoreStaticFiles, no_store_file_response, no_store_html_response
 from .context import AppContext
+from .local_folders import local_folder_opening_available, model_folder_opening_available, open_local_folder
 from .servers import ServerStopError, list_lucidum_servers, stop_lucidum_server
 from .telemetry import TelemetryMiddleware, TelemetryStore
 
@@ -218,6 +219,8 @@ def create_app(
     dataset = Dataset(resolved_dataset_path)
     app = FastAPI(title="py_lucidum")
     app.state.dataset = dataset
+    app.state.local_folder_opener = open_local_folder
+    app.state.local_folder_opener_available = local_folder_opening_available
     app.state.telemetry = TelemetryStore()
     app.state.token = token
     app.state.lucidum_server_metadata = {
@@ -258,7 +261,7 @@ def create_app(
         if supplied != expected:
             raise HTTPException(status_code=401, detail="Invalid or missing app token")
 
-    def schema_payload() -> dict[str, Any]:
+    def schema_payload(request: Request) -> dict[str, Any]:
         payload = dict(app.state.dataset.schema())
         payload["defaults"] = app.state.defaults
         payload["filters"] = app.state.saved_filters
@@ -269,6 +272,13 @@ def create_app(
         payload["app_version"] = __version__
         payload["header_buttons"] = app.state.header_buttons
         payload["title_prefix"] = app.state.title_prefix
+        capabilities = dict(payload.get("capabilities") or {})
+        capabilities["open_model_folders"] = model_folder_opening_available(
+            request,
+            app.state.dataset.path,
+            opener_available=app.state.local_folder_opener_available,
+        )
+        payload["capabilities"] = capabilities
         try:
             app.state.telemetry.update_environment({
                 "dataset": {
@@ -307,7 +317,7 @@ def create_app(
         check_token(request)
         try:
             app.state.dataset.refresh_if_source_changed()
-            return schema_payload()
+            return schema_payload(request)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except duckdb.Error as exc:
@@ -513,7 +523,7 @@ def create_app(
             use_features=app.state.use_features,
             missing_ok=app.state.allow_missing_spec_paths,
         )
-        return schema_payload()
+        return schema_payload(request)
 
     @app.post("/api/shutdown")
     def shutdown(request: Request) -> dict[str, str]:

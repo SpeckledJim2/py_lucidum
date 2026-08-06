@@ -157,6 +157,7 @@ export function createGbmTool({
   let queuedActivationModelId = "";
   let activationPromise = null;
   let isTraining = false;
+  let modelFolderOpenPending = false;
   let trainingElapsedStartedAt = null;
   let liveProgress = null;
   let liveEvaluationParameters = null;
@@ -210,10 +211,12 @@ export function createGbmTool({
 
   function beginModelMutation() {
     modelMutationPending += 1;
+    syncModelActionButtons();
   }
 
   function endModelMutation() {
     modelMutationPending = Math.max(0, modelMutationPending - 1);
+    syncModelActionButtons();
   }
 
   async function fetchData(request, requestKey) {
@@ -412,6 +415,7 @@ export function createGbmTool({
         <div id="gbm-screen-panel-models" class="${gbmPanelClass(activeTab, "models")}" data-gbm-panel="models" role="tabpanel" aria-labelledby="gbm-screen-tab-models">
           <div class="gbm-model-navigator">
             <div class="gbm-model-actions app-control-strip app-control-strip-row app-control-strip--actions" role="group" aria-label="GBM model actions">
+              ${state.schema?.capabilities?.open_model_folders ? '<button id="gbmOpenModelFolderBtn" class="app-control-button app-command-button" type="button" title="Open the selected model sidecar folder">Open folder</button>' : ""}
               <button id="gbmRenameModelBtn" class="app-control-button app-command-button" type="button">Rename</button>
               <button id="gbmActivateModelBtn" class="app-control-button app-command-button" type="button">Activate</button>
               <button id="gbmDeleteModelBtn" class="app-control-button app-command-button app-command-button--danger" type="button">Delete</button>
@@ -3403,6 +3407,7 @@ export function createGbmTool({
   }
 
   function bindModelActions() {
+    el("gbmOpenModelFolderBtn")?.addEventListener("click", openSelectedModelFolder);
     el("gbmRenameModelBtn")?.addEventListener("click", renameActiveModel);
     el("gbmActivateModelBtn")?.addEventListener("click", activateSelectedModel);
     el("gbmDeleteModelBtn")?.addEventListener("click", deleteActiveModel);
@@ -3413,6 +3418,8 @@ export function createGbmTool({
     syncSharedModelActionButtons({
       selectedCount: selectedModelIds().length,
       disabled: isTraining || Boolean(modelTable && !modelTableReady),
+      openFolder: el("gbmOpenModelFolderBtn"),
+      openFolderPending: modelFolderOpenPending || modelMutationPending > 0,
       rename: el("gbmRenameModelBtn"),
       activate: el("gbmActivateModelBtn"),
       deleteButton: el("gbmDeleteModelBtn"),
@@ -3772,6 +3779,29 @@ export function createGbmTool({
     const modelIds = selectedModelIds();
     if (modelIds.length !== 1) return;
     await activateModel(modelIds[0]);
+  }
+
+  async function openSelectedModelFolder() {
+    if (isTraining || modelFolderOpenPending || modelMutationPending > 0) return;
+    const modelIds = selectedModelIds();
+    if (modelIds.length !== 1) return;
+    const button = el("gbmOpenModelFolderBtn");
+    modelFolderOpenPending = true;
+    button?.setAttribute("aria-busy", "true");
+    syncModelActionButtons();
+    try {
+      await api(`/api/gbm/models/${encodeURIComponent(modelIds[0])}/open-folder`, {
+        method: "POST",
+        body: "{}",
+      });
+      setGbmNotice("");
+    } catch (error) {
+      setGbmNotice(error.message);
+    } finally {
+      modelFolderOpenPending = false;
+      button?.removeAttribute("aria-busy");
+      syncModelActionButtons();
+    }
   }
 
   async function renameActiveModel() {

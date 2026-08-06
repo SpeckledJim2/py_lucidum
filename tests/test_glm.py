@@ -650,6 +650,7 @@ if result.get("iteration") != 10:
         self.assertIn("/api/glm/tabulations/rebase", paths)
         self.assertIn("/api/glm/tabulations/rebase/reset", paths)
         self.assertIn("/api/glm/models/{model_id}", paths)
+        self.assertIn("/api/glm/models/{model_id}/open-folder", paths)
         self.assertIn("/api/glm/models/{model_id}/activate", paths)
         self.assertIn("/api/glm/models/{model_id}/rename", paths)
         model_route_methods: set[str] = set()

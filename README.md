@@ -221,6 +221,8 @@ The dataset slug comes from the CSV or Parquet filename. The dataset signature i
 
 If a dataset file is replaced or edited, it gets a new signature workspace. Existing GLM/GBM models from the previous version remain on disk but are not shown or used; rebuild models after changing the source file. Older root-level `.lucidum/models/` folders are ignored by current Lucidum versions. Parquet folder inputs do not create or read GLM/GBM workspaces because modelling tools require a single source Parquet.
 
+The GLM and GBM Model navigators show an `Open folder` command when Lucidum is opened through `localhost`, `127.0.0.1`, or `::1` and the host has a supported desktop file manager. Select one model to open that model's sidecar directory in Finder on macOS, File Explorer on Windows, or the desktop file manager through `xdg-open` on Linux; no additional Python package is required. The command opens a folder on the machine running the Lucidum server, so it is hidden from browsers connected over the LAN and in unsupported or headless environments.
+
 By default, saved Favourites are saved beside those workspaces but one level above the dataset signature:
 
 ```text

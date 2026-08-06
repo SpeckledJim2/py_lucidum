@@ -209,7 +209,16 @@ export function restoreModelSelection({ table, fallbackSelector, rowDataKey, ids
   return selected;
 }
 
-export function syncModelActionButtons({ selectedCount, disabled = false, activate, rename, deleteButton }) {
+export function syncModelActionButtons({
+  selectedCount,
+  disabled = false,
+  openFolder,
+  openFolderPending = false,
+  activate,
+  rename,
+  deleteButton,
+}) {
+  if (openFolder) openFolder.disabled = disabled || openFolderPending || selectedCount !== 1;
   if (activate) activate.disabled = disabled || selectedCount !== 1;
   if (rename) rename.disabled = disabled || selectedCount !== 1;
   if (deleteButton) deleteButton.disabled = disabled || selectedCount < 1;

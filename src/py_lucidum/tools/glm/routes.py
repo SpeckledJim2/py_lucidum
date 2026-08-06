@@ -5,6 +5,12 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 
 from py_lucidum.app.context import AppContext
+from py_lucidum.app.local_folders import (
+    LocalFolderOpenError,
+    LocalFolderPathError,
+    confined_existing_directory,
+    request_is_loopback,
+)
 from py_lucidum.app.telemetry import request_operation_id
 
 from .formula_assist import formula_levels
@@ -227,6 +233,29 @@ def register(app: FastAPI, context: AppContext) -> None:
             return store.model_detail(model_id)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/glm/models/{model_id}/open-folder")
+    async def open_model_folder_endpoint(request: Request, model_id: str) -> dict[str, Any]:
+        context.check_token(request)
+        if not request_is_loopback(request):
+            raise HTTPException(
+                status_code=403,
+                detail="Opening model folders is only available from the local Lucidum browser",
+            )
+        if not context.dataset.path.is_file() or not app.state.local_folder_opener_available():
+            raise HTTPException(status_code=503, detail="Opening folders is unavailable on this system")
+        try:
+            store.manifest(model_id)
+            directory = confined_existing_directory(store.root, store.model_dir(model_id))
+        except (ValueError, LocalFolderPathError) as exc:
+            raise HTTPException(status_code=404, detail="Choose a valid GLM model folder") from exc
+        try:
+            app.state.local_folder_opener(directory)
+        except LocalFolderPathError as exc:
+            raise HTTPException(status_code=404, detail="Choose a valid GLM model folder") from exc
+        except (LocalFolderOpenError, OSError) as exc:
+            raise HTTPException(status_code=503, detail=str(exc) or "Could not open the model folder") from exc
+        return {"opened": True, "model_id": model_id}
 
     @app.post("/api/glm/models/{model_id}/activate")
     async def activate_endpoint(request: Request, model_id: str) -> dict[str, Any]:

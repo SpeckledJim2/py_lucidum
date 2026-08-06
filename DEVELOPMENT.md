@@ -91,6 +91,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
   - `POST /api/glm/tabulations/plot`
   - `POST /api/glm/tabulations/export`
   - `GET /api/glm/models/{model_id}`
+  - `POST /api/glm/models/{model_id}/open-folder`
   - `POST /api/glm/models/{model_id}/activate`
   - `POST /api/glm/models/{model_id}/rename`
   - `DELETE /api/glm/models/{model_id}`
@@ -101,6 +102,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
   - `POST /api/gbm/train`
   - `GET /api/gbm/jobs/{job_id}`
   - `GET /api/gbm/models/{model_id}`
+  - `POST /api/gbm/models/{model_id}/open-folder`
   - `GET /api/gbm/models/{model_id}/shap/config`
   - `POST /api/gbm/models/{model_id}/shap/plot`
   - `GET /api/gbm/models/{model_id}/trees`
@@ -244,6 +246,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 - GLM and GBM are opt-in tools and are not part of the default user-facing tool set. `--tools all` enables them with every other tool in the built-in registry order. Explicit modelling selections preserve the supplied order and must also include `line-bar` because GLM/GBM context-menu actions open Line/Bar charts. GLM and GBM do not imply each other; request both when cross-model tabulation or comparison workflows are needed.
 - The shared header application-status badge times GLM and GBM builds from the user's click through all post-training work and separately times GLM tabulation through row scoring. It returns to untimed `Ready` only after the final client refresh. Phase changes reuse the operation's original `performance.now()` timestamp; other badge uses remain untimed, and the changing elapsed text is hidden from live-region announcements.
 - GLM and GBM artifacts are scoped to the exact dataset version under `.lucidum/datasets/<dataset-slug>/<dataset-signature>/models/{glm,gbm}/`. The slug is derived from the dataset filename. The signature is derived from file size, modification time, row count, and schema fingerprint. Startup scans only the current signature workspace; root-level `.lucidum/models/` folders and other dataset-version workspaces are ignored and must never break raw dataset startup.
+- `/api/schema.capabilities.open_model_folders` is request-specific and true only for a loopback client, a file-backed dataset, and a supported desktop opener. The matching GLM/GBM `open-folder` endpoints remain token protected, reject non-loopback clients, validate the selected directory beneath the current store root after resolving symlinks, and never return an absolute path. They use `/usr/bin/open` on macOS, `os.startfile(..., "explore")` on Windows, or desktop-session `xdg-open` on Linux without adding a Python dependency. The navigator command is hidden when this capability is false and opens a window on the server host, not a remote browser host.
 - GLM config, validation, model listing, model activation, and source discovery must work without importing optional modelling libraries.
 - GLM training imports `glum`, Polars, pandas, and numpy lazily through the `glm` optional extra. These packages must not become base install dependencies. Build routes should report missing GLM dependencies as an actionable install-extra error, not a server 500. Polars owns the large-row fit/scoring path; pandas remains in the on-demand tabulation, overlay, and export paths.
 - GLM accepts full `response ~ terms` formulas and RHS-only formulas using the sidebar Actual response. Raw formulas are stored in `formula.txt` with comments, but `#` comments outside quoted strings are stripped before fitting. The allowed formula context is intentionally narrow: `ifelse`, `pmin`, `pmax`, `ns`, `bs`, `cs`, `poly`, `C`, and common numeric transforms. Obvious unsafe text such as `__`, `import`, `eval`, `exec`, `open`, and statement separators is rejected before fitting. Explicit `offset(...)` terms are stripped from the fitted formula, stored in the manifest, evaluated with the same safe context, and passed to `glum.fit()`, prediction, and tabulation reconstruction.
