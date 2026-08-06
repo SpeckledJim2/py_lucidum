@@ -2962,9 +2962,11 @@ export function createGlmTool({
           });
           if (queuedActivationModelId) continue;
           if (!modelStateIsCurrent(generation)) continue;
+          // Explicit activation is authoritative even when the tool's cached config
+          // still names the target model and the schema-backed sidebar does not.
           await applyModelMutationResult(result, {
             activationOnly: true,
-            syncModelMetrics: targetModelId !== currentActiveModelId(),
+            syncModelMetrics: true,
             modelStateGeneration: generation,
           });
         } catch (error) {
@@ -3109,6 +3111,7 @@ export function createGlmTool({
     const schemaResult = await reloadSchema(preferredModelSource(result, nextConfig), {
       modelKind: "glm",
       activeModel: activeMetricModel,
+      activeModelChanged: Boolean(options?.syncModelMetrics),
     });
     if (schemaResult === false || !modelStateIsCurrent(generation)) return false;
     const chartReady = schemaResult?.chartReady !== false;

@@ -207,6 +207,193 @@ if (order([glm("glm_prediction"), gbm("gbm_prediction")]) !== "gbm|glm") throw n
 """
         self.run_node_script(script)
 
+    def test_line_bar_model_switch_policy_aligns_predictions_and_partial_dependence(self) -> None:
+        module = Path("src/py_lucidum/static/app/line-bar-tool.js").resolve().as_uri()
+        script = f"""
+import {{ nextLineBarModelComparisonState }} from "{module}";
+const dataset = (value) => ({{ value, sourceId: "dataset", metricKind: "metric" }});
+const glm = (value = "glm_prediction", model = "old-glm") => ({{
+  value, sourceId: `glm:${{model}}:predictions`, metricKind: "prediction",
+}});
+const gbm = (value = "gbm_prediction", model = "old-gbm") => ({{
+  value, sourceId: `gbm:${{model}}:predictions`, metricKind: "prediction",
+}});
+const primary = {{ glm: glm("glm_prediction", "new-glm"), gbm: gbm("gbm_prediction", "new-gbm") }};
+const defaults = {{
+  primaryExpectedSelections: primary,
+  predictionAvailable: {{ glm: true, gbm: true }},
+  overlayAvailable: {{ glm: true, gbm: true }},
+  modelMetricMatches: {{ glm: true, gbm: true }},
+  activeModelAvailable: {{ glm: true, gbm: true }},
+}};
+const transition = (options) => nextLineBarModelComparisonState({{ ...defaults, ...options }});
+const values = (result) => result.expectedSelections.map((selection) => selection.value).join("|");
+const sources = (result) => result.expectedSelections.map((selection) => selection.sourceId).join("|");
+
+let result = transition({{
+  expectedSelections: [], partialDependence: "none", activatedModelKind: "gbm",
+}});
+if (values(result) !== "gbm_prediction" || result.partialDependence !== "none") throw new Error("empty comparison was not populated");
+
+result = transition({{
+  expectedSelections: [dataset("benchmark")], partialDependence: "none", activatedModelKind: "gbm",
+}});
+if (values(result) !== "gbm_prediction" || result.partialDependence !== "none") throw new Error("dataset comparison was not replaced");
+
+result = transition({{
+  expectedSelections: [dataset("benchmark"), dataset("plan")], partialDependence: "none", activatedModelKind: "glm",
+}});
+if (values(result) !== "glm_prediction" || result.partialDependence !== "none") throw new Error("dataset comparison pair was not replaced");
+
+result = transition({{
+  expectedSelections: [glm()], partialDependence: "glm", activatedModelKind: "gbm",
+}});
+if (values(result) !== "gbm_prediction" || result.partialDependence !== "shap") throw new Error("GLM to GBM switch failed");
+
+result = transition({{
+  expectedSelections: [gbm()], partialDependence: "shap", activatedModelKind: "glm",
+}});
+if (values(result) !== "glm_prediction" || result.partialDependence !== "glm") throw new Error("GBM to GLM switch failed");
+
+result = transition({{
+  expectedSelections: [glm(), gbm()], partialDependence: "both", activatedModelKind: "gbm", metricsChanged: false,
+}});
+if (values(result) !== "glm_prediction|gbm_prediction") throw new Error("compatible prediction pair was not preserved");
+if (sources(result) !== "glm:new-glm:predictions|gbm:new-gbm:predictions") throw new Error("compatible prediction pair was not rebound");
+if (result.partialDependence !== "both" || result.expectedChanged || result.partialDependenceChanged) throw new Error("compatible comparison state changed");
+
+result = transition({{
+  expectedSelections: [glm(), gbm()], partialDependence: "both", activatedModelKind: "gbm", metricsChanged: true,
+}});
+if (values(result) !== "gbm_prediction" || result.partialDependence !== "shap") throw new Error("changed metric pair was not collapsed");
+if (!result.expectedChanged || !result.partialDependenceChanged) throw new Error("changed comparison was not reported");
+
+result = transition({{
+  expectedSelections: [glm(), gbm()], partialDependence: "both", activatedModelKind: "glm",
+  modelMetricMatches: {{ glm: true, gbm: false }},
+}});
+if (values(result) !== "glm_prediction" || result.partialDependence !== "glm") throw new Error("incompatible active models were preserved");
+
+result = transition({{
+  expectedSelections: [glm("glm_prediction_rate")], partialDependence: "glm", activatedModelKind: "glm",
+}});
+if (values(result) !== "glm_prediction" || !result.expectedChanged) throw new Error("advanced prediction was not normalized");
+
+result = transition({{
+  expectedSelections: [glm()], partialDependence: "glm", activatedModelKind: "gbm",
+  overlayAvailable: {{ glm: true, gbm: false }},
+}});
+if (values(result) !== "gbm_prediction" || result.partialDependence !== "glm") throw new Error("unavailable SHAP fallback failed");
+if (!result.activatedOverlayUnavailable) throw new Error("unavailable SHAP was not reported");
+
+result = transition({{
+  expectedSelections: [dataset("benchmark")], partialDependence: "none", activatedModelKind: "gbm",
+  primaryExpectedSelections: {{ glm: primary.glm, gbm: null }},
+  predictionAvailable: {{ glm: true, gbm: false }},
+}});
+if (values(result) !== "benchmark") throw new Error("unavailable prediction did not preserve dataset comparison");
+if (!result.activatedPredictionUnavailable) throw new Error("unavailable prediction was not reported");
+
+result = transition({{
+  expectedSelections: [glm(), gbm()], partialDependence: "both", activatedModelKind: "gbm",
+  primaryExpectedSelections: {{ glm: primary.glm, gbm: null }},
+  predictionAvailable: {{ glm: true, gbm: false }},
+  overlayAvailable: {{ glm: true, gbm: false }},
+  modelMetricMatches: {{ glm: true, gbm: false }},
+  activeModelAvailable: {{ glm: true, gbm: false }},
+}});
+if (values(result) !== "glm_prediction" || result.partialDependence !== "glm") throw new Error("final model deletion fallback failed");
+"""
+        self.run_node_script(script)
+
+    def test_line_bar_model_kpi_compatibility_warnings_are_source_aware_and_deduplicated(self) -> None:
+        module = Path("src/py_lucidum/static/app/line-bar-tool.js").resolve().as_uri()
+        script = f"""
+import {{ lineBarModelKpiCompatibilityWarnings }} from "{module}";
+const glmA = {{
+  id: "glm:glm-a:predictions", kind: "glm_predictions", model_id: "glm-a", active: true,
+  response_column: "num_a", denominator_column: "den_a",
+}};
+const gbmB = {{
+  id: "gbm:gbm-b:predictions", kind: "gbm_predictions", model_id: "gbm-b", active: true,
+  response_column: "num_b", offset_column: "den_b",
+}};
+const gbmBShap = {{
+  id: "gbm:gbm-b:shap-long", kind: "gbm_shap_long", model_id: "gbm-b", active: true,
+  response_column: "num_b", offset_column: "den_b",
+}};
+const glmN = {{
+  id: "glm:glm-n:predictions", kind: "glm_predictions", model_id: "glm-n", active: true,
+  response_column: "num_n", denominator_column: "",
+}};
+const warnings = (request, dataSources = [glmA, gbmB, gbmBShap]) => (
+  lineBarModelKpiCompatibilityWarnings({{ request, dataSources }})
+);
+const request = ({{
+  actual = {{ numerator: "num_a" }},
+  expected = [],
+  denominator = "den_a",
+  denominatorSource = "dataset",
+  partialDependence = {{ mode: "none" }},
+}} = {{}}) => ({{
+  responses: [actual, ...expected], denominator, denominatorSource, partialDependence,
+}});
+
+let result = warnings(request({{
+  expected: [{{ numerator: "glm_prediction", source: glmA.id }}],
+  partialDependence: {{ mode: "glm" }},
+}}));
+if (result.length) throw new Error(`matching GLM produced a warning: ${{result.join(" ")}}`);
+
+result = warnings(request({{
+  actual: {{ numerator: "num_b" }},
+  expected: [{{ numerator: "glm_prediction", source: glmA.id }}],
+  partialDependence: {{ mode: "glm" }},
+}}));
+if (result.length !== 1) throw new Error("GLM prediction and overlay were not deduplicated");
+if (!result[0].includes("GLM prediction and partial dependence were trained for num_a / den_a")) throw new Error("GLM components were not named");
+if (!result[0].includes("selected KPI is num_b / den_a")) throw new Error("Numerator mismatch was not described");
+
+result = warnings(request({{
+  expected: [{{ numerator: "glm_prediction", source: glmA.id }}], denominator: "den_b",
+}}));
+if (result.length !== 1 || !result[0].includes("selected KPI is num_a / den_b")) throw new Error("Denominator mismatch was not described");
+
+result = warnings(request({{
+  actual: {{ numerator: "num_a", source: "external-source" }},
+  expected: [{{ numerator: "glm_prediction", source: glmA.id }}],
+}}));
+if (result.length !== 1) throw new Error("Numerator source mismatch was not detected");
+
+result = warnings(request({{
+  actual: {{ numerator: "num_n" }},
+  expected: [{{ numerator: "glm_prediction", source: glmN.id }}],
+  denominator: "Average row value", denominatorSource: "external-source",
+}}), [glmN]);
+if (result.length) throw new Error("row-count denominator aliases did not normalize");
+
+result = warnings(request({{
+  actual: {{ numerator: "gbm_prediction_rate", source: gbmB.id }},
+  expected: [{{ numerator: "glm_tabulated_prediction", source: glmA.id }}],
+  denominator: "den_b",
+}}));
+if (result.length !== 2) throw new Error("Actual and Expected model outputs were not checked separately");
+if (!result.some((warning) => warning.includes("GBM prediction rate"))) throw new Error("Actual prediction rate was not named");
+if (!result.some((warning) => warning.includes("GLM tabulated prediction"))) throw new Error("tabulated Expected was not named");
+
+result = warnings(request({{
+  partialDependence: {{ mode: "shap", model_id: "gbm-b" }},
+}}));
+if (result.length !== 1 || !result[0].includes("GBM SHAP was trained for num_b / den_b")) throw new Error("SHAP mismatch was not detected");
+
+result = warnings(request({{
+  expected: [{{ numerator: "glm_prediction", source: "glm:missing:predictions" }}],
+  partialDependence: {{ mode: "shap", model_id: "missing" }},
+}}), []);
+if (result.length) throw new Error("missing metadata produced a compatibility warning");
+"""
+        self.run_node_script(script)
+
     def test_line_bar_expected_selection_helper_distinguishes_ordinary_and_additive_clicks(self) -> None:
         module = Path("src/py_lucidum/static/app/line-bar-tool.js").resolve().as_uri()
         script = f"""

@@ -1,5 +1,8 @@
       import { createColumnProfileTool } from "./column-profile-tool.js";
-      import { createLineBarTool } from "./line-bar-tool.js";
+      import {
+        createLineBarTool,
+        nextLineBarModelComparisonState,
+      } from "./line-bar-tool.js";
       import { createHistogramTool } from "./histogram-tool.js";
       import {
         combineUkMapPostcodeFilter,
@@ -905,6 +908,7 @@
       function setChartMessage(message) {
         const displayMessage = message || "";
         el("chartMessage").textContent = displayMessage;
+        el("chartMessage").title = displayMessage;
         const hiddenForView = state.tool === "line_bar" && state.view !== "chart";
         el("chartMessage").classList.toggle("hidden", !displayMessage || hiddenForView);
       }
@@ -2694,6 +2698,15 @@
         return ordered.some((predictionColumn) => setExpectedSelection(predictionColumn, predictionSource.id, { allowAnySource: false }));
       }
 
+      function primaryExpectedSelectionForModelKind(modelKind) {
+        const predictionSource = activePredictionSourceForModelKind(modelKind);
+        const predictionColumn = predictionColumnNameForModelKind(modelKind);
+        if (!predictionSource?.id || !predictionColumn) return null;
+        return expectedSelectionFromOption(
+          expectedOptionForSelection(predictionColumn, predictionSource.id, { allowAnySource: false }),
+        );
+      }
+
       function expectedSelectionsSnapshot() {
         return expectedSelections().map((selection) => ({ ...selection }));
       }
@@ -2736,6 +2749,61 @@
           return `The active ${modelLabel} Denominator is unavailable in this dataset. No replacement chart was requested.`;
         }
         return "";
+      }
+
+      function modelMetricSelectionMatchesControls(selection) {
+        if (!selection) return false;
+        const denominator = denominatorSelection();
+        return selection.numerator === el("actualNumerator").value
+          && selection.sourceId === actualSelectionSourceId()
+          && normaliseKpiDenominator(selection.denominator) === normaliseKpiDenominator(denominator.value)
+          && selection.sourceId === denominator.sourceId;
+      }
+
+      function applyLineBarModelComparisonAfterActivation({
+        previousExpectedSelections,
+        previousPartialDependence,
+        modelKind,
+        activeModel,
+        metricsChanged,
+      }) {
+        const primaryExpectedSelections = {
+          glm: primaryExpectedSelectionForModelKind("glm"),
+          gbm: primaryExpectedSelectionForModelKind("gbm"),
+        };
+        const activeModels = {
+          glm: activePredictionSourceForModelKind("glm"),
+          gbm: activePredictionSourceForModelKind("gbm"),
+        };
+        if (modelKind && activeModel) activeModels[modelKind] = activeModel;
+        const predictionAvailable = {
+          glm: Boolean(primaryExpectedSelections.glm),
+          gbm: Boolean(primaryExpectedSelections.gbm),
+        };
+        const modelMetricMatches = {
+          glm: modelMetricSelectionMatchesControls(modelMetricSelection(activeModels.glm, "glm")),
+          gbm: modelMetricSelectionMatchesControls(modelMetricSelection(activeModels.gbm, "gbm")),
+        };
+        const transition = nextLineBarModelComparisonState({
+          expectedSelections: previousExpectedSelections,
+          partialDependence: previousPartialDependence,
+          activatedModelKind: modelKind,
+          metricsChanged,
+          primaryExpectedSelections,
+          predictionAvailable,
+          overlayAvailable: {
+            glm: predictionAvailable.glm,
+            gbm: lineBarTool.shapOverlayAvailable(),
+          },
+          modelMetricMatches,
+          activeModelAvailable: {
+            glm: Boolean(activeModels.glm),
+            gbm: Boolean(activeModels.gbm),
+          },
+        });
+        setExpectedSelections(transition.expectedSelections, { allowAnySource: true });
+        state.partialDependence = transition.partialDependence;
+        return transition;
       }
 
       function actualSelectionSourceId() {
@@ -2795,6 +2863,7 @@
 
       async function reloadSchemaAfterModelMutation(preferredSource, options = {}) {
         const modelKind = String(options?.modelKind || "");
+        const activeModelChanged = Boolean(options?.activeModelChanged);
         const requestSeq = (state.lineBarSchemaRequestSeq || 0) + 1;
         state.lineBarSchemaRequestSeq = requestSeq;
         state.lineBarSourceRevision = (state.lineBarSourceRevision || 0) + 1;
@@ -2804,6 +2873,7 @@
         const previousActual = el("actualNumerator").value;
         const previousActualSource = actualSelectionSourceId();
         const previousExpectedSelections = expectedSelectionsSnapshot();
+        const previousPartialDependence = state.partialDependence;
         const previousDenominator = denominatorSelection();
         const schema = await api("/api/schema");
         if (requestSeq !== state.lineBarSchemaRequestSeq) return false;
@@ -2836,7 +2906,6 @@
         if (!setActualSelection(requestedActual, requestedActualSource)) {
           el("actualNumerator").value = numericColumnExists(previousActual) ? previousActual : numericColumns()[0]?.name || "";
         }
-        restoreExpectedSelectionsAfterModelMutation(previousExpectedSelections, modelKind);
         const requestedDenominator = !modelMetricError && requestedModelMetrics
           ? {
             value: requestedModelMetrics.denominator,
@@ -2848,6 +2917,18 @@
           || previousActualSource !== actualSelectionSourceId()
           || previousDenominator.value !== denominatorSelection().value
           || previousDenominator.sourceId !== denominatorSelection().sourceId;
+        const comparisonTransition = activeModelChanged && !modelMetricError
+          ? applyLineBarModelComparisonAfterActivation({
+            previousExpectedSelections,
+            previousPartialDependence,
+            modelKind,
+            activeModel: options?.activeModel || null,
+            metricsChanged,
+          })
+          : null;
+        if (!comparisonTransition) {
+          restoreExpectedSelectionsAfterModelMutation(previousExpectedSelections, modelKind);
+        }
         syncLineBarXFallback();
         lineBarTool.renderExpectedNumerators();
         lineBarTool.renderFeatures();
@@ -2856,6 +2937,9 @@
         gbmTool.syncDenominatorBuildState();
         syncKpiSelectionFromMetrics();
         if (metricsChanged) clearActiveFavouriteSelectionForScope("metrics");
+        else if (comparisonTransition?.expectedChanged || comparisonTransition?.partialDependenceChanged) {
+          clearActiveFavouriteSelectionForScope("line_bar_view");
+        }
         renderKpis();
         renderFavourites();
         if (modelMetricError) {
@@ -2864,6 +2948,11 @@
         }
         if (denominatorRestored && denominatorSelection().unavailable) {
           setStatus(`The selected ${denominatorSelection().modelKind.toUpperCase()} prediction Denominator is unavailable because there is no active model.`, true);
+        } else if (comparisonTransition?.activatedPredictionUnavailable) {
+          setStatus(`The active ${modelKind.toUpperCase()} prediction is unavailable, so Line/Bar kept only compatible Expected values.`);
+        } else if (comparisonTransition?.activatedOverlayUnavailable) {
+          const overlayLabel = modelKind === "gbm" ? "SHAP" : "GLM partial dependence";
+          setStatus(`${overlayLabel} is unavailable for the active ${modelKind.toUpperCase()} and selected Line/Bar feature.`);
         }
         await refreshMetricSummary({ force: true });
         return { chartReady: true };

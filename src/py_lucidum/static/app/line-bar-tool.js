@@ -29,6 +29,11 @@ const LINE_BAR_GBM_EXPECTED_COLUMNS = new Set([
   "gbm_tabulated_prediction",
 ]);
 
+const LINE_BAR_PRIMARY_EXPECTED_COLUMNS = {
+  glm: "glm_prediction",
+  gbm: "gbm_prediction",
+};
+
 function lineBarExpectedModelFamily(selection) {
   const sourceId = String(selection?.sourceId || selection?.source || "");
   if (sourceId.startsWith("glm:")) return "glm";
@@ -38,6 +43,250 @@ function lineBarExpectedModelFamily(selection) {
   if (LINE_BAR_GLM_EXPECTED_COLUMNS.has(column)) return "glm";
   if (LINE_BAR_GBM_EXPECTED_COLUMNS.has(column)) return "gbm";
   return "";
+}
+
+function lineBarModelExpectedTransitionKey(selection) {
+  const family = lineBarExpectedModelFamily(selection);
+  if (family) return `${family}\u0000${selection?.value || selection?.column || ""}`;
+  return `${selection?.sourceId || selection?.source || ""}\u0000${selection?.value || selection?.column || ""}`;
+}
+
+function lineBarPartialDependenceFamilies(mode) {
+  if (mode === "glm") return ["glm"];
+  if (mode === "shap") return ["gbm"];
+  if (mode === "both") return ["gbm", "glm"];
+  return [];
+}
+
+function lineBarPartialDependenceMode(families) {
+  const available = new Set(families);
+  if (available.has("glm") && available.has("gbm")) return "both";
+  if (available.has("gbm")) return "shap";
+  if (available.has("glm")) return "glm";
+  return "none";
+}
+
+function lineBarNormaliseKpiDenominator(value) {
+  const denominator = String(value || "").trim();
+  if (
+    !denominator
+    || denominator.toLowerCase() === "n"
+    || denominator.toLowerCase() === "average row value"
+    || denominator === "__none__"
+  ) return "__none__";
+  return denominator;
+}
+
+function lineBarModelFamilyForSource(source) {
+  const kind = String(source?.kind || "");
+  const sourceId = String(source?.id || "");
+  if (kind.startsWith("glm_") || sourceId.startsWith("glm:")) return "glm";
+  if (kind.startsWith("gbm_") || sourceId.startsWith("gbm:")) return "gbm";
+  return "";
+}
+
+function lineBarModelTrainingPair(source, family) {
+  const numerator = String(source?.response_column || "").trim();
+  if (!numerator || !family) return null;
+  const rawDenominator = family === "glm"
+    ? source?.denominator_column ?? source?.offset_column
+    : source?.offset_column ?? source?.denominator_column;
+  return {
+    numerator,
+    numeratorSource: "dataset",
+    denominator: lineBarNormaliseKpiDenominator(rawDenominator),
+    denominatorSource: "dataset",
+  };
+}
+
+function lineBarKpiPairMatches(left, right) {
+  return Boolean(
+    left
+    && right
+    && left.numerator === right.numerator
+    && left.numeratorSource === right.numeratorSource
+    && left.denominator === right.denominator
+    && left.denominatorSource === right.denominatorSource
+  );
+}
+
+function lineBarKpiPairLabel(pair) {
+  const numerator = String(pair?.numerator || "").trim() || "?";
+  const denominator = lineBarNormaliseKpiDenominator(pair?.denominator) === "__none__"
+    ? "N"
+    : String(pair?.denominator || "").trim();
+  return `${numerator} / ${denominator || "?"}`;
+}
+
+function lineBarPredictionComponent(columnName) {
+  const column = String(columnName || "");
+  if (column.endsWith("_prediction_rate")) return "prediction rate";
+  if (column.endsWith("_tabulated_prediction")) return "tabulated prediction";
+  return "prediction";
+}
+
+function lineBarNaturalList(values) {
+  if (values.length <= 1) return values[0] || "";
+  if (values.length === 2) return `${values[0]} and ${values[1]}`;
+  return `${values.slice(0, -1).join(", ")}, and ${values[values.length - 1]}`;
+}
+
+export function lineBarModelKpiCompatibilityWarnings({ request = null, dataSources = [] } = {}) {
+  const responses = Array.isArray(request?.responses) ? request.responses : [];
+  const actual = responses[0];
+  if (!actual?.numerator) return [];
+  const currentKpi = {
+    numerator: String(actual.numerator),
+    numeratorSource: String(actual.source || "dataset"),
+    denominator: lineBarNormaliseKpiDenominator(request?.denominator),
+    denominatorSource: lineBarNormaliseKpiDenominator(request?.denominator) === "__none__"
+      ? "dataset"
+      : String(request?.denominatorSource || "dataset"),
+  };
+  const sources = Array.isArray(dataSources) ? dataSources : [];
+  const sourcesById = new Map(sources.map((source) => [String(source?.id || ""), source]));
+  const mismatches = new Map();
+
+  const addComponent = (source, component) => {
+    const family = lineBarModelFamilyForSource(source);
+    const trainingKpi = lineBarModelTrainingPair(source, family);
+    if (!trainingKpi || lineBarKpiPairMatches(trainingKpi, currentKpi)) return;
+    const modelId = String(source?.model_id || source?.id || "");
+    const key = `${family}\u0000${modelId}`;
+    if (!mismatches.has(key)) {
+      mismatches.set(key, {
+        family,
+        trainingKpi,
+        components: new Set(),
+      });
+    }
+    mismatches.get(key).components.add(component);
+  };
+
+  responses.forEach((response) => {
+    const source = sourcesById.get(String(response?.source || ""));
+    const family = lineBarModelFamilyForSource(source);
+    if (!family || String(source?.kind || "") !== `${family}_predictions`) return;
+    addComponent(source, lineBarPredictionComponent(response?.numerator));
+  });
+
+  const partialDependence = request?.partialDependence || {};
+  const partialDependenceMode = String(partialDependence.mode || "none");
+  if (["shap", "both"].includes(partialDependenceMode)) {
+    const requestedModelId = String(partialDependence.model_id || "");
+    const shapSource = sources.find((source) => (
+      source?.kind === "gbm_shap_long"
+      && (requestedModelId ? String(source.model_id || "") === requestedModelId : Boolean(source.active))
+    ));
+    if (shapSource) addComponent(shapSource, "SHAP");
+  }
+  if (["glm", "both"].includes(partialDependenceMode)) {
+    const glmSource = sources.find((source) => source?.kind === "glm_predictions" && source.active);
+    if (glmSource) addComponent(glmSource, "partial dependence");
+  }
+
+  const componentOrder = ["prediction", "prediction rate", "tabulated prediction", "SHAP", "partial dependence"];
+  return [...mismatches.values()].map(({ family, trainingKpi, components }) => {
+    const orderedComponents = componentOrder.filter((component) => components.has(component));
+    const subject = `${family.toUpperCase()} ${lineBarNaturalList(orderedComponents)}`;
+    const verb = orderedComponents.length === 1 ? "was" : "were";
+    return `KPI mismatch: ${subject} ${verb} trained for ${lineBarKpiPairLabel(trainingKpi)}; selected KPI is ${lineBarKpiPairLabel(currentKpi)}.`;
+  });
+}
+
+export function nextLineBarModelComparisonState({
+  expectedSelections = [],
+  partialDependence = "none",
+  activatedModelKind = "",
+  metricsChanged = false,
+  primaryExpectedSelections = {},
+  predictionAvailable = {},
+  overlayAvailable = {},
+  modelMetricMatches = {},
+  activeModelAvailable = {},
+} = {}) {
+  const currentExpected = Array.isArray(expectedSelections) ? expectedSelections : [];
+  const currentModelExpected = currentExpected.filter((selection) => lineBarExpectedModelFamily(selection));
+  const primaryFamilies = currentExpected.map((selection) => {
+    const family = lineBarExpectedModelFamily(selection);
+    return family && String(selection?.value || selection?.column || "") === LINE_BAR_PRIMARY_EXPECTED_COLUMNS[family]
+      ? family
+      : "";
+  });
+  const exactPrimaryPair = currentExpected.length === 2
+    && primaryFamilies.every(Boolean)
+    && new Set(primaryFamilies).size === 2;
+  const bothModelsMatchMetric = Boolean(modelMetricMatches.glm && modelMetricMatches.gbm);
+  const bothPredictionsAvailable = Boolean(
+    predictionAvailable.glm
+    && predictionAvailable.gbm
+    && primaryExpectedSelections.glm
+    && primaryExpectedSelections.gbm
+  );
+  const preserveExpectedPair = exactPrimaryPair
+    && !metricsChanged
+    && bothModelsMatchMetric
+    && bothPredictionsAvailable;
+  const activatedPredictionReady = Boolean(
+    activatedModelKind
+    && predictionAvailable[activatedModelKind]
+    && modelMetricMatches[activatedModelKind]
+    && primaryExpectedSelections[activatedModelKind]
+  );
+
+  let nextExpected = currentExpected;
+  if (preserveExpectedPair) {
+    nextExpected = currentExpected.map((selection) => (
+      primaryExpectedSelections[lineBarExpectedModelFamily(selection)] || selection
+    ));
+  } else if (activatedPredictionReady) {
+    nextExpected = [primaryExpectedSelections[activatedModelKind]];
+  } else if (currentModelExpected.length) {
+    nextExpected = currentExpected.flatMap((selection) => {
+      const family = lineBarExpectedModelFamily(selection);
+      if (!family) return [selection];
+      if (!predictionAvailable[family] || !modelMetricMatches[family] || !primaryExpectedSelections[family]) return [];
+      return [primaryExpectedSelections[family]];
+    }).slice(0, 2);
+  }
+
+  const currentPartialDependence = ["none", "shap", "glm", "both"].includes(String(partialDependence))
+    ? String(partialDependence)
+    : "none";
+  const overlayReady = (family) => Boolean(overlayAvailable[family] && modelMetricMatches[family]);
+  const preserveBothOverlays = currentPartialDependence === "both"
+    && !metricsChanged
+    && bothModelsMatchMetric;
+  let nextPartialDependence = currentPartialDependence;
+  if (currentPartialDependence !== "none") {
+    if (preserveBothOverlays) {
+      nextPartialDependence = lineBarPartialDependenceMode(["gbm", "glm"].filter(overlayReady));
+    } else if (activatedModelKind && overlayReady(activatedModelKind)) {
+      nextPartialDependence = activatedModelKind === "gbm" ? "shap" : "glm";
+    } else {
+      nextPartialDependence = lineBarPartialDependenceMode(
+        lineBarPartialDependenceFamilies(currentPartialDependence).filter(overlayReady),
+      );
+    }
+  }
+
+  const currentExpectedKeys = currentExpected.map(lineBarModelExpectedTransitionKey);
+  const nextExpectedKeys = nextExpected.map(lineBarModelExpectedTransitionKey);
+  return {
+    expectedSelections: nextExpected,
+    partialDependence: nextPartialDependence,
+    expectedChanged: currentExpectedKeys.join("\u0001") !== nextExpectedKeys.join("\u0001"),
+    partialDependenceChanged: currentPartialDependence !== nextPartialDependence,
+    activatedPredictionUnavailable: Boolean(
+      activeModelAvailable[activatedModelKind]
+      && !predictionAvailable[activatedModelKind]
+    ),
+    activatedOverlayUnavailable: Boolean(
+      currentPartialDependence !== "none"
+      && activeModelAvailable[activatedModelKind]
+      && !overlayAvailable[activatedModelKind]
+    ),
+  };
 }
 
 export function lineBarImportanceModelOrder(expectedSelections = []) {
@@ -204,6 +453,10 @@ export function createLineBarTool({
   }
 
   function createLineBarRequestSnapshot(request, requestKey, intent, view = state.view) {
+    const modelKpiWarnings = Object.freeze(lineBarModelKpiCompatibilityWarnings({
+      request,
+      dataSources: state.schema?.data_sources || [],
+    }));
     return Object.freeze({
       intentId: intent?.id || lineBarIntentSeq,
       requestKey: requestKey || stableRequestKey(request),
@@ -219,6 +472,7 @@ export function createLineBarTool({
           : null,
         twoFeaturePlotMetric: String(state.twoFeaturePlotMetric || "resp0"),
         heatmapLabels: String(state.heatmapLabels || "none"),
+        modelKpiWarnings,
       }),
     });
   }
@@ -2044,8 +2298,12 @@ export function createLineBarTool({
       ];
       data._lineBarOverlayWarnings = overlayWarnings;
       data.partial_dependence = overlay.partial_dependence;
+      const requestKey = stableRequestKey(request);
+      const snapshot = createLineBarRequestSnapshot(request, requestKey, intent, "chart");
+      attachLineBarRequestSnapshot(data, snapshot);
       const cache = toolCache("line_bar");
-      cache.requestKey = stableRequestKey(request);
+      cache.requestKey = requestKey;
+      cache.requestSnapshot = snapshot;
       cache.data = data;
       state.lastData = data;
       syncDuckDbTimingFromData("line_bar", overlay);
@@ -2079,15 +2337,19 @@ export function createLineBarTool({
     ) {
       return false;
     }
-    beginLineBarIntent({ pending: false, view: "chart" });
+    const intent = beginLineBarIntent({ pending: false, view: "chart" });
     const overlayWarnings = new Set(data._lineBarOverlayWarnings);
     data.warnings = Array.isArray(data.warnings)
       ? data.warnings.filter((warning) => !overlayWarnings.has(warning))
       : [];
     data._lineBarOverlayWarnings = [];
     delete data.partial_dependence;
+    const requestKey = stableRequestKey(request);
+    const snapshot = createLineBarRequestSnapshot(request, requestKey, intent, "chart");
+    attachLineBarRequestSnapshot(data, snapshot);
     const cache = toolCache("line_bar");
-    cache.requestKey = stableRequestKey(request);
+    cache.requestKey = requestKey;
+    cache.requestSnapshot = snapshot;
     cache.data = data;
     state.lastData = data;
     if (lineBarChartReady()) {
@@ -2139,6 +2401,7 @@ export function createLineBarTool({
       });
       if (!lineBarIntentIsCurrent(intent) || requestSeq !== state.chartRequestSeq) return null;
       attachLineBarRequestSnapshot(data, snapshot);
+      data._lineBarOverlayWarnings = lineBarPartialDependenceWarnings(data.partial_dependence);
       data._lineBarBaseRequestKey = baseChartRequestKey(request);
       const cache = toolCache("line_bar");
       cache.requestKey = requestKey;
@@ -2173,9 +2436,27 @@ export function createLineBarTool({
     return Array.isArray(data?.exclusion_warnings) ? data.exclusion_warnings.filter(Boolean) : [];
   }
 
+  function lineBarPartialDependenceWarnings(partialDependence) {
+    if (!partialDependence || typeof partialDependence !== "object") return [];
+    const overlays = partialDependence.overlays;
+    const nestedWarnings = overlays && typeof overlays === "object"
+      ? Object.values(overlays).flatMap((overlay) => (
+        Array.isArray(overlay?.warnings) ? overlay.warnings.filter(Boolean) : []
+      ))
+      : [];
+    const warnings = nestedWarnings.length
+      ? nestedWarnings
+      : (Array.isArray(partialDependence.warnings) ? partialDependence.warnings.filter(Boolean) : []);
+    return [...new Set(warnings)];
+  }
+
   function lineBarDisplayWarnings(data) {
     const exclusionSet = new Set(lineBarExclusionWarnings(data));
-    return [...(data?.warnings || [])].filter((warning) => warning && !exclusionSet.has(warning));
+    const modelKpiWarnings = data?._lineBarRequestSnapshot?.presentation?.modelKpiWarnings || [];
+    return [...new Set([
+      ...modelKpiWarnings,
+      ...(data?.warnings || []),
+    ])].filter((warning) => warning && !exclusionSet.has(warning));
   }
 
   function lineBarGroupMetaWithExclusions(groupLabel, rowMeta, data) {
@@ -5142,6 +5423,7 @@ export function createLineBarTool({
     renderFeatures,
     renderExpectedNumerators,
     updateAxisControls,
+    shapOverlayAvailable: shapOverlayAvailableForSelectedColumn,
     canNavigateToFeature: canNavigateToLineBarFeature,
     navigateToFeature: navigateToLineBarFeature,
   };

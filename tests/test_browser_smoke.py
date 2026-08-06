@@ -14336,6 +14336,631 @@ COPY (
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_explicit_model_activation_aligns_empty_favourite_with_stale_tool_config(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            data_path = root / "stale_model_activation.csv"
+            data_path.write_text(
+                "num_a,num_b,den_a,den_b,Age,Segment,SAMPLE\n"
+                "10,100,1,10,30,A,training\n"
+                "20,200,2,20,40,B,test\n"
+                "30,300,3,30,50,C,training\n",
+                encoding="utf-8",
+            )
+            gbm_store = GbmModelStore(data_path)
+            self.write_gbm_prediction_model(
+                gbm_store,
+                "stale-gbm-a",
+                "Stale GBM A",
+                "2026-08-06T00:00:00Z",
+                [11, 22, 33],
+                response_column="num_a",
+                offset_column="den_a",
+            )
+            self.write_gbm_prediction_model(
+                gbm_store,
+                "stale-gbm-b",
+                "Stale GBM B",
+                "2026-08-06T00:00:01Z",
+                [101, 202, 303],
+                response_column="num_b",
+                offset_column="den_b",
+            )
+            gbm_store.activate_model("stale-gbm-a")
+
+            glm_store = GlmModelStore(data_path)
+            self.write_glm_prediction_model(
+                glm_store,
+                "stale-glm-a",
+                "Stale GLM A",
+                "2026-08-06T00:00:00Z",
+                [12, 23, 34],
+                formula="num_a ~ 1 + Age",
+                response_column="num_a",
+                denominator_column="den_a",
+            )
+            self.write_glm_prediction_model(
+                glm_store,
+                "stale-glm-b",
+                "Stale GLM B",
+                "2026-08-06T00:00:01Z",
+                [102, 203, 304],
+                formula="num_b ~ 1 + Age",
+                response_column="num_b",
+                denominator_column="den_b",
+            )
+            glm_store.activate_model("stale-glm-a")
+
+            favourite_view = {
+                "version": 1,
+                "scope": "line_bar_view",
+                "source": "dataset",
+                "x": "Age",
+                "xSource": "dataset",
+                "view": "chart",
+                "sort": "alpha",
+                "lowGroup": "0",
+                "labels": "none",
+                "bandWidth": "0",
+                "quantileMode": "off",
+                "dateBucket": "none",
+                "transform": "none",
+                "sigma": "0",
+                "partialDependence": "none",
+                "featureSort": "alpha",
+                "expectedSort": "alpha",
+                "actual": {"value": "num_a", "sourceId": "dataset", "metricKind": "metric"},
+                "denominator": "den_a",
+                "denominatorSource": "dataset",
+                "expectedSelections": [],
+                "filter": "",
+                "filterSelectionMode": "grouped",
+                "filterOperator": "and",
+                "savedFilterRows": [],
+            }
+            favourites_path = root / "favourites.json"
+            favourites_path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "favourites": [
+                            {
+                                "id": "empty-model-comparison",
+                                "name": "No Expected model comparison",
+                                "view": favourite_view,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            base_url, server, thread = self.start_app(
+                data_path,
+                tools=["line_bar", "glm", "gbm"],
+                defaults={"x": "Age", "actual": "num_a", "denominator": "den_a"},
+                line_bar_favourites_path=favourites_path,
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    chart_requests: list[dict[str, Any]] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.on(
+                        "request",
+                        lambda request: chart_requests.append(json.loads(request.post_data or "{}"))
+                        if request.url.endswith("/api/chart") and request.method == "POST"
+                        else None,
+                    )
+
+                    def wait_for_line_bar() -> None:
+                        page.locator("#lineBarTool.active").wait_for(timeout=10_000)
+                        page.wait_for_function(
+                            '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
+                            timeout=10_000,
+                        )
+
+                    def active_expected() -> list[dict[str, str]]:
+                        return page.locator("#expectedList .feature.active").evaluate_all(
+                            """
+                            buttons => buttons
+                              .filter((button) => button.dataset.value)
+                              .map((button) => ({
+                                value: button.dataset.value,
+                                source: button.dataset.sourceId || "",
+                              }))
+                            """
+                        )
+
+                    def external_activate(kind: str, model_id: str) -> None:
+                        request = Request(
+                            f"{base_url}/api/{kind}/models/{model_id}/activate",
+                            data=b"{}",
+                            headers={"Content-Type": "application/json"},
+                            method="POST",
+                        )
+                        with urlopen(request, timeout=10) as response:
+                            self.assertEqual(response.status, 200)
+                            json.load(response)
+
+                    def click_sidebar_model(kind: str, model_id: str) -> dict[str, Any]:
+                        requests_before = len(chart_requests)
+                        with page.expect_response(
+                            lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                            timeout=10_000,
+                        ) as chart_response:
+                            page.evaluate(
+                                """
+                                ({ kind, modelId }) => document.querySelector(
+                                  `#${kind}ModelSelect [data-${kind}-model-id="${modelId}"]`
+                                )?.click()
+                                """,
+                                {"kind": kind, "modelId": model_id},
+                            )
+                        page.wait_for_timeout(150)
+                        self.assertEqual(len(chart_requests) - requests_before, 1)
+                        return chart_response.value.request.post_data_json
+
+                    def select_no_expected() -> None:
+                        with page.expect_response(
+                            lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                            timeout=10_000,
+                        ):
+                            page.evaluate(
+                                """
+                                () => document.querySelector(
+                                  '#expectedList .feature[data-value=""]'
+                                )?.click()
+                                """
+                            )
+                        self.assertEqual(active_expected(), [])
+
+                    try:
+                        page.goto(base_url, wait_until="domcontentloaded")
+                        self.wait_for_app_ready(page)
+                        wait_for_line_bar()
+                        self.assertEqual(page.locator("#favouritesSelectedMeta").text_content(), "No Expected model comparison")
+                        self.assertEqual(active_expected(), [])
+
+                        # Cache GBM A inside the GBM tool, then change the backend to B.
+                        page.locator("#gbmTool").click()
+                        page.locator("#modelToolWrap .gbm-tool").wait_for(timeout=10_000)
+                        page.locator("#lineBarTool").click()
+                        wait_for_line_bar()
+                        external_activate("gbm", "stale-gbm-b")
+
+                        # A GLM activation reloads schema with GBM B but leaves the GBM tool cache on A.
+                        click_sidebar_model("glm", "stale-glm-b")
+                        page.locator("#glmTool").click()
+                        page.locator("#modelToolWrap .glm-tool").wait_for(timeout=10_000)
+                        page.locator("#lineBarTool").click()
+                        wait_for_line_bar()
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector(
+                              '#gbmModelSelect [data-gbm-model-id="stale-gbm-b"]'
+                            )?.classList.contains("active")
+                            """,
+                            timeout=10_000,
+                        )
+                        select_no_expected()
+
+                        gbm_request = click_sidebar_model("gbm", "stale-gbm-a")
+                        self.assertEqual(gbm_request["denominator"], "den_a")
+                        self.assertEqual(
+                            [response["numerator"] for response in gbm_request["responses"]],
+                            ["num_a", "gbm_prediction"],
+                        )
+                        self.assertEqual(gbm_request["responses"][1]["source"], "gbm:stale-gbm-a:predictions")
+                        self.assertEqual(
+                            active_expected(),
+                            [{"value": "gbm_prediction", "source": "gbm:stale-gbm-a:predictions"}],
+                        )
+
+                        # Repeat the same divergence in the other direction for GLM.
+                        external_activate("glm", "stale-glm-a")
+                        click_sidebar_model("gbm", "stale-gbm-b")
+                        page.locator("#gbmTool").click()
+                        page.locator("#modelToolWrap .gbm-tool").wait_for(timeout=10_000)
+                        page.locator("#lineBarTool").click()
+                        wait_for_line_bar()
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector(
+                              '#glmModelSelect [data-glm-model-id="stale-glm-a"]'
+                            )?.classList.contains("active")
+                            """,
+                            timeout=10_000,
+                        )
+                        select_no_expected()
+
+                        glm_request = click_sidebar_model("glm", "stale-glm-b")
+                        self.assertEqual(glm_request["denominator"], "den_b")
+                        self.assertEqual(
+                            [response["numerator"] for response in glm_request["responses"]],
+                            ["num_b", "glm_prediction"],
+                        )
+                        self.assertEqual(glm_request["responses"][1]["source"], "glm:stale-glm-b:predictions")
+                        self.assertEqual(
+                            active_expected(),
+                            [{"value": "glm_prediction", "source": "glm:stale-glm-b:predictions"}],
+                        )
+                        self.assertEqual(page_errors, [])
+                    finally:
+                        browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_model_switches_align_line_bar_predictions_and_partial_dependence(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "model_comparison_switch.csv"
+            data_path.write_text(
+                "num_a,num_b,num_c,den_a,den_b,Age,Segment,SAMPLE\n"
+                "10,100,1000,1,10,30,A,training\n"
+                "20,200,2000,2,20,40,B,test\n"
+                "30,300,3000,3,30,50,C,training\n",
+                encoding="utf-8",
+            )
+            gbm_store = GbmModelStore(data_path)
+            self.write_gbm_prediction_model(
+                gbm_store,
+                "comparison-gbm-a",
+                "Comparison GBM A",
+                "2026-08-06T00:00:00Z",
+                [11, 22, 33],
+                response_column="num_a",
+                offset_column="den_a",
+            )
+            self.write_gbm_prediction_model(
+                gbm_store,
+                "comparison-gbm-b",
+                "Comparison GBM B",
+                "2026-08-06T00:00:01Z",
+                [101, 202, 303],
+                response_column="num_b",
+                offset_column="den_b",
+            )
+            self.write_gbm_prediction_model(
+                gbm_store,
+                "comparison-gbm-b2",
+                "Comparison GBM B2",
+                "2026-08-06T00:00:02Z",
+                [111, 212, 313],
+                response_column="num_b",
+                offset_column="den_b",
+            )
+            gbm_store.activate_model("comparison-gbm-a")
+
+            glm_store = GlmModelStore(data_path)
+            self.write_glm_prediction_model(
+                glm_store,
+                "comparison-glm-a",
+                "Comparison GLM A",
+                "2026-08-06T00:00:00Z",
+                [12, 23, 34],
+                response_column="num_a",
+                denominator_column="den_a",
+            )
+            self.write_glm_prediction_model(
+                glm_store,
+                "comparison-glm-b",
+                "Comparison GLM B",
+                "2026-08-06T00:00:01Z",
+                [102, 203, 304],
+                response_column="num_b",
+                denominator_column="den_b",
+            )
+            self.write_glm_prediction_model(
+                glm_store,
+                "comparison-glm-c",
+                "Comparison GLM C",
+                "2026-08-06T00:00:02Z",
+                [1002, 2003, 3004],
+                response_column="num_c",
+                denominator_column="",
+            )
+            glm_store.activate_model("comparison-glm-a")
+
+            base_url, server, thread = self.start_app(
+                data_path,
+                tools=["line_bar", "glm", "gbm"],
+                defaults={"x": "Age", "actual": "num_a", "denominator": "den_a"},
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    chart_requests: list[dict[str, Any]] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.on(
+                        "request",
+                        lambda request: chart_requests.append(json.loads(request.post_data or "{}"))
+                        if request.url.endswith("/api/chart") and request.method == "POST"
+                        else None,
+                    )
+
+                    def open_sidebar_section(selector: str) -> None:
+                        if page.locator("#sidebarToggleBtn").get_attribute("aria-expanded") == "false":
+                            page.locator("#sidebarToggleBtn").click()
+                        if page.locator(selector).get_attribute("aria-expanded") == "false":
+                            page.locator(selector).click()
+
+                    def wait_for_line_bar() -> None:
+                        page.locator("#lineBarTool.active").wait_for(timeout=10_000)
+                        page.wait_for_function(
+                            '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
+                            timeout=10_000,
+                        )
+
+                    def active_expected_values() -> list[str]:
+                        return page.locator("#expectedList .feature.active").evaluate_all(
+                            "buttons => buttons.map((button) => button.dataset.value || '')"
+                        )
+
+                    def chart_series_names() -> list[str]:
+                        return page.evaluate(
+                            """
+                            () => (window.echarts.getInstanceByDom(document.querySelector("#chart"))
+                              ?.getOption().series || []).map((series) => series.name)
+                            """
+                        )
+
+                    def activate_sidebar_model(kind: str, model_id: str) -> dict[str, Any]:
+                        open_sidebar_section(f"#{kind}ModelCollapseBtn")
+                        model_option = page.locator(f'#{kind}ModelSelect [data-{kind}-model-id="{model_id}"]')
+                        if model_option.is_hidden():
+                            group = model_option.get_attribute(f"data-{kind}-model-group") or ""
+                            page.locator(
+                                f'#{kind}ModelSelect .{kind}-model-theme[data-{kind}-model-group="{group}"]'
+                            ).click()
+                        requests_before = len(chart_requests)
+                        with page.expect_response(
+                            lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                            timeout=10_000,
+                        ) as chart_response:
+                            model_option.click()
+                        page.locator(f"#{kind}ModelSelectedMeta").wait_for(timeout=10_000)
+                        page.wait_for_timeout(150)
+                        self.assertEqual(len(chart_requests) - requests_before, 1)
+                        return chart_response.value.request.post_data_json
+
+                    def select_metric(selector: str, value: str) -> dict[str, Any]:
+                        with page.expect_response(
+                            lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                            timeout=10_000,
+                        ) as chart_response:
+                            page.locator(selector).select_option(value)
+                        return chart_response.value.request.post_data_json
+
+                    try:
+                        page.goto(
+                            f"{base_url}/?tool=line_bar&x=Age&actual=num_a"
+                            "&expected=num_c&denominator=den_a",
+                            wait_until="domcontentloaded",
+                        )
+                        wait_for_line_bar()
+                        self.assertEqual(active_expected_values(), ["num_c"])
+                        if page.locator("#lineBarToolbarToggleBtn").get_attribute("aria-expanded") == "false":
+                            page.locator("#lineBarToolbarToggleBtn").click()
+                        with page.expect_response(
+                            lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                            timeout=10_000,
+                        ):
+                            page.locator('.segmented[data-control="partialDependence"] button[data-value="both"]').click()
+                        page.locator('.segmented[data-control="partialDependence"] button[data-value="both"].active').wait_for(timeout=10_000)
+
+                        changed_gbm_request = activate_sidebar_model("gbm", "comparison-gbm-b")
+                        self.assertEqual(changed_gbm_request["denominator"], "den_b")
+                        self.assertEqual(
+                            [response["numerator"] for response in changed_gbm_request["responses"]],
+                            ["num_b", "gbm_prediction"],
+                        )
+                        self.assertEqual(
+                            changed_gbm_request["responses"][1]["source"],
+                            "gbm:comparison-gbm-b:predictions",
+                        )
+                        self.assertEqual(changed_gbm_request["partialDependence"], {"mode": "shap", "model_id": "comparison-gbm-b"})
+                        self.assertEqual(active_expected_values(), ["gbm_prediction"])
+                        page.locator('.segmented[data-control="partialDependence"] button[data-value="shap"].active').wait_for(timeout=10_000)
+                        names = chart_series_names()
+                        self.assertIn("gbm_prediction", names)
+                        self.assertNotIn("glm_prediction", names)
+                        self.assertIn("SHAP median", names)
+
+                        changed_glm_request = activate_sidebar_model("glm", "comparison-glm-b")
+                        self.assertEqual(
+                            [response["numerator"] for response in changed_glm_request["responses"]],
+                            ["num_b", "glm_prediction"],
+                        )
+                        self.assertEqual(changed_glm_request["partialDependence"]["mode"], "glm")
+                        self.assertEqual(active_expected_values(), ["glm_prediction"])
+                        page.locator('.segmented[data-control="partialDependence"] button[data-value="glm"].active').wait_for(timeout=10_000)
+                        self.assertNotIn("KPI mismatch", page.locator("#chartMessage").text_content())
+
+                        select_metric("#actualNumerator", "num_a")
+                        page.wait_for_function(
+                            '() => document.querySelector("#chartMessage")?.textContent.includes("selected KPI is num_a / den_b")',
+                            timeout=10_000,
+                        )
+                        select_metric("#denominator", "den_a")
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector("#chartMessage")?.textContent.includes(
+                              "GLM prediction and partial dependence were trained for num_b / den_b; selected KPI is num_a / den_a."
+                            )
+                            """,
+                            timeout=10_000,
+                        )
+                        self.assertEqual(
+                            page.locator("#chartMessage").get_attribute("title"),
+                            page.locator("#chartMessage").text_content(),
+                        )
+                        select_metric("#actualNumerator", "num_b")
+                        select_metric("#denominator", "den_b")
+                        page.wait_for_function(
+                            '() => !(document.querySelector("#chartMessage")?.textContent || "").includes("KPI mismatch")',
+                            timeout=10_000,
+                        )
+
+                        if page.locator("#lineBarSideControlsToggleBtn").get_attribute("aria-expanded") == "false":
+                            page.locator("#lineBarSideControlsToggleBtn").click()
+                        if page.locator("#chartSideControls").evaluate("node => node.classList.contains('chart-expected-collapsed')"):
+                            page.locator("#chartExpectedToggle").click()
+                        platform = page.evaluate("() => navigator.userAgentData?.platform || navigator.platform || ''")
+                        additive_modifier = "Meta" if re.search(r"mac|iphone|ipad|ipod", platform, re.I) else "Control"
+                        with page.expect_response(
+                            lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                            timeout=10_000,
+                        ):
+                            page.locator(
+                                '#expectedList .feature[data-value="gbm_prediction"][data-source-id="gbm:comparison-gbm-b:predictions"]'
+                            ).click(modifiers=[additive_modifier])
+                        with page.expect_response(
+                            lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                            timeout=10_000,
+                        ):
+                            page.locator('.segmented[data-control="partialDependence"] button[data-value="both"]').click()
+                        self.assertEqual(active_expected_values(), ["glm_prediction", "gbm_prediction"])
+
+                        compatible_gbm_request = activate_sidebar_model("gbm", "comparison-gbm-b2")
+                        self.assertEqual(
+                            [response["numerator"] for response in compatible_gbm_request["responses"]],
+                            ["num_b", "glm_prediction", "gbm_prediction"],
+                        )
+                        self.assertEqual(
+                            [response.get("source", "") for response in compatible_gbm_request["responses"][1:]],
+                            ["glm:comparison-glm-b:predictions", "gbm:comparison-gbm-b2:predictions"],
+                        )
+                        self.assertEqual(compatible_gbm_request["partialDependence"], {"mode": "both", "model_id": "comparison-gbm-b2"})
+                        self.assertEqual(active_expected_values(), ["glm_prediction", "gbm_prediction"])
+                        page.locator('.segmented[data-control="partialDependence"] button[data-value="both"].active').wait_for(timeout=10_000)
+                        names = chart_series_names()
+                        self.assertIn("glm_prediction", names)
+                        self.assertIn("gbm_prediction", names)
+                        self.assertIn("SHAP median", names)
+
+                        changed_glm_c_request = activate_sidebar_model("glm", "comparison-glm-c")
+                        self.assertEqual(changed_glm_c_request["denominator"], "__none__")
+                        self.assertEqual(
+                            [response["numerator"] for response in changed_glm_c_request["responses"]],
+                            ["num_c", "glm_prediction"],
+                        )
+                        self.assertEqual(
+                            changed_glm_c_request["responses"][1]["source"],
+                            "glm:comparison-glm-c:predictions",
+                        )
+                        self.assertEqual(changed_glm_c_request["partialDependence"]["mode"], "glm")
+                        self.assertEqual(active_expected_values(), ["glm_prediction"])
+                        page.locator('.segmented[data-control="partialDependence"] button[data-value="glm"].active').wait_for(timeout=10_000)
+                        names = chart_series_names()
+                        self.assertIn("glm_prediction", names)
+                        self.assertNotIn("gbm_prediction", names)
+
+                        with page.expect_response(
+                            lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                            timeout=10_000,
+                        ):
+                            page.locator(
+                                '#expectedList .feature[data-value="gbm_prediction"]'
+                                '[data-source-id="gbm:comparison-gbm-b2:predictions"]'
+                            ).click(modifiers=[additive_modifier])
+                        with page.expect_response(
+                            lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                            timeout=10_000,
+                        ):
+                            page.locator('.segmented[data-control="partialDependence"] button[data-value="both"]').click()
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector("#chartMessage")?.textContent.includes(
+                              "GBM prediction and SHAP were trained for num_b / den_b; selected KPI is num_c / N."
+                            )
+                            """,
+                            timeout=10_000,
+                        )
+                        mismatch_message = page.locator("#chartMessage").text_content()
+                        self.assertNotIn("KPI mismatch: GLM", mismatch_message)
+                        self.assertEqual(page.locator("#chartMessage").get_attribute("title"), mismatch_message)
+
+                        with page.expect_response(
+                            lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                            timeout=10_000,
+                        ):
+                            page.locator(
+                                '#expectedList .feature.active[data-value="gbm_prediction"]'
+                                '[data-source-id="gbm:comparison-gbm-b2:predictions"]'
+                            ).click(modifiers=[additive_modifier])
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector("#chartMessage")?.textContent.includes(
+                              "GBM SHAP was trained for num_b / den_b; selected KPI is num_c / N."
+                            )
+                            """,
+                            timeout=10_000,
+                        )
+                        with page.expect_response(
+                            lambda response: (
+                                response.url.endswith("/api/line-bar/glm-overlay")
+                                or response.url.endswith("/api/chart")
+                            ) and response.status == 200,
+                            timeout=10_000,
+                        ) as overlay_response:
+                            page.locator('.segmented[data-control="partialDependence"] button[data-value="glm"]').click()
+                        self.assertTrue(overlay_response.value.url.endswith("/api/line-bar/glm-overlay"))
+                        page.wait_for_function(
+                            '() => !(document.querySelector("#chartMessage")?.textContent || "").includes("KPI mismatch")',
+                            timeout=10_000,
+                        )
+
+                        with page.expect_response(
+                            lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                            timeout=10_000,
+                        ):
+                            page.locator(
+                                '#featureList .feature[data-value="Segment"][data-source-id="dataset"]'
+                            ).click()
+                        with page.expect_response(
+                            lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                            timeout=10_000,
+                        ):
+                            page.locator('.segmented[data-control="partialDependence"] button[data-value="shap"]').click()
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector("#chartMessage")?.textContent.includes(
+                              "No active GBM SHAP values are available for Segment."
+                            )
+                            """,
+                            timeout=10_000,
+                        )
+                        with page.expect_response(
+                            lambda response: response.url.endswith("/api/line-bar/glm-overlay") and response.status == 200,
+                            timeout=10_000,
+                        ):
+                            page.locator('.segmented[data-control="partialDependence"] button[data-value="glm"]').click()
+                        page.wait_for_function(
+                            """
+                            () => !(document.querySelector("#chartMessage")?.textContent || "").includes(
+                              "No active GBM SHAP values are available for Segment."
+                            )
+                            """,
+                            timeout=10_000,
+                        )
+                        self.assertEqual(page_errors, [])
+                    finally:
+                        browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_glm_builder_refreshes_after_activation_from_tabulations(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "glm_builder_tabulations.csv"
@@ -17081,8 +17706,11 @@ COPY (
                         self.assertEqual(activated_chart_request["filter"], "Segment = 'B'")
                         self.assertGreater(activated_chart_request["bandWidth"], 0)
                         self.assertNotEqual(activated_chart_request["bandWidth"], 1)
-                        self.assertEqual(activated_chart_request["responses"][1]["source"], active_glm_source)
-                        self.assertEqual(activated_chart_request["responses"][2]["source"], saved_gbm_source)
+                        self.assertEqual(
+                            [response["numerator"] for response in activated_chart_request["responses"]],
+                            ["actualNumerator", "gbm_prediction"],
+                        )
+                        self.assertEqual(activated_chart_request["responses"][1]["source"], saved_gbm_source)
                         self.assertEqual(
                             len(chart_requests),
                             chart_count_before_activation + 1,
