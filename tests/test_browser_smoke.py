@@ -13820,14 +13820,27 @@ COPY (
 
                     page_a.route("**/api/gbm/config", hold_old_config)
                     page_a.get_by_role("tab", name="Model navigator").click()
-                    page_a.locator("#gbmModelGrid .tabulator-row", has_text="Race model B").wait_for(timeout=10_000)
+                    page_a.wait_for_function(
+                        """
+                        () => {
+                          const tables = window.Tabulator?.findTable?.("#gbmModelGrid") || [];
+                          const tabulatorRow = tables
+                            .filter((table) => table?.element?.isConnected)
+                            .flatMap((table) => table.getRows?.() || [])
+                            .some((row) => row.getData()?.model_id === "race-model-b");
+                          return tabulatorRow
+                            || Boolean(document.querySelector('[data-gbm-model-row="race-model-b"]'));
+                        }
+                        """,
+                        timeout=10_000,
+                    )
                     for _ in range(100):
                         if held_config:
                             break
                         page_a.wait_for_timeout(20)
                     self.assertTrue(held_config)
 
-                    page_a.locator("#gbmModelGrid .tabulator-row", has_text="Race model B").click()
+                    self.select_gbm_navigator_model(page_a, "race-model-b", "Race model B")
                     page_a.locator("#gbmActivateModelBtn").click()
                     page_a.locator("#gbmModelSelectedMeta", has_text="Race model B").wait_for(timeout=10_000)
                     page_a.wait_for_function(
@@ -15287,12 +15300,13 @@ COPY (
                         page.locator("#featureList .feature.active", has_text="Segment").wait_for(timeout=10_000)
                         page.locator("#gbmTool").click()
                         page.get_by_role("tab", name="Model navigator").click()
-                        page.locator("#gbmModelGrid .tabulator-row", has_text="Second smoke model").click()
+                        self.select_gbm_navigator_model(page, "browser-smoke-model-2", "Second smoke model")
                         page.locator("#gbmActivateModelBtn").click()
                         page.wait_for_function(
                             """
                             () => document.querySelector("#gbmModelSelectedMeta")?.textContent.includes("Second smoke model")
-                              && document.querySelector("#gbmModelGrid .gbm-model-active-dot")?.closest(".tabulator-row")?.textContent.includes("Second smoke model")
+                              && document.querySelector("#gbm-screen-panel-models .gbm-model-active-dot")
+                                ?.closest(".tabulator-row, [data-gbm-model-row]")?.textContent.includes("Second smoke model")
                             """,
                             timeout=10_000,
                         )
@@ -17819,7 +17833,7 @@ COPY (
                         self.assertTrue(page.locator("#gbmTrainBtn").is_disabled())
                         self.assertTrue(page.locator("#gbmModelDenominatorBuildNotice").is_visible())
                         page.locator('[data-gbm-tab="models"]').click(timeout=10_000)
-                        page.locator("#gbmModelGrid .tabulator-row").filter(has_text="Saved GBM").click(timeout=10_000)
+                        self.select_gbm_navigator_model(page, "saved-gbm", "Saved GBM")
                         chart_count_before_activation = len(chart_requests)
                         page.locator("#gbmActivateModelBtn").click(timeout=10_000)
                         page.wait_for_function(
