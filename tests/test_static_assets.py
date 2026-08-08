@@ -2266,10 +2266,30 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
 
         self.assertTrue(asset_urls)
         self.assertFalse(any(url.startswith(("http://", "https://", "//")) for url in asset_urls))
+        self.assertIn("/static/vendor/maplibre-gl/maplibre-gl.css", asset_urls)
+        self.assertFalse(any("leaflet" in url.lower() for url in asset_urls))
         for url in asset_urls:
             if url.startswith("/"):
                 with self.subTest(url=url):
                     self.assert_no_store(url)
+
+    def test_uk_map_lazy_loads_the_local_maplibre_module(self) -> None:
+        adapter = Path("src/py_lucidum/static/app/maplibre-adapter.js").read_text(encoding="utf-8")
+        index = Path("src/py_lucidum/static/index.html").read_text(encoding="utf-8")
+        map_source = Path("src/py_lucidum/static/app/uk-map-tool.js").read_text(encoding="utf-8")
+
+        self.assertIn('import("../vendor/maplibre-gl/maplibre-gl.mjs")', adapter)
+        self.assertIn('/static/vendor/maplibre-gl/maplibre-gl.css', index)
+        self.assertIn('type: "canvas"', adapter)
+        self.assertIn('animate: false', adapter)
+        self.assertIn('refresh({ afterRender = null } = {})', adapter)
+        self.assertIn('isZooming()', adapter)
+        self.assertIn('light_nolabels/', map_source)
+        self.assertIn('light_only_labels/', map_source)
+        self.assertIn('dark_nolabels/', map_source)
+        self.assertIn('dark_only_labels/', map_source)
+        self.assertIn('bringBaseLabelsToFront()', map_source)
+        self.assertNotIn("leaflet", index.lower())
 
     def test_non_vendored_static_modules_are_served_no_store(self) -> None:
         static_root = Path(__file__).resolve().parents[1] / "src/py_lucidum/static"

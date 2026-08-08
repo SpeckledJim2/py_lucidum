@@ -4065,7 +4065,7 @@ COPY (
                             """,
                             timeout=10_000,
                         )
-                        page.wait_for_function("() => window.L && document.querySelector('#ukMap .leaflet-control')")
+                        page.wait_for_function("() => document.querySelector('#ukMap .maplibregl-ctrl')")
                         front_points = page.evaluate(
                             """
                             () => {
@@ -18646,7 +18646,14 @@ COPY (
                     browser = playwright.chromium.launch()
                     page = browser.new_page(viewport={"width": 1280, "height": 800})
                     page_errors: list[str] = []
+                    summary_requests: list[str] = []
                     page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.on(
+                        "request",
+                        lambda request: summary_requests.append(request.url)
+                        if request.url.endswith("/api/uk-map/summary")
+                        else None,
+                    )
                     try:
                         page.goto(base_url, wait_until="domcontentloaded")
                         self.wait_for_app_ready(page)
@@ -18681,7 +18688,371 @@ COPY (
                             () => Object.values(document.querySelector("#ukMap")?._lucidumMap?._layers || {})
                               .some((layer) => layer?.data?.level === "unit"
                                 && layer?.pointCount === 4
-                                && layer?.coverageBounds === null)
+                                && layer?.coverageBounds === null
+                                && layer?.canvasMapLayer?.map
+                                && document.querySelector("#ukMap")?._lucidumMapLibre
+                                  ?.getLayer(layer.canvasMapLayer.layerId))
+                            """,
+                            timeout=10_000,
+                        )
+                        canvas_source_state = page.evaluate(
+                            """
+                            () => {
+                              const container = document.querySelector("#ukMap");
+                              const map = container?._lucidumMap;
+                              const raw = container?._lucidumMapLibre;
+                              const layer = Object.values(map?._layers || {})
+                                .find((candidate) => candidate?.data?.level === "unit");
+                              const source = raw?.getSource(layer?.canvasMapLayer?.sourceId);
+                              return {
+                                sourceUsesCanvas: source?.getCanvas?.() === layer?.canvas,
+                                sourceCanvasOpacity: getComputedStyle(layer?.canvas).opacity,
+                                coordinates: source?.serialize?.().coordinates || [],
+                              };
+                            }
+                            """
+                        )
+                        self.assertTrue(canvas_source_state["sourceUsesCanvas"])
+                        self.assertEqual(canvas_source_state["sourceCanvasOpacity"], "0")
+                        self.assertEqual(len(canvas_source_state["coordinates"]), 4)
+                        page.evaluate(
+                            """
+                            () => {
+                              const input = document.querySelector(
+                                '#mapBaseLayerTiles input[name="baseMap"][value="darkGrey"]'
+                              );
+                              input.checked = true;
+                              input.dispatchEvent(new Event("change", { bubbles: true }));
+                            }
+                            """
+                        )
+                        page.wait_for_function(
+                            """
+                            () => {
+                              const container = document.querySelector("#ukMap");
+                              const raw = container?._lucidumMapLibre;
+                              const labelLayer = container?._lucidumBaseLabelLayer;
+                              return Boolean(labelLayer && raw?.getLayer(labelLayer.layerId));
+                            }
+                            """,
+                            timeout=10_000,
+                        )
+                        label_order = page.evaluate(
+                            """
+                            () => {
+                              const container = document.querySelector("#ukMap");
+                              const map = container?._lucidumMap;
+                              const raw = container?._lucidumMapLibre;
+                              const unitLayer = Object.values(map?._layers || {})
+                                .find((candidate) => candidate?.data?.level === "unit");
+                              const layerIds = raw?.getStyle()?.layers?.map((layer) => layer.id) || [];
+                              return {
+                                base: layerIds.indexOf(container?._lucidumBaseTileLayer?.layerId),
+                                unit: layerIds.indexOf(unitLayer?.canvasMapLayer?.layerId),
+                                labels: layerIds.indexOf(container?._lucidumBaseLabelLayer?.layerId),
+                              };
+                            }
+                            """
+                        )
+                        self.assertGreaterEqual(label_order["base"], 0)
+                        self.assertGreater(label_order["unit"], label_order["base"])
+                        self.assertGreater(label_order["labels"], label_order["unit"])
+
+                        summary_request_count_before_camera_moves = len(summary_requests)
+                        page.evaluate(
+                            """
+                            () => {
+                              const input = document.querySelector("#mapDotSize");
+                              input.value = "1";
+                              input.dispatchEvent(new Event("input", { bubbles: true }));
+                            }
+                            """
+                        )
+
+                        def unit_radius_at_zoom(zoom: float) -> float:
+                            page.evaluate(
+                                """
+                                (zoom) => {
+                                  document.querySelector("#ukMap")?._lucidumMap?.setZoom(zoom);
+                                }
+                                """,
+                                zoom,
+                            )
+                            page.wait_for_function(
+                                """
+                                (zoom) => {
+                                  const container = document.querySelector("#ukMap");
+                                  const map = container?._lucidumMap;
+                                  const raw = container?._lucidumMapLibre;
+                                  const unitLayer = Object.values(map?._layers || {})
+                                    .find((candidate) => candidate?.data?.level === "unit");
+                                  return Math.abs((map?.getZoom() || 0) - zoom) < 0.01
+                                    && !raw?.isMoving()
+                                    && unitLayer?.canvasMapLayer?.visible === true
+                                    && Number.isFinite(unitLayer?.pointRadius);
+                                }
+                                """,
+                                arg=zoom,
+                                timeout=10_000,
+                            )
+                            return float(page.evaluate(
+                                """
+                                () => Object.values(
+                                  document.querySelector("#ukMap")?._lucidumMap?._layers || {}
+                                ).find((candidate) => candidate?.data?.level === "unit")?.pointRadius
+                                """
+                            ))
+
+                        low_zoom_radius = unit_radius_at_zoom(5)
+                        middle_zoom_radius = unit_radius_at_zoom(7.5)
+                        high_zoom_radius = unit_radius_at_zoom(10)
+                        self.assertAlmostEqual(low_zoom_radius, 0.5)
+                        self.assertAlmostEqual(middle_zoom_radius, 1.0625)
+                        self.assertAlmostEqual(high_zoom_radius, 1.625)
+                        self.assertLess(low_zoom_radius, middle_zoom_radius)
+                        self.assertLess(middle_zoom_radius, high_zoom_radius)
+                        self.assertEqual(len(summary_requests), summary_request_count_before_camera_moves)
+
+                        page.evaluate(
+                            """
+                            () => {
+                              const input = document.querySelector("#mapDotSize");
+                              input.value = "10";
+                              input.dispatchEvent(new Event("input", { bubbles: true }));
+                            }
+                            """
+                        )
+                        page.wait_for_function(
+                            """
+                            () => Object.values(
+                              document.querySelector("#ukMap")?._lucidumMap?._layers || {}
+                            ).some((candidate) => candidate?.data?.level === "unit"
+                              && candidate.pointRadius > 10)
+                            """,
+                            timeout=10_000,
+                        )
+                        large_control_radius = page.evaluate(
+                            """
+                            () => Object.values(
+                              document.querySelector("#ukMap")?._lucidumMap?._layers || {}
+                            ).find((candidate) => candidate?.data?.level === "unit")?.pointRadius
+                            """
+                        )
+                        self.assertGreater(large_control_radius, high_zoom_radius)
+                        page.evaluate(
+                            """
+                            () => {
+                              const input = document.querySelector("#mapDotSize");
+                              input.value = "1";
+                              input.dispatchEvent(new Event("input", { bubbles: true }));
+                            }
+                            """
+                        )
+                        page.wait_for_function(
+                            """
+                            () => Object.values(
+                              document.querySelector("#ukMap")?._lucidumMap?._layers || {}
+                            ).some((candidate) => candidate?.data?.level === "unit"
+                              && Math.abs(candidate.pointRadius - 1.625) < 0.0001)
+                            """,
+                            timeout=10_000,
+                        )
+                        page.evaluate(
+                            """
+                            () => {
+                              const map = document.querySelector("#ukMap")?._lucidumMap;
+                              const unitLayer = Object.values(map?._layers || {})
+                                .find((candidate) => candidate?.data?.level === "unit");
+                              window.__unitResetCount = 0;
+                              const originalReset = unitLayer.reset;
+                              unitLayer.reset = function (...args) {
+                                window.__unitResetCount += 1;
+                                return originalReset.apply(this, args);
+                              };
+                            }
+                            """
+                        )
+
+                        page.evaluate(
+                            """
+                            () => {
+                              const raw = document.querySelector("#ukMap")?._lucidumMapLibre;
+                              raw?.easeTo({ zoom: raw.getZoom() + 1, duration: 600 });
+                            }
+                            """
+                        )
+                        page.wait_for_function(
+                            """
+                            () => {
+                              const container = document.querySelector("#ukMap");
+                              const map = container?._lucidumMap;
+                              const raw = container?._lucidumMapLibre;
+                              const unitLayer = Object.values(map?._layers || {})
+                                .find((candidate) => candidate?.data?.level === "unit");
+                              return raw?.isZooming()
+                                && unitLayer?.zooming
+                                && unitLayer?.canvasMapLayer?.visible === false
+                                && raw?.getPaintProperty(
+                                  unitLayer.canvasMapLayer.layerId,
+                                  "raster-opacity"
+                                ) === 0;
+                            }
+                            """,
+                            timeout=10_000,
+                        )
+                        first_zoom_generation = page.evaluate(
+                            """
+                            () => Object.values(
+                              document.querySelector("#ukMap")?._lucidumMap?._layers || {}
+                            ).find((candidate) => candidate?.data?.level === "unit")?.zoomGeneration || 0
+                            """
+                        )
+                        page.wait_for_timeout(100)
+                        self.assertEqual(
+                            page.evaluate(
+                                """
+                                () => {
+                                  const container = document.querySelector("#ukMap");
+                                  const map = container?._lucidumMap;
+                                  const raw = container?._lucidumMapLibre;
+                                  const unitLayer = Object.values(map?._layers || {})
+                                    .find((candidate) => candidate?.data?.level === "unit");
+                                  return raw?.getPaintProperty(
+                                    unitLayer?.canvasMapLayer?.layerId,
+                                    "raster-opacity"
+                                  );
+                                }
+                                """
+                            ),
+                            0,
+                        )
+                        page.evaluate(
+                            """
+                            () => {
+                              const raw = document.querySelector("#ukMap")?._lucidumMapLibre;
+                              raw?.easeTo({ zoom: raw.getZoom() - 1.5, duration: 600 });
+                            }
+                            """
+                        )
+                        page.wait_for_function(
+                            """
+                            (generation) => Object.values(
+                              document.querySelector("#ukMap")?._lucidumMap?._layers || {}
+                            ).some((candidate) => candidate?.data?.level === "unit"
+                              && candidate.zoomGeneration > generation
+                              && candidate.canvasMapLayer?.visible === false)
+                            """,
+                            arg=first_zoom_generation,
+                            timeout=10_000,
+                        )
+                        page.wait_for_timeout(100)
+                        self.assertTrue(
+                            page.evaluate(
+                                """
+                                () => {
+                                  const container = document.querySelector("#ukMap");
+                                  const map = container?._lucidumMap;
+                                  const raw = container?._lucidumMapLibre;
+                                  const unitLayer = Object.values(map?._layers || {})
+                                    .find((candidate) => candidate?.data?.level === "unit");
+                                  return raw?.isZooming()
+                                    && unitLayer?.canvasMapLayer?.visible === false
+                                    && raw?.getPaintProperty(
+                                      unitLayer.canvasMapLayer.layerId,
+                                      "raster-opacity"
+                                    ) === 0;
+                                }
+                                """
+                            )
+                        )
+                        page.wait_for_function(
+                            """
+                            () => {
+                              const container = document.querySelector("#ukMap");
+                              const map = container?._lucidumMap;
+                              const raw = container?._lucidumMapLibre;
+                              const unitLayer = Object.values(map?._layers || {})
+                                .find((candidate) => candidate?.data?.level === "unit");
+                              return !raw?.isMoving()
+                                && !raw?.isZooming()
+                                && unitLayer?.canvasMapLayer?.visible === true
+                                && raw?.getPaintProperty(
+                                  unitLayer.canvasMapLayer.layerId,
+                                  "raster-opacity"
+                                ) === 1;
+                            }
+                            """,
+                            timeout=10_000,
+                        )
+                        rapid_zoom_reset_count = page.evaluate("() => window.__unitResetCount")
+                        self.assertGreaterEqual(rapid_zoom_reset_count, 1)
+                        self.assertLessEqual(rapid_zoom_reset_count, 2)
+                        self.assertEqual(len(summary_requests), summary_request_count_before_camera_moves)
+
+                        page.evaluate(
+                            """
+                            () => {
+                              const raw = document.querySelector("#ukMap")?._lucidumMapLibre;
+                              const center = raw?.getCenter();
+                              raw?.easeTo({
+                                center: [center.lng + 0.2, center.lat],
+                                duration: 600,
+                              });
+                            }
+                            """
+                        )
+                        page.wait_for_function(
+                            '() => document.querySelector("#ukMap")?._lucidumMapLibre?.isMoving()',
+                            timeout=10_000,
+                        )
+                        page.wait_for_timeout(100)
+                        pan_layer_state = page.evaluate(
+                            """
+                            () => {
+                              const container = document.querySelector("#ukMap");
+                              const map = container?._lucidumMap;
+                              const raw = container?._lucidumMapLibre;
+                              const unitLayer = Object.values(map?._layers || {})
+                                .find((candidate) => candidate?.data?.level === "unit");
+                              return {
+                                visible: unitLayer?.canvasMapLayer?.visible,
+                                opacity: raw?.getPaintProperty(
+                                  unitLayer?.canvasMapLayer?.layerId,
+                                  "raster-opacity"
+                                ),
+                              };
+                            }
+                            """
+                        )
+                        self.assertEqual(pan_layer_state, {"visible": True, "opacity": 1})
+                        page.wait_for_function(
+                            '() => !document.querySelector("#ukMap")?._lucidumMapLibre?.isMoving()',
+                            timeout=10_000,
+                        )
+                        self.assertEqual(
+                            page.evaluate("() => window.__unitResetCount"),
+                            rapid_zoom_reset_count + 1,
+                        )
+                        self.assertEqual(len(summary_requests), summary_request_count_before_camera_moves)
+
+                        page.evaluate(
+                            """
+                            () => {
+                              const map = document.querySelector("#ukMap")?._lucidumMap;
+                              const unitLayer = Object.values(map?._layers || {})
+                                .find((candidate) => candidate?.data?.level === "unit");
+                              unitLayer?.handleZoomStart();
+                              unitLayer?.handleZoomEnd();
+                            }
+                            """
+                        )
+                        page.wait_for_function(
+                            """
+                            () => Object.values(
+                              document.querySelector("#ukMap")?._lucidumMap?._layers || {}
+                            ).some((candidate) => candidate?.data?.level === "unit"
+                              && candidate.zoomRefreshPending === false
+                              && candidate.canvasMapLayer?.visible === true)
                             """,
                             timeout=10_000,
                         )
@@ -18727,6 +19098,19 @@ COPY (
                         self.assertGreater(regional_bounds["north"], 51.5074)
                         self.assertLess(regional_bounds["west"], -0.1278)
                         self.assertGreater(regional_bounds["east"], -0.1278)
+                        page.wait_for_function(
+                            """
+                            (bounds) => {
+                              const current = Object.values(
+                                document.querySelector("#ukMap")?._lucidumMap?._layers || {}
+                              ).find((layer) => layer?.data?.level === "unit" && layer?.pointCount > 0);
+                              return current?.pointCount === 2
+                                && JSON.stringify(current?.coverageBounds) === JSON.stringify(bounds);
+                            }
+                            """,
+                            arg=regional_bounds,
+                            timeout=10_000,
+                        )
                         regional_layer = page.evaluate(
                             """
                             () => {
@@ -18742,7 +19126,7 @@ COPY (
                             }
                             """
                         )
-                        self.assertTrue(regional_layer["replaced"])
+                        self.assertTrue(regional_layer["replaced"], regional_layer)
                         self.assertEqual(regional_layer["pointCount"], 2)
                         self.assertEqual(regional_layer["coverageBounds"], regional_bounds)
                         page.wait_for_timeout(250)
@@ -18786,13 +19170,23 @@ COPY (
                                       return {
                                         stillMounted: Boolean(layer && map?.hasLayer(layer)),
                                         visibility: layer?.canvas?.style?.visibility || "",
+                                        mapLayerVisible: layer?.canvasMapLayer?.visible,
+                                        rasterOpacity: map?.raw?.getPaintProperty(
+                                          layer?.canvasMapLayer?.layerId,
+                                          "raster-opacity"
+                                        ),
                                       };
                                     }
                                     """
                                 )
                         self.assertEqual(
                             stale_layer_visibility,
-                            {"stillMounted": True, "visibility": "hidden"},
+                            {
+                                "stillMounted": True,
+                                "visibility": "hidden",
+                                "mapLayerVisible": False,
+                                "rasterOpacity": 0,
+                            },
                         )
                         expanded_request = json.loads(expanded_request_info.value.post_data or "{}")
                         expanded_bounds = expanded_request.get("unitViewportBounds")
@@ -24823,7 +25217,7 @@ COPY (
                 return page.evaluate(
                     """
                     () => {
-                        const canvas = document.querySelector("#ukMap .leaflet-unit-point-layer");
+                        const canvas = document.querySelector("#ukMap .maplibre-unit-point-layer");
                         if (!canvas || canvas.width <= 0 || canvas.height <= 0) return 0;
                         const context = canvas.getContext("2d");
                         if (!context) return 0;
@@ -27808,7 +28202,7 @@ COPY (
                 page.locator("#ukMapTool").click()
                 page.locator("#ukMap:not(.hidden)").wait_for(timeout=20_000)
                 page.locator("#mapFloatingControl:not(.hidden)").wait_for(timeout=10_000)
-                page.wait_for_function("() => window.L && document.querySelector('#ukMap .leaflet-pane')")
+                page.wait_for_function("() => document.querySelector('#ukMap .maplibregl-canvas')")
                 page.wait_for_function("() => document.querySelector('#ukMap')?.classList.contains('map-bg-light')")
                 page.wait_for_function('() => document.querySelector("#mapGroupMeta")?.textContent.includes("areas matched")')
                 map_toggle = page.locator("#mapControlReset")
@@ -28503,7 +28897,7 @@ COPY (
                 self.assertTrue(page.locator("#mapLabelSize").is_disabled())
                 self.assertTrue(page.locator("#mapSmoothingControl").is_hidden())
                 self.assertTrue(page.locator("#mapSmoothing").is_disabled())
-                page.locator("#ukMap .leaflet-unit-point-layer").wait_for(timeout=10_000)
+                page.locator("#ukMap .maplibre-unit-point-layer").wait_for(timeout=10_000)
                 page.evaluate(
                     """
                     () => {

@@ -10,6 +10,7 @@
         ukMapPostcodeFilterClause,
         ukMapPostcodeInFilterClause,
       } from "./uk-map-tool.js";
+      import { loadMapLibreAdapter } from "./maplibre-adapter.js";
       import { createGlmTool } from "./glm-tool.js";
       import { createGbmTool } from "./gbm-tool.js";
       import { createSpecificationsTool } from "./specifications-tool.js";
@@ -451,7 +452,7 @@
         api,
         el,
         state,
-        leafletImpl: L,
+        loadMapAdapter: loadMapLibreAdapter,
         locationParams,
         escapeHtml,
         formatNumber,

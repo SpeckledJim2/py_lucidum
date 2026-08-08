@@ -14,15 +14,22 @@
         background: #ffffff;
       }
 
-      .uk-map .leaflet-container,
-      .leaflet-container {
+      .uk-map .maplibregl-map,
+      .maplibregl-map {
         font: inherit;
       }
 
-      .uk-map .leaflet-control-attribution {
+      .uk-map .maplibregl-ctrl-attrib {
         font-size: 10px;
         line-height: 1.2;
         padding: 0 4px;
+      }
+
+      .uk-map .maplibre-unit-point-layer {
+        inset: 0;
+        opacity: 0;
+        pointer-events: none;
+        position: absolute;
       }
 
       .map-viewport-control {
@@ -1101,12 +1108,12 @@
         width: 16px;
       }
 
-      .uk-map .leaflet-popup-content-wrapper,
-      .uk-map .leaflet-popup-tip {
+      .uk-map .maplibregl-popup-content,
+      .uk-map .maplibregl-popup-tip {
         background: var(--panel);
         color: var(--text);
       }
 
-      .uk-map .leaflet-container a.leaflet-popup-close-button {
+      .uk-map .maplibregl-popup-close-button {
         color: var(--muted);
       }

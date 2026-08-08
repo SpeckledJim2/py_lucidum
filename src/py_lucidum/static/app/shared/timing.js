@@ -171,11 +171,26 @@ export function createActionTimingController({
   function measureToolRender(tool, renderCallback) {
     const started = performanceImpl.now();
     setRenderTimingRunning(tool);
-    try {
-      const result = renderCallback();
+    const finish = () => {
       requestAnimationFrameImpl(() => {
         setRenderTiming(tool, performanceImpl.now() - started);
       });
+    };
+    try {
+      const result = renderCallback();
+      if (result && typeof result.then === "function") {
+        return Promise.resolve(result).then(
+          (value) => {
+            finish();
+            return value;
+          },
+          (error) => {
+            setRenderTiming(tool, null);
+            throw error;
+          },
+        );
+      }
+      finish();
       return result;
     } catch (error) {
       setRenderTiming(tool, null);
