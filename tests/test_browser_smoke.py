@@ -111,6 +111,65 @@ class BrowserSmokeTests(unittest.TestCase):
             timeout=timeout,
         )
 
+    @staticmethod
+    def select_gbm_navigator_model(page: Any, model_id: str, model_label: str, *, timeout: int = 60_000) -> None:
+        page.wait_for_function(
+            """
+            (modelId) => {
+              const tables = window.Tabulator?.findTable?.("#gbmModelGrid") || [];
+              const tabulatorRow = tables
+                .filter((table) => table?.element?.isConnected)
+                .flatMap((table) => table.getRows?.() || [])
+                .find((row) => row.getData()?.model_id === modelId);
+              const fallbackRow = [...document.querySelectorAll("[data-gbm-model-row]")]
+                .find((row) => row.dataset.gbmModelRow === modelId);
+              return Boolean(tabulatorRow || fallbackRow);
+            }
+            """,
+            arg=model_id,
+            timeout=timeout,
+        )
+        selected_renderer = page.evaluate(
+            """
+            (modelId) => {
+              const tables = window.Tabulator?.findTable?.("#gbmModelGrid") || [];
+              const table = tables.find((candidate) => candidate?.element?.isConnected
+                && candidate.getRows?.().some((row) => row.getData()?.model_id === modelId));
+              const tabulatorRow = table?.getRows?.()
+                .find((row) => row.getData()?.model_id === modelId);
+              if (tabulatorRow) {
+                table.deselectRow();
+                tabulatorRow.select();
+                return "tabulator";
+              }
+              const fallbackRow = [...document.querySelectorAll("[data-gbm-model-row]")]
+                .find((row) => row.dataset.gbmModelRow === modelId);
+              fallbackRow?.click();
+              return fallbackRow ? "fallback" : "";
+            }
+            """,
+            model_id,
+        )
+        if selected_renderer == "tabulator":
+            selected = """
+                [...document.querySelectorAll("#gbmModelGrid .tabulator-row.tabulator-selected")]
+                  .some((row) => row.textContent.includes(modelLabel))
+            """
+        else:
+            selected = """
+                [...document.querySelectorAll("[data-gbm-model-row][aria-selected='true']")]
+                  .some((row) => row.dataset.gbmModelRow === modelId
+                    && row.textContent.includes(modelLabel))
+            """
+        page.wait_for_function(
+            f"""
+            ([modelId, modelLabel]) => ({selected})
+              && !document.querySelector("#gbmDeleteModelBtn")?.disabled
+            """,
+            arg=[model_id, model_label],
+            timeout=timeout,
+        )
+
     def assert_model_command_button_styles(self, page: Any, prefix: str) -> None:
         def capture() -> dict[str, Any]:
             return page.evaluate(
@@ -14302,40 +14361,7 @@ COPY (
                         wait_for_line_bar()
                         page.locator("#gbmTool").click()
                         page.get_by_role("tab", name="Model navigator").click()
-                        page.wait_for_function(
-                            """
-                            (modelId) => {
-                              const table = window.Tabulator?.findTable?.("#gbmModelGrid")?.[0];
-                              return Boolean(
-                                table?.initialized
-                                && table.element?.isConnected
-                                && table.getRows?.().some((row) => row.getData()?.model_id === modelId)
-                              );
-                            }
-                            """,
-                            arg="metric-gbm-a",
-                            timeout=60_000,
-                        )
-                        page.evaluate(
-                            """
-                            (modelId) => {
-                              const table = window.Tabulator.findTable("#gbmModelGrid")[0];
-                              const row = table.getRows().find((candidate) => candidate.getData()?.model_id === modelId);
-                              table.deselectRow();
-                              row.select();
-                            }
-                            """,
-                            "metric-gbm-a",
-                        )
-                        page.wait_for_function(
-                            """
-                            () => [...document.querySelectorAll("#gbmModelGrid .tabulator-row")]
-                              .some((row) => row.textContent.includes("Metric GBM A")
-                                && row.classList.contains("tabulator-selected"))
-                              && !document.querySelector("#gbmDeleteModelBtn")?.disabled
-                            """,
-                            timeout=60_000,
-                        )
+                        self.select_gbm_navigator_model(page, "metric-gbm-a", "Metric GBM A")
                         requests_before = len(chart_requests)
                         page.once("dialog", lambda dialog: dialog.accept())
                         with page.expect_response("**/api/gbm/models/metric-gbm-a", timeout=10_000):
@@ -32322,40 +32348,7 @@ COPY (
                 page.locator("#gbmModelGrid .tabulator-row", has_text="renamed-smoke-model").wait_for(timeout=10_000)
                 page.locator("#gbmModelSelectedMeta", has_text="renamed-smoke-model").wait_for(timeout=10_000)
                 page.evaluate("() => { window.confirm = () => true; }")
-                page.wait_for_function(
-                    """
-                    (modelLabel) => {
-                      const table = window.Tabulator?.findTable?.("#gbmModelGrid")?.[0];
-                      return Boolean(
-                        table?.initialized
-                        && table.element?.isConnected
-                        && table.getRows?.().some((row) => row.getData()?.model_label === modelLabel)
-                      );
-                    }
-                    """,
-                    arg="renamed-smoke-model",
-                    timeout=60_000,
-                )
-                page.evaluate(
-                    """
-                    (modelLabel) => {
-                      const table = window.Tabulator.findTable("#gbmModelGrid")[0];
-                      const row = table.getRows().find((candidate) => candidate.getData()?.model_label === modelLabel);
-                      table.deselectRow();
-                      row.select();
-                    }
-                    """,
-                    "renamed-smoke-model",
-                )
-                page.wait_for_function(
-                    """
-                    () => [...document.querySelectorAll("#gbmModelGrid .tabulator-row")]
-                      .some((row) => row.textContent.includes("renamed-smoke-model")
-                        && row.classList.contains("tabulator-selected"))
-                      && !document.querySelector("#gbmDeleteModelBtn")?.disabled
-                    """,
-                    timeout=60_000,
-                )
+                self.select_gbm_navigator_model(page, "renamed-smoke-model", "renamed-smoke-model")
                 page.locator("#gbmDeleteModelBtn").click()
                 page.wait_for_function(
                     """
