@@ -322,10 +322,13 @@ class TestRunnerTests(unittest.TestCase):
                     )
 
                     self.assertEqual(completed.returncode, 0, completed.stderr)
+                    hook_args = args_path.read_text(encoding="utf-8").splitlines()
+                    self.assertEqual(len(hook_args), 2)
                     self.assertEqual(
-                        args_path.read_text(encoding="utf-8").splitlines(),
-                        [str(self.root / "scripts/run_tests.py"), lane],
+                        Path(hook_args[0]).resolve(),
+                        (self.root / "scripts/run_tests.py").resolve(),
                     )
+                    self.assertEqual(hook_args[1], lane)
 
     def test_hooks_report_an_unusable_python_without_running_tests(self) -> None:
         env = os.environ.copy()

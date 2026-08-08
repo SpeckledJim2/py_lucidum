@@ -54,8 +54,8 @@ def folder_open_command(
 ) -> str | None:
     selected_platform = sys.platform if platform is None else platform
     if selected_platform == "darwin":
-        command = Path("/usr/bin/open")
-        return str(command) if command.is_file() else None
+        command = "/usr/bin/open"
+        return command if Path(command).is_file() else None
     if selected_platform.startswith("linux") and _linux_desktop_available(environ):
         return which("xdg-open")
     return None

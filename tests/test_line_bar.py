@@ -1028,7 +1028,8 @@ COPY (
         payload = json.loads(body)
         self.assertEqual(status, 200)
         self.assertEqual(payload["favourites"], [])
-        self.assertTrue(payload["storage"]["path"].endswith(".lucidum/datasets/sample.csv/line_bar/favourites.json"))
+        storage_path = Path(payload["storage"]["path"]).as_posix()
+        self.assertTrue(storage_path.endswith(".lucidum/datasets/sample.csv/line_bar/favourites.json"))
 
         status, _, body = asgi_request_json(
             app,

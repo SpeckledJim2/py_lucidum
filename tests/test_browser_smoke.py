@@ -734,7 +734,11 @@ COPY (
             base_url, server, thread = self.start_app(data_path, title_prefix="Lucidum Smoke Dataset")
             try:
                 self.assert_static_asset(base_url, "/static/app.css", "text/css")
-                self.assert_static_asset(base_url, "/static/app.js", "text/javascript")
+                self.assert_static_asset(
+                    base_url,
+                    "/static/app.js",
+                    ("text/javascript", "application/javascript"),
+                )
                 self.exercise_browser(base_url)
             finally:
                 server.should_exit = True
@@ -14299,8 +14303,18 @@ COPY (
                         page.locator("#gbmTool").click()
                         page.get_by_role("tab", name="Model navigator").click()
                         gbm_a_row = page.locator("#gbmModelGrid .tabulator-row", has_text="Metric GBM A")
+                        gbm_a_row.wait_for(state="visible", timeout=60_000)
                         if "tabulator-selected" not in (gbm_a_row.get_attribute("class") or ""):
                             gbm_a_row.click()
+                        page.wait_for_function(
+                            """
+                            () => [...document.querySelectorAll("#gbmModelGrid .tabulator-row")]
+                              .some((row) => row.textContent.includes("Metric GBM A")
+                                && row.classList.contains("tabulator-selected"))
+                              && !document.querySelector("#gbmDeleteModelBtn")?.disabled
+                            """,
+                            timeout=60_000,
+                        )
                         requests_before = len(chart_requests)
                         page.once("dialog", lambda dialog: dialog.accept())
                         with page.expect_response("**/api/gbm/models/metric-gbm-a", timeout=10_000):
@@ -19432,10 +19446,16 @@ COPY (
             con.close()
 
     @staticmethod
-    def assert_static_asset(base_url: str, path: str, expected_content_type: str) -> None:
+    def assert_static_asset(base_url: str, path: str, expected_content_type: str | tuple[str, ...]) -> None:
         with urlopen(f"{base_url}{path}", timeout=5) as response:
             assert response.status == 200
-            assert expected_content_type in response.headers.get("content-type", "")
+            expected_content_types = (
+                (expected_content_type,)
+                if isinstance(expected_content_type, str)
+                else expected_content_type
+            )
+            content_type = response.headers.get("content-type", "")
+            assert any(candidate in content_type for candidate in expected_content_types)
 
     def exercise_glm_tabulation_rebase(self, base_url: str) -> None:
         assert sync_playwright is not None
@@ -32270,7 +32290,17 @@ COPY (
                 page.locator("#gbmModelGrid .tabulator-row", has_text="renamed-smoke-model").wait_for(timeout=10_000)
                 page.locator("#gbmModelSelectedMeta", has_text="renamed-smoke-model").wait_for(timeout=10_000)
                 page.evaluate("() => { window.confirm = () => true; }")
-                page.locator("#gbmModelGrid .tabulator-row", has_text="renamed-smoke-model").click()
+                renamed_model_row = page.locator("#gbmModelGrid .tabulator-row", has_text="renamed-smoke-model")
+                renamed_model_row.click()
+                page.wait_for_function(
+                    """
+                    () => [...document.querySelectorAll("#gbmModelGrid .tabulator-row")]
+                      .some((row) => row.textContent.includes("renamed-smoke-model")
+                        && row.classList.contains("tabulator-selected"))
+                      && !document.querySelector("#gbmDeleteModelBtn")?.disabled
+                    """,
+                    timeout=60_000,
+                )
                 page.locator("#gbmDeleteModelBtn").click()
                 page.wait_for_function(
                     """
