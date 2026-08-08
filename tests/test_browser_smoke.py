@@ -29167,6 +29167,17 @@ COPY (
                     "() => document.querySelector('#gbmFeatureSetupBtn')?.getAttribute('aria-expanded') === 'true' && !document.querySelector('#gbmFeatureSetupPanel')?.classList.contains('hidden')",
                     timeout=10_000,
                 )
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("input[name='gbmFeatureMetric']:checked")?.value === "shap"
+                      && document.querySelector(
+                        "#gbmFeatureGrid .tabulator-col[tabulator-field='mean_abs_shap']"
+                      )
+                      && [...document.querySelectorAll("#gbmFeatureGrid .tabulator-row")]
+                        .some((row) => row.textContent.includes("Age"))
+                    """,
+                    timeout=60_000,
+                )
                 default_metric_state = page.evaluate(
                     """
                     () => {
