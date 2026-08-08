@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass
 import importlib.util
 import json
@@ -15,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -41,7 +43,7 @@ from .validation import TARGET_COLUMN, parse_formula, top_level_formula_terms
 ProgressCallback = Callable[[dict[str, Any]], None]
 MAX_TABULATION_CELLS = 100_000
 MODEL_CROSSTAB = "__model__"
-TABULATION_REBASING_VERSION = 1
+TABULATION_REBASING_VERSION = 2
 TABULATION_REBASE_TOLERANCE = 1e-7
 _NUMBER_PATTERN = r"[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][+-]?\d+)?"
 _MISSING_LOOKUP_KEY = object()
@@ -720,6 +722,58 @@ FROM read_parquet({sql_literal(str(prediction_path))})
     return pd.Series(aligned, index=frame.index, dtype=float)
 
 
+def _tabulation_error_metrics(
+    store: GlmModelStore,
+    model_id: str,
+    model_manifest: dict[str, Any],
+    estimator: Any,
+    frame: Any,
+    tabulated_linear: Any,
+    np: Any,
+    pd: Any,
+) -> tuple[float | None, float | None]:
+    try:
+        exact_eta = _exact_linear_predictions_from_artifact(
+            store,
+            model_id,
+            model_manifest,
+            estimator,
+            frame,
+            np,
+            pd,
+        )
+        if exact_eta is None:
+            context = formula_context(np)
+            offset_terms = [
+                str(term)
+                for term in (
+                    model_manifest.get("offset_terms")
+                    or model_manifest.get("formula", {}).get("offset_terms")
+                    or []
+                )
+            ]
+            score_frame = frame.copy()
+            add_internal_intercept_column(score_frame, internal_intercept_column_from_manifest(model_manifest))
+            score_frame[TARGET_COLUMN] = 0.0
+            score_mask = pd.Series(True, index=frame.index)
+            offset_values = offset_values_for_frame(score_frame, offset_terms, context, np, pd)
+            if offset_values is not None:
+                score_mask = score_mask & offset_values.notna() & np.isfinite(offset_values.astype(float))
+            exact_eta = pd.Series(np.nan, index=frame.index, dtype=float)
+            exact_eta.loc[score_mask] = estimator.linear_predictor(
+                score_frame.loc[score_mask],
+                context=context,
+                offset=offset_values.loc[score_mask].astype(float).to_numpy() if offset_values is not None else None,
+            )
+        error = exact_eta - tabulated_linear
+        finite_error = error.dropna()
+        mean_linear_error = json_safe_number(float(finite_error.mean())) if len(finite_error) else None
+        linear_sd_error = json_safe_number(float(finite_error.std())) if len(finite_error) > 1 else 0.0
+        return mean_linear_error, linear_sd_error
+    except Exception:
+        return None, None
+
+
 def _table_file_path(store: GlmModelStore, model_id: str, table_id: str) -> Path:
     return store.tabulations_dir(model_id) / f"{_safe_id(table_id)}.parquet"
 
@@ -743,6 +797,45 @@ def _clear_rebasing_sidecars(store: GlmModelStore, model_id: str) -> None:
     raw_manifest = _raw_tabulation_manifest_path(store, model_id)
     if raw_manifest.exists():
         raw_manifest.unlink()
+
+
+@contextmanager
+def _rebase_artifact_transaction(store: GlmModelStore, model_id: str) -> Any:
+    tabulations_dir = store.tabulations_dir(model_id)
+    raw_dir = _raw_tabulations_dir(store, model_id)
+    predictions_path = store.artifact_path(model_id, "tabulated_predictions")
+    backup_root = Path(tempfile.mkdtemp(prefix=f"lucidum-rebase-{_safe_id(model_id)}-"))
+    backup_tabulations = backup_root / "tabulations"
+    backup_raw = backup_root / "tabulations_raw"
+    backup_predictions = backup_root / "tabulated_predictions.parquet"
+    had_tabulations = tabulations_dir.exists()
+    had_raw = raw_dir.exists()
+    had_predictions = predictions_path.exists()
+    if had_tabulations:
+        shutil.copytree(tabulations_dir, backup_tabulations)
+    if had_raw:
+        shutil.copytree(raw_dir, backup_raw)
+    if had_predictions:
+        shutil.copy2(predictions_path, backup_predictions)
+    try:
+        yield
+    except Exception:
+        if tabulations_dir.exists():
+            shutil.rmtree(tabulations_dir)
+        if had_tabulations:
+            shutil.copytree(backup_tabulations, tabulations_dir)
+        if raw_dir.exists():
+            shutil.rmtree(raw_dir)
+        if had_raw:
+            shutil.copytree(backup_raw, raw_dir)
+        if predictions_path.exists():
+            predictions_path.unlink()
+        if had_predictions:
+            predictions_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(backup_predictions, predictions_path)
+        raise
+    finally:
+        shutil.rmtree(backup_root, ignore_errors=True)
 
 
 def _manifest_table_by_id(manifest: dict[str, Any], table_id: str) -> dict[str, Any] | None:
@@ -881,10 +974,10 @@ def _rebuild_tabulated_predictions(
     feature_meta = dict(manifest.get("feature_meta") or {})
     table_feature_meta = dict(manifest.get("table_feature_meta") or {})
     all_features = sorted({feature for table in tables for feature in list(table.get("features") or [])})
+    source_columns, _kinds = _schema_columns_and_kinds(dataset)
     required_columns = list(all_features)
     if denominator_column:
         required_columns.append(denominator_column)
-    source_columns, _kinds = _schema_columns_and_kinds(dataset)
     required_columns = [column for column in source_columns if column in set(required_columns)]
     frame = _tabulation_frame_from_dataset(dataset, required_columns)
     base_info = _manifest_table_by_id(manifest, "base")
@@ -921,12 +1014,30 @@ def _rebuild_tabulated_predictions(
         if {"__lucidum_row_id", "glm_tabulated_linear_prediction"}.issubset(expected.columns):
             comparison = tabulated[["__lucidum_row_id"]].copy()
             comparison["new"] = eta.where(~missing, np.nan)
+            comparison["new_missing"] = missing.astype(bool)
+            expected_columns = ["__lucidum_row_id", "glm_tabulated_linear_prediction"]
+            if "glm_tabulation_missing" in expected.columns:
+                expected_columns.append("glm_tabulation_missing")
             comparison = comparison.merge(
-                expected[["__lucidum_row_id", "glm_tabulated_linear_prediction"]],
+                expected[expected_columns],
                 on="__lucidum_row_id",
-                how="inner",
+                how="outer",
+                indicator=True,
             )
-            delta = (comparison["new"] - comparison["glm_tabulated_linear_prediction"]).abs().dropna()
+            if not bool((comparison["_merge"] == "both").all()):
+                raise ValueError("Rebased tabulations changed the scored row IDs.")
+            expected_missing = comparison["glm_tabulated_linear_prediction"].isna()
+            if "glm_tabulation_missing" in comparison.columns:
+                expected_missing = comparison["glm_tabulation_missing"].fillna(expected_missing).astype(bool)
+            if not bool((comparison["new_missing"] == expected_missing).all()):
+                raise ValueError("Rebased tabulations changed the missing-prediction rows.")
+            finite = ~comparison["new_missing"]
+            delta = (
+                comparison.loc[finite, "new"]
+                - comparison.loc[finite, "glm_tabulated_linear_prediction"]
+            ).abs()
+            if bool(delta.isna().any()):
+                raise ValueError("Rebased tabulations changed finite predictions to NA.")
             max_delta = float(delta.max()) if len(delta) else 0.0
             if max_delta > TABULATION_REBASE_TOLERANCE:
                 raise ValueError(f"Rebased tabulations changed row predictions by {max_delta:.6g} on the linear scale.")
@@ -944,7 +1055,7 @@ def _rebuild_tabulated_predictions(
     tabulated["glm_tabulated_linear_prediction"] = eta.where(~missing, np.nan)
     tabulated["glm_tabulation_missing"] = missing
     write_dataframe_parquet(tabulated, store.artifact_path(model_id, "tabulated_predictions"))
-    diagnostics = dict(store.model_diagnostics(model_id))
+    diagnostics = dict(manifest.get("diagnostics") or {})
     diagnostics.update(
         {
             "scored_rows": int(((~missing) & np.isfinite(eta.astype(float))).sum()),
@@ -953,6 +1064,65 @@ def _rebuild_tabulated_predictions(
         }
     )
     return diagnostics
+
+
+def _rebase_rule_mode(rule: dict[str, Any]) -> str:
+    mode = str(rule.get("mode") or "").strip()
+    if mode in {"cell_to_base", "feature_level_to_one_way", "legacy_slice_to_one_way"}:
+        return mode
+    return "legacy_slice_to_one_way" if str(rule.get("transfer_feature") or "").strip() else "cell_to_base"
+
+
+def _rebase_rule_identity(rule: dict[str, Any]) -> tuple[str, str]:
+    return str(rule.get("table_id") or ""), str(rule.get("target_table_id") or "")
+
+
+def _one_way_rebase_target(
+    store: GlmModelStore,
+    model_id: str,
+    manifest: dict[str, Any],
+    source_table: Any,
+    source_feature_meta: dict[str, dict[str, Any]],
+    target_feature: str,
+    pd: Any,
+) -> tuple[dict[str, Any], Any, bool]:
+    target_table_id = target_feature
+    target_info = _manifest_table_by_id(manifest, target_table_id)
+    if target_info and target_info.get("skipped"):
+        raise ValueError(f"{target_table_id} is skipped and cannot receive a rebase adjustment.")
+    feature_meta = dict(manifest.get("feature_meta") or {})
+    created = target_info is None
+    if target_info is None:
+        target_info = {
+            "table_id": target_table_id,
+            "label": target_table_id,
+            "index": max([int(table.get("index", 0)) for table in manifest.get("tables", [])] or [0]) + 1,
+            "features": [target_feature],
+            "cell_count": 0,
+            "skipped": False,
+            "path": f"tabulations/{_safe_id(target_table_id)}.parquet",
+            "rebasing_adjustment": True,
+        }
+        manifest.setdefault("tables", []).append(target_info)
+        target_table = _new_adjustment_table(source_table, target_feature, target_table_id, pd)
+        manifest.setdefault("table_feature_meta", {})[target_table_id] = {
+            target_feature: dict(source_feature_meta.get(target_feature) or feature_meta.get(target_feature) or {})
+        }
+    else:
+        if list(target_info.get("features") or []) != [target_feature]:
+            raise ValueError(f"{target_table_id} is not a one-way {target_feature} table.")
+        target_table = _read_table_frame(store, model_id, target_info, pd)
+    return target_info, target_table, created
+
+
+def _base_rebase_target(store: GlmModelStore, model_id: str, manifest: dict[str, Any], pd: Any) -> tuple[dict[str, Any], Any]:
+    base_info = _manifest_table_by_id(manifest, "base")
+    if not base_info or base_info.get("skipped"):
+        raise ValueError("Tabulation base table is missing.")
+    base_table = _read_table_frame(store, model_id, base_info, pd)
+    if base_table.empty:
+        raise ValueError("Tabulation base table is empty.")
+    return base_info, base_table
 
 
 def _apply_rebase_rule(
@@ -971,11 +1141,21 @@ def _apply_rebase_rule(
     features = list(table_info.get("features") or [])
     if not features:
         raise ValueError("Choose a non-base GLM tabulation table to rebase.")
+    mode = _rebase_rule_mode(rule)
+    if mode == "legacy_slice_to_one_way" and len(features) == 1:
+        mode = "cell_to_base"
+    anchor_feature = str(rule.get("anchor_feature") or "").strip()
     transfer_feature = str(rule.get("transfer_feature") or "").strip()
-    if transfer_feature and transfer_feature not in features:
+    if mode == "legacy_slice_to_one_way" and transfer_feature not in features:
         raise ValueError(f"Transfer feature {transfer_feature or '<blank>'} is not in {table_id}.")
+    if mode == "feature_level_to_one_way":
+        if len(features) != 2:
+            raise ValueError("Feature-level rebasing is available only for two-dimensional interaction tables.")
+        if anchor_feature not in features:
+            raise ValueError(f"Anchor feature {anchor_feature or '<blank>'} is not in {table_id}.")
     anchor_cell = dict(rule.get("anchor_cell") or {})
-    missing_features = [feature for feature in features if feature not in anchor_cell]
+    required_anchor_features = features if mode != "feature_level_to_one_way" else [anchor_feature]
+    missing_features = [feature for feature in required_anchor_features if feature not in anchor_cell]
     if missing_features:
         raise ValueError(f"Anchor cell is missing: {', '.join(missing_features)}.")
     feature_meta = dict(manifest.get("feature_meta") or {})
@@ -984,30 +1164,32 @@ def _apply_rebase_rule(
     source_table = _read_table_frame(store, model_id, table_info, pd)
     if source_table.empty:
         raise ValueError(f"{table_id} has no tabulation rows.")
-    anchor_mask = pd.Series(True, index=source_table.index)
-    for feature in features:
-        anchor_mask = anchor_mask & _feature_value_mask(source_table, feature, anchor_cell.get(feature), source_feature_meta.get(feature, {}), pd)
-    anchor_rows = source_table.loc[anchor_mask]
-    if anchor_rows.empty:
-        raise ValueError("Choose a cell that exists in the selected tabulation table.")
-    anchor_row = anchor_rows.iloc[0]
-    if str(anchor_row.get("status") or "ok") != "ok":
-        raise ValueError("Cannot rebase from an NA tabulation cell.")
-    offset = _as_number(anchor_row.get("tabulated_linear"))
-    if offset is None:
-        raise ValueError("Cannot rebase from an NA tabulation cell.")
-    if abs(offset) <= TABULATION_REBASE_TOLERANCE:
-        raise ValueError("Selected tabulation cell is already zero.")
+    source_values = pd.to_numeric(source_table["tabulated_linear"], errors="coerce")
+    source_ok = source_table["status"].fillna("ok").astype(str).eq("ok") & source_values.notna()
 
-    if not transfer_feature or len(features) == 1:
-        base_info = _manifest_table_by_id(manifest, "base")
-        if not base_info or base_info.get("skipped"):
-            raise ValueError("Tabulation base table is missing.")
-        base_table = _read_table_frame(store, model_id, base_info, pd)
-        if base_table.empty:
-            raise ValueError("Tabulation base table is empty.")
-        source_values = pd.to_numeric(source_table["tabulated_linear"], errors="coerce")
-        source_table.loc[source_values.notna(), "tabulated_linear"] = source_values.loc[source_values.notna()] - float(offset)
+    created_at = str(rule.get("created_at") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+    rule_id = str(rule.get("rule_id") or uuid.uuid4())
+
+    if mode == "cell_to_base":
+        anchor_mask = pd.Series(True, index=source_table.index)
+        for feature in features:
+            anchor_mask = anchor_mask & _feature_value_mask(
+                source_table,
+                feature,
+                anchor_cell.get(feature),
+                source_feature_meta.get(feature, {}),
+                pd,
+            )
+        anchor_rows = source_table.loc[anchor_mask & source_ok]
+        if anchor_rows.empty:
+            raise ValueError("Cannot rebase from an NA or missing tabulation cell.")
+        offset = _as_number(anchor_rows.iloc[0].get("tabulated_linear"))
+        if offset is None:
+            raise ValueError("Cannot rebase from an NA tabulation cell.")
+        if abs(offset) <= TABULATION_REBASE_TOLERANCE:
+            raise ValueError("Selected tabulation cell is already zero.")
+        base_info, base_table = _base_rebase_target(store, model_id, manifest, pd)
+        source_table.loc[source_ok, "tabulated_linear"] = source_values.loc[source_ok] - float(offset)
         base_values = pd.to_numeric(base_table["tabulated_linear"], errors="coerce")
         base_table.loc[base_values.notna(), "tabulated_linear"] = base_values.loc[base_values.notna()] + float(offset)
         if "base_adjustment" in base_table.columns:
@@ -1017,67 +1199,193 @@ def _apply_rebase_rule(
         _write_table_frame(store, model_id, base_info, base_table)
         return {
             "version": TABULATION_REBASING_VERSION,
-            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "rule_id": rule_id,
+            "created_at": created_at,
+            "mode": mode,
             "table_id": table_id,
             "anchor_cell": _json_anchor_cell(anchor_cell, features),
+            "anchor_feature": "",
             "transfer_feature": "",
             "target_table_id": "base",
             "transfer_mode": "base",
+            "created_target_table": False,
+            "offset_count": 1,
             "offset": json_safe_number(offset),
         }
 
-    target_table_id = transfer_feature
-    if target_table_id == table_id:
-        raise ValueError("Choose a separate one-way table to receive the rebased value.")
-    target_info = _manifest_table_by_id(manifest, target_table_id)
-    if target_info and target_info.get("skipped"):
-        raise ValueError(f"{target_table_id} is skipped and cannot receive a rebase adjustment.")
-    if target_info is None:
-        target_info = {
-            "table_id": target_table_id,
-            "label": target_table_id,
-            "index": max([int(table.get("index", 0)) for table in manifest.get("tables", [])] or [0]) + 1,
-            "features": [transfer_feature],
-            "cell_count": 0,
-            "skipped": False,
-            "path": f"tabulations/{_safe_id(target_table_id)}.parquet",
-            "rebasing_adjustment": True,
+    if mode == "legacy_slice_to_one_way":
+        if transfer_feature == table_id:
+            raise ValueError("Choose a separate one-way table to receive the rebased value.")
+        anchor_mask = pd.Series(True, index=source_table.index)
+        for feature in features:
+            anchor_mask = anchor_mask & _feature_value_mask(
+                source_table,
+                feature,
+                anchor_cell.get(feature),
+                source_feature_meta.get(feature, {}),
+                pd,
+            )
+        anchor_rows = source_table.loc[anchor_mask & source_ok]
+        if anchor_rows.empty:
+            raise ValueError("Cannot rebase from an NA or missing tabulation cell.")
+        offset = _as_number(anchor_rows.iloc[0].get("tabulated_linear"))
+        if offset is None or abs(offset) <= TABULATION_REBASE_TOLERANCE:
+            raise ValueError("Selected tabulation cell is already zero.")
+        target_info, target_table, created_target = _one_way_rebase_target(
+            store,
+            model_id,
+            manifest,
+            source_table,
+            source_feature_meta,
+            transfer_feature,
+            pd,
+        )
+        target_feature_meta = _feature_meta_for_table(
+            transfer_feature,
+            [transfer_feature],
+            feature_meta,
+            dict(manifest.get("table_feature_meta") or {}),
+        )
+        target_mask = _feature_value_mask(
+            target_table,
+            transfer_feature,
+            anchor_cell.get(transfer_feature),
+            target_feature_meta.get(transfer_feature, {}),
+            pd,
+        )
+        target_values = pd.to_numeric(target_table["tabulated_linear"], errors="coerce")
+        target_ok = target_table["status"].fillna("ok").astype(str).eq("ok") & target_values.notna()
+        if not bool((target_mask & target_ok).any()):
+            raise ValueError(f"{transfer_feature} has no OK row for the selected value.")
+        target_table.loc[target_mask & target_ok, "tabulated_linear"] = target_values.loc[target_mask & target_ok] + float(offset)
+        slice_mask = _feature_value_mask(
+            source_table,
+            transfer_feature,
+            anchor_cell.get(transfer_feature),
+            source_feature_meta.get(transfer_feature, {}),
+            pd,
+        )
+        source_table.loc[slice_mask & source_ok, "tabulated_linear"] = source_values.loc[slice_mask & source_ok] - float(offset)
+        _write_table_frame(store, model_id, table_info, source_table)
+        _write_table_frame(store, model_id, target_info, target_table)
+        return {
+            "version": TABULATION_REBASING_VERSION,
+            "rule_id": rule_id,
+            "created_at": created_at,
+            "mode": mode,
+            "table_id": table_id,
+            "anchor_cell": _json_anchor_cell(anchor_cell, features),
+            "anchor_feature": "",
+            "transfer_feature": transfer_feature,
+            "target_table_id": transfer_feature,
+            "transfer_mode": "legacy_feature",
+            "created_target_table": created_target,
+            "offset_count": 1,
+            "offset": json_safe_number(offset),
         }
-        manifest.setdefault("tables", []).append(target_info)
-        target_table = _new_adjustment_table(source_table, transfer_feature, target_table_id, pd)
-        manifest.setdefault("table_feature_meta", {})[target_table_id] = {
-            transfer_feature: dict(source_feature_meta.get(transfer_feature) or feature_meta.get(transfer_feature) or {})
-        }
-    else:
-        if list(target_info.get("features") or []) != [transfer_feature]:
-            raise ValueError(f"{target_table_id} is not a one-way {transfer_feature} table.")
-        target_table = _read_table_frame(store, model_id, target_info, pd)
-    table_feature_meta = dict(manifest.get("table_feature_meta") or {})
-    target_feature_meta = _feature_meta_for_table(target_table_id, [transfer_feature], feature_meta, table_feature_meta)
-    target_mask = _feature_value_mask(target_table, transfer_feature, anchor_cell.get(transfer_feature), target_feature_meta.get(transfer_feature, {}), pd)
-    if not bool(target_mask.any()):
-        raise ValueError(f"{target_table_id} has no row for the selected {transfer_feature} value.")
-    target_rows = target_table.loc[target_mask]
-    if str(target_rows.iloc[0].get("status") or "ok") != "ok":
-        raise ValueError(f"{target_table_id} has no OK row for the selected {transfer_feature} value.")
-    target_values = pd.to_numeric(target_table["tabulated_linear"], errors="coerce")
-    target_table.loc[target_mask & target_values.notna(), "tabulated_linear"] = target_values.loc[target_mask & target_values.notna()] + float(offset)
 
-    slice_mask = _feature_value_mask(source_table, transfer_feature, anchor_cell.get(transfer_feature), source_feature_meta.get(transfer_feature, {}), pd)
-    source_values = pd.to_numeric(source_table["tabulated_linear"], errors="coerce")
-    source_table.loc[slice_mask & source_values.notna(), "tabulated_linear"] = source_values.loc[slice_mask & source_values.notna()] - float(offset)
+    target_feature = next(feature for feature in features if feature != anchor_feature)
+    anchor_slice_mask = _feature_value_mask(
+        source_table,
+        anchor_feature,
+        anchor_cell.get(anchor_feature),
+        source_feature_meta.get(anchor_feature, {}),
+        pd,
+    )
+    eligible_anchor_rows = source_table.loc[anchor_slice_mask & source_ok]
+    if eligible_anchor_rows.empty:
+        raise ValueError(f"{table_id} has no OK cells for the selected {anchor_feature} level.")
+    offsets: list[tuple[Any, float]] = []
+    for anchor_row in eligible_anchor_rows.to_dict("records"):
+        offset = _as_number(anchor_row.get("tabulated_linear"))
+        if offset is not None:
+            offsets.append((_json_value(anchor_row.get(target_feature)), float(offset)))
+    if not offsets or all(abs(offset) <= TABULATION_REBASE_TOLERANCE for _, offset in offsets):
+        raise ValueError(f"The selected {anchor_feature} slice is already zero.")
+    target_info, target_table, created_target = _one_way_rebase_target(
+        store,
+        model_id,
+        manifest,
+        source_table,
+        source_feature_meta,
+        target_feature,
+        pd,
+    )
+    target_feature_meta = _feature_meta_for_table(
+        target_feature,
+        [target_feature],
+        feature_meta,
+        dict(manifest.get("table_feature_meta") or {}),
+    )
+    target_values = pd.to_numeric(target_table["tabulated_linear"], errors="coerce")
+    target_ok = target_table["status"].fillna("ok").astype(str).eq("ok") & target_values.notna()
+    for target_level, offset in offsets:
+        target_mask = _feature_value_mask(
+            target_table,
+            target_feature,
+            target_level,
+            target_feature_meta.get(target_feature, {}),
+            pd,
+        )
+        if not bool((target_mask & target_ok).any()):
+            raise ValueError(f"{target_feature} has no OK row for {target_feature}={target_level}.")
+        source_level_mask = _feature_value_mask(
+            source_table,
+            target_feature,
+            target_level,
+            source_feature_meta.get(target_feature, {}),
+            pd,
+        )
+        source_table.loc[source_level_mask & source_ok, "tabulated_linear"] = (
+            pd.to_numeric(source_table.loc[source_level_mask & source_ok, "tabulated_linear"], errors="coerce") - offset
+        )
+        current_target_values = pd.to_numeric(target_table["tabulated_linear"], errors="coerce")
+        target_table.loc[target_mask & target_ok, "tabulated_linear"] = current_target_values.loc[target_mask & target_ok] + offset
     _write_table_frame(store, model_id, table_info, source_table)
     _write_table_frame(store, model_id, target_info, target_table)
-
     return {
         "version": TABULATION_REBASING_VERSION,
-        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "rule_id": rule_id,
+        "created_at": created_at,
+        "mode": mode,
         "table_id": table_id,
         "anchor_cell": _json_anchor_cell(anchor_cell, features),
-        "transfer_feature": transfer_feature,
-        "target_table_id": target_table_id,
-        "transfer_mode": "feature",
-        "offset": json_safe_number(offset),
+        "anchor_feature": anchor_feature,
+        "anchor_level": _json_value(anchor_cell.get(anchor_feature)),
+        "transfer_feature": target_feature,
+        "target_table_id": target_feature,
+        "transfer_mode": "feature_level",
+        "created_target_table": created_target,
+        "offset_count": len(offsets),
+    }
+
+
+def _generated_rebase_tables(manifest: dict[str, Any], rules: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    generated: list[dict[str, Any]] = []
+    for table in manifest.get("tables", []):
+        if not table.get("rebasing_adjustment"):
+            continue
+        table_id = str(table.get("table_id") or "")
+        generated.append(
+            {
+                "table_id": table_id,
+                "label": str(table.get("label") or table_id),
+                "features": list(table.get("features") or []),
+                "created_by_rule_ids": [
+                    str(rule.get("rule_id") or "")
+                    for rule in rules
+                    if str(rule.get("target_table_id") or "") == table_id
+                ],
+            }
+        )
+    return generated
+
+
+def _rebasing_manifest(manifest: dict[str, Any], rules: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "version": TABULATION_REBASING_VERSION,
+        "rules": rules,
+        "generated_tables": _generated_rebase_tables(manifest, rules),
     }
 
 
@@ -1142,10 +1450,7 @@ def _model_ref_for_status(status: dict[str, Any]) -> str:
 
 
 def _model_field_label(model_ref: _TabulationModelRef, status: dict[str, Any] | None = None) -> str:
-    label = str((status or {}).get("label") or model_ref.model_id)
-    if model_ref.legacy_field:
-        return label
-    return f"{model_ref.label_kind} · {label}"
+    return str((status or {}).get("label") or model_ref.model_id)
 
 
 def _feature_kind_for_terms(
@@ -1577,39 +1882,16 @@ def _build_model_tabulations(
     tabulated["glm_tabulated_linear_prediction"] = eta.where(~missing, np.nan)
     tabulated["glm_tabulation_missing"] = missing
 
-    try:
-        # Reuse saved scoring output; only legacy or unsafe artifacts need the
-        # much more expensive Formulaic model-matrix reconstruction below.
-        exact_eta = _exact_linear_predictions_from_artifact(
-            store,
-            model_id,
-            manifest,
-            estimator,
-            frame,
-            np,
-            pd,
-        )
-        if exact_eta is None:
-            score_frame = frame.copy()
-            add_internal_intercept_column(score_frame, internal_intercept_column_from_manifest(manifest))
-            score_frame[TARGET_COLUMN] = 0.0
-            score_mask = pd.Series(True, index=frame.index)
-            offset_values = offset_values_for_frame(score_frame, offset_terms, context, np, pd)
-            if offset_values is not None:
-                score_mask = score_mask & offset_values.notna() & np.isfinite(offset_values.astype(float))
-            exact_eta = pd.Series(np.nan, index=frame.index, dtype=float)
-            exact_eta.loc[score_mask] = estimator.linear_predictor(
-                score_frame.loc[score_mask],
-                context=context,
-                offset=offset_values.loc[score_mask].astype(float).to_numpy() if offset_values is not None else None,
-            )
-        error = exact_eta - tabulated["glm_tabulated_linear_prediction"]
-        finite_error = error.dropna()
-        mean_linear_error = json_safe_number(float(finite_error.mean())) if len(finite_error) else None
-        linear_sd_error = json_safe_number(float(finite_error.std())) if len(finite_error) > 1 else 0.0
-    except Exception:
-        mean_linear_error = None
-        linear_sd_error = None
+    mean_linear_error, linear_sd_error = _tabulation_error_metrics(
+        store,
+        model_id,
+        manifest,
+        estimator,
+        frame,
+        tabulated["glm_tabulated_linear_prediction"],
+        np,
+        pd,
+    )
 
     write_dataframe_parquet(tabulated, store.artifact_path(model_id, "tabulated_predictions"))
     diagnostics = {
@@ -1652,6 +1934,72 @@ def _single_glm_rebase_ref(payload: dict[str, Any]) -> _TabulationModelRef:
     return ref
 
 
+def _active_rebase_rules(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    rebasing = manifest.get("rebasing")
+    if not isinstance(rebasing, dict):
+        return []
+    return [dict(rule) for rule in rebasing.get("rules", []) if isinstance(rule, dict)]
+
+
+def _rebase_rule_target(rule: dict[str, Any]) -> str:
+    target = str(rule.get("target_table_id") or "").strip()
+    if target:
+        return target
+    transfer_feature = str(rule.get("transfer_feature") or "").strip()
+    return transfer_feature or "base"
+
+
+def _retained_rules_after_table_clear(
+    raw_manifest: dict[str, Any],
+    rules: list[dict[str, Any]],
+    table_id: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    retained_candidates: list[dict[str, Any]] = []
+    removed: list[dict[str, Any]] = []
+    for rule in rules:
+        source, target = str(rule.get("table_id") or ""), _rebase_rule_target(rule)
+        if table_id in {source, target}:
+            removed.append(rule)
+        else:
+            retained_candidates.append(rule)
+    if not removed:
+        raise ValueError(f"{table_id} has no active rebasing to clear.")
+
+    available_tables = {
+        str(table.get("table_id") or "")
+        for table in raw_manifest.get("tables", [])
+        if not table.get("skipped")
+    }
+    retained: list[dict[str, Any]] = []
+    for rule in retained_candidates:
+        source = str(rule.get("table_id") or "")
+        if source not in available_tables:
+            removed.append(rule)
+            continue
+        retained.append(rule)
+        mode = _rebase_rule_mode(rule)
+        if mode in {"feature_level_to_one_way", "legacy_slice_to_one_way"}:
+            available_tables.add(_rebase_rule_target(rule))
+    return retained, removed
+
+
+def _restore_and_replay_rebase_rules(
+    store: GlmModelStore,
+    model_id: str,
+    rules: list[dict[str, Any]],
+    pd: Any,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    manifest = _restore_raw_tabulations(store, model_id)
+    applied_rules: list[dict[str, Any]] = []
+    for rule in rules:
+        applied_rules.append(_apply_rebase_rule(store, model_id, manifest, rule, pd))
+    if applied_rules:
+        manifest["rebasing"] = _rebasing_manifest(manifest, applied_rules)
+    else:
+        manifest.pop("rebasing", None)
+    return manifest, applied_rules
+
+
 def rebase_tabulation(dataset: Dataset, store: GlmModelStore, payload: dict[str, Any]) -> dict[str, Any]:
     ref = _single_glm_rebase_ref(payload)
     store.validate_model_id(ref.model_id)
@@ -1659,24 +2007,32 @@ def rebase_tabulation(dataset: Dataset, store: GlmModelStore, payload: dict[str,
     if not manifest or manifest.get("status") != "tabulated":
         raise ValueError("Build GLM tabulations before rebasing.")
     expected_linear = store.read_parquet_records(store.artifact_path(ref.model_id, "tabulated_predictions")) if store.artifact_path(ref.model_id, "tabulated_predictions").exists() else None
-    _ensure_raw_tabulations(store, ref.model_id, manifest)
     _glum, _glr, _glrcv, _np, pd = glm_dependencies()
     del _glum, _glr, _glrcv, _np
+    requested_mode = str(payload.get("mode") or "").strip()
+    if requested_mode and requested_mode not in {"cell_to_base", "feature_level_to_one_way"}:
+        raise ValueError(f"Unknown GLM tabulation rebase mode: {requested_mode}.")
     rule = {
+        "mode": requested_mode,
         "table_id": str(payload.get("table_id") or "").strip(),
         "anchor_cell": dict(payload.get("anchor_cell") or {}),
+        "anchor_feature": str(payload.get("anchor_feature") or "").strip(),
         "transfer_feature": str(payload.get("transfer_feature") or "").strip(),
     }
-    applied_rule = _apply_rebase_rule(store, ref.model_id, manifest, rule, pd)
-    rebasing = dict(manifest.get("rebasing") or {})
-    rules = list(rebasing.get("rules") or [])
-    rules.append(applied_rule)
-    manifest["rebasing"] = {
-        "version": TABULATION_REBASING_VERSION,
-        "rules": rules,
-    }
-    manifest["diagnostics"] = _rebuild_tabulated_predictions(dataset, store, ref.model_id, manifest, expected_linear=expected_linear)
-    store.write_json(store.artifact_path(ref.model_id, "tabulation_manifest"), manifest)
+    with _rebase_artifact_transaction(store, ref.model_id):
+        _ensure_raw_tabulations(store, ref.model_id, manifest)
+        applied_rule = _apply_rebase_rule(store, ref.model_id, manifest, rule, pd)
+        rules = _active_rebase_rules(manifest)
+        rules.append(applied_rule)
+        manifest["rebasing"] = _rebasing_manifest(manifest, rules)
+        manifest["diagnostics"] = _rebuild_tabulated_predictions(
+            dataset,
+            store,
+            ref.model_id,
+            manifest,
+            expected_linear=expected_linear,
+        )
+        store.write_json(store.artifact_path(ref.model_id, "tabulation_manifest"), manifest)
     dataset.reload()
     return {
         "model_id": ref.model_id,
@@ -1690,19 +2046,51 @@ def rebase_tabulation(dataset: Dataset, store: GlmModelStore, payload: dict[str,
 def reset_tabulation_rebase(dataset: Dataset, store: GlmModelStore, payload: dict[str, Any]) -> dict[str, Any]:
     ref = _single_glm_rebase_ref(payload)
     store.validate_model_id(ref.model_id)
+    current_manifest = _tabulation_manifest(store, ref.model_id)
+    if not current_manifest or current_manifest.get("status") != "tabulated":
+        raise ValueError("Build GLM tabulations before clearing rebasing.")
+    rules = _active_rebase_rules(current_manifest)
+    if not rules:
+        raise ValueError("This GLM tabulation has no rebase state to reset.")
+    scope = str(payload.get("scope") or "all").strip().lower()
+    if scope not in {"all", "table"}:
+        raise ValueError(f"Unknown GLM tabulation rebase reset scope: {scope}.")
+    table_id = str(payload.get("table_id") or "").strip()
+    if scope == "table" and not table_id:
+        raise ValueError("Choose a tabulation table whose rebasing should be cleared.")
     current_prediction_path = store.artifact_path(ref.model_id, "tabulated_predictions")
     expected_linear = store.read_parquet_records(current_prediction_path) if current_prediction_path.exists() else None
-    manifest = _restore_raw_tabulations(store, ref.model_id)
-    manifest["diagnostics"] = _rebuild_tabulated_predictions(dataset, store, ref.model_id, manifest, expected_linear=expected_linear)
-    store.write_json(store.artifact_path(ref.model_id, "tabulation_manifest"), manifest)
-    _clear_rebasing_sidecars(store, ref.model_id)
+    raw_manifest = store.read_json(_raw_tabulation_manifest_path(store, ref.model_id), None)
+    if not isinstance(raw_manifest, dict):
+        raise ValueError("This GLM tabulation has no rebase state to reset.")
+    if scope == "table":
+        retained_rules, removed_rules = _retained_rules_after_table_clear(raw_manifest, rules, table_id)
+    else:
+        retained_rules, removed_rules = [], rules
+    _glum, _glr, _glrcv, _np, pd = glm_dependencies()
+    del _glum, _glr, _glrcv, _np
+    with _rebase_artifact_transaction(store, ref.model_id):
+        manifest, applied_rules = _restore_and_replay_rebase_rules(store, ref.model_id, retained_rules, pd)
+        manifest["diagnostics"] = _rebuild_tabulated_predictions(
+            dataset,
+            store,
+            ref.model_id,
+            manifest,
+            expected_linear=expected_linear,
+        )
+        store.write_json(store.artifact_path(ref.model_id, "tabulation_manifest"), manifest)
+        if not applied_rules:
+            _clear_rebasing_sidecars(store, ref.model_id)
     dataset.reload()
     return {
         "model_id": ref.model_id,
         "model_ref": ref.ref,
-        "rebasing": {},
+        "rebasing": manifest.get("rebasing", {}),
         "tables": manifest.get("tables", []),
         "diagnostics": manifest.get("diagnostics", {}),
+        "cleared_scope": scope,
+        "cleared_table_id": table_id if scope == "table" else "",
+        "removed_rule_count": len(removed_rules),
     }
 
 

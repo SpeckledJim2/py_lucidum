@@ -6,9 +6,9 @@ GLM tabulations convert a fitted `glum` model into insurance-style rating tables
 
 - The GLM tool has a third tab, `Tabulations`, after `Formula builder` and `Model navigator`.
 - Tabulations are built on demand for selected model IDs by `POST /api/glm/tabulations/build`; they are not created during GLM training.
-- The tab shows a multi-model selector, table selector, table diagnostics, table/plot views, linear/`exp` display scale, colour toggle, and a 2D crosstab selector.
+- The tab shows a multi-model selector, table selector, table diagnostics, table/plot views, linear/`exp` display scale, colour toggle, and a 2D crosstab selector. Plots title the x-axis with the plotted feature, use fit-aware dense category labels, emphasize raw zero on linear plots and the factor-1 `0%` baseline on `exp` plots, and expose a borderless command that copies the chart as a PNG. A missing interaction crosstab is reported once in the inline notice.
 - `glm_tabulated_prediction` appears in `glm:<model_id>:predictions` only after tabulation artifacts exist. It is grouped under `Model predictions` in Line/Bar like `glm_prediction`.
-- For a single GLM non-base table, users can rebase a selected table cell to zero. Interaction crosstab rebases can transfer the offset into a compatible one-way table; one-way or no-crosstab rebases transfer the offset into the `base` table. The app recalculates `tabulated_predictions.parquet` so row-level `glm_tabulated_prediction` reflects the adjusted table decomposition.
+- For a single GLM non-base table, users can rebase a selected table cell to zero linear/one exponential and transfer the scalar into `base`. For a two-feature interaction, either selected feature level can instead be normalised across every OK cell in its slice; the varying offsets move into the opposite one-way table, which is created when absent. Active rules and generated tables are listed below the selectors, and users can clear rules involving the current table or clear all rebasing. The app recalculates `tabulated_predictions.parquet` and rejects any mutation that changes row-level predictions or missingness. Because successful rebasing preserves those predictions, the existing Mean error and linear SD error remain valid and are preserved.
 
 ## Required Training State
 
@@ -57,13 +57,12 @@ The SD error is expected to be nonzero for numeric tables because row scoring us
 Tabulation tables can have a free additive allocation between visible components. Rebasing is an app-level gauge transform on the linear-predictor scale:
 
 1. Preserve the first generated tables and manifest under `tabulations_raw/`.
-2. Read the selected cell's current `tabulated_linear` value.
-3. For an interaction table with a valid feature crosstab, subtract that value from every OK cell in the source table slice matching the transfer feature value, then add the same value to the matching row of the transfer feature's one-way table. If that one-way table does not exist, create a one-way adjustment table.
-4. For a one-way table, or a higher-dimensional table without a feature-transfer crosstab, subtract that value from every numeric source table cell and add it to the `base` table.
-5. Rebuild `tabulated_predictions.parquet` from the adjusted tables and assert the row-level linear predictions are unchanged within numerical tolerance.
-6. Store the applied rule under `tabulations/tabulation_manifest.json` `rebasing.rules`.
+2. In `cell_to_base` mode, subtract the selected cell's value from every OK source-table cell and add it to `base`.
+3. In two-dimensional `feature_level_to_one_way` mode, read the selected anchor-feature slice. For every OK opposite-feature level, subtract that slice value from every OK interaction cell at the same opposite-feature level and add it to the opposite feature's one-way row. Leave NA cells unchanged and create a zero-valued receiving table when necessary.
+4. Rebuild `tabulated_predictions.parquet`; row IDs and missing flags must match exactly and finite linear predictions must remain within `1e-7`.
+5. Store the ordered version-2 active rules and generated-table metadata under `tabulations/tabulation_manifest.json` `rebasing`.
 
-Reset restores `tabulations_raw/`, clears `rebasing`, and rebuilds `tabulated_predictions.parquet` from the restored raw tables.
+Table-scoped clear removes rules whose source or target is the selected table, cascades to rules depending on removed generated tables, restores `tabulations_raw/`, and replays retained rules in order. Clear-all restores the raw tabulations directly. Both operations remove unused generated tables, and any failed mutation restores the complete pre-operation artifact state. Version-1 scalar-slice rules remain replayable for existing rebased models.
 
 ## Artifacts
 
@@ -91,8 +90,8 @@ Each GLM model directory under `.lucidum/datasets/<dataset-slug>/<dataset-signat
 - `POST /api/glm/tabulations/table`: returns a multi-model wide table payload for the selected table and display scale.
 - `POST /api/glm/tabulations/plot`: returns ECharts-ready series for 1D tables and 2D crosstab tables.
 - `POST /api/glm/tabulations/export`: exports exactly one selected GLM or GBM model to XLSX using saved tabulation manifests and parquet sidecars only.
-- `POST /api/glm/tabulations/rebase`: rebases one selected GLM table cell and recalculates tabulated predictions.
-- `POST /api/glm/tabulations/rebase/reset`: restores the raw tabulations for one GLM and recalculates tabulated predictions.
+- `POST /api/glm/tabulations/rebase`: applies `cell_to_base` or two-dimensional `feature_level_to_one_way` rebasing and recalculates tabulated predictions.
+- `POST /api/glm/tabulations/rebase/reset`: clears rebasing involving one table or restores all raw tabulations, then recalculates tabulated predictions.
 
 ## XLSX Export
 

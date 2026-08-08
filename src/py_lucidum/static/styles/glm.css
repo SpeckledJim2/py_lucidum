@@ -913,7 +913,7 @@
         display: grid;
         flex: 1 1 auto;
         gap: 0;
-        grid-template-columns: minmax(420px, var(--glm-tabulation-sidebar-width, 1fr)) 12px minmax(420px, 1fr);
+        grid-template-columns: minmax(420px, var(--glm-tabulation-sidebar-width, 1fr)) 1px minmax(420px, 1fr);
         height: 100%;
         min-height: 0;
         min-width: 0;
@@ -991,6 +991,9 @@
       #glmTabulationResizer {
         align-self: stretch;
         height: 100%;
+        justify-self: center;
+        width: 12px;
+        z-index: 6;
       }
 
       #glmTabulationResizer::before {
@@ -1161,7 +1164,8 @@
         overflow-wrap: anywhere;
       }
 
-      .glm-tabulation-rebase-rule {
+      .glm-tabulation-rebase-rule,
+      .glm-tabulation-rebase-table {
         color: var(--muted);
         overflow-wrap: anywhere;
       }
@@ -1345,6 +1349,55 @@
         min-height: 0;
         overflow: hidden;
         padding: 0;
+        position: relative;
+      }
+
+      .glm-tabulation-copy-button {
+        align-items: center;
+        appearance: none;
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+        color: var(--muted);
+        display: inline-grid;
+        height: 28px;
+        justify-content: center;
+        left: 8px;
+        min-height: 28px;
+        padding: 6px;
+        position: absolute;
+        top: 4px;
+        width: 28px;
+        z-index: 3;
+      }
+
+      .glm-tabulation-copy-button:not(:disabled):hover,
+      .glm-tabulation-copy-button:not(:disabled):focus-visible {
+        background: transparent;
+        color: var(--accent);
+      }
+
+      .glm-tabulation-copy-button:focus-visible {
+        outline: 2px solid color-mix(in srgb, var(--accent) 72%, white);
+        outline-offset: 1px;
+      }
+
+      .glm-tabulation-copy-button:disabled {
+        background: transparent;
+        color: var(--muted);
+        cursor: not-allowed;
+        opacity: 0.5;
+      }
+
+      .glm-tabulation-copy-icon {
+        display: block;
+        fill: none;
+        height: 16px;
+        stroke: currentColor;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 1.8;
+        width: 16px;
       }
 
       .glm-tabulation-grid,
@@ -1532,6 +1585,22 @@
 
       .glm-tabulation-context-menu-item {
         white-space: normal;
+      }
+
+      .glm-tabulation-context-menu-divider {
+        border-top: 1px solid var(--line);
+        margin: 3px 2px;
+      }
+
+      .glm-tabulation-context-menu-item--danger {
+        color: var(--danger);
+        font-weight: 600;
+      }
+
+      .glm-tabulation-context-menu-item--danger:hover,
+      .glm-tabulation-context-menu-item--danger:focus-visible {
+        background: color-mix(in srgb, var(--danger) 12%, var(--panel));
+        color: var(--danger);
       }
 
       .glm-model-grid .tabulator-row,

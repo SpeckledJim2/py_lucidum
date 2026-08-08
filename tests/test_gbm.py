@@ -32,7 +32,7 @@ from py_lucidum.tools.gbm.trees import ebm_gain_summary, tree_detail, tree_summa
 from py_lucidum.tools.gbm.training import MissingGbmDependency, feature_config_with_mean_abs_shap, gbm_dependencies, gbm_training_dependencies, lightgbm_interaction_constraints, lightgbm_pair_interaction_constraints, lightgbm_progress_payload, normalise_feature_scenario, polars_feature_frame, predict_response_values, shap_dataframes, shap_interaction_group_columns, shap_row_limit, should_use_offset_init_score, train_model, tree_dataframe, training_projection_columns, training_select_sql, write_dataframe_parquet
 from py_lucidum.tools.gbm.validation import DEFAULT_TWEEDIE_VARIANCE_POWER, GBM_METRICS, GBM_OBJECTIVES, available_feature_interaction_groupings, categorical_distinct_counts, default_parameters, ebm_available, feature_interaction_constraint_groups, feature_rows, normalise_feature_grouping_map, normalise_feature_interaction_features, normalise_feature_interaction_groupings, normalise_feature_interaction_pairs, normalise_parameters, validate_request
 from py_lucidum.tools.glm.store import GlmModelStore
-from py_lucidum.tools.glm.tabulation import export_tabulations, tabulation_config, tabulation_table
+from py_lucidum.tools.glm.tabulation import export_tabulations, tabulation_config, tabulation_plot, tabulation_table
 from py_lucidum.tools.line_bar.query import chart
 from py_lucidum.tools.uk_map.query import summary as map_summary
 
@@ -5219,7 +5219,13 @@ COPY (
         store = self.write_gbm_tabulation_artifacts(tree_sql=tree_sql, predictions=[1.0, 2.0, 3.0])
         dataset = Dataset(self.data_path)
 
-        status = gbm_tabulation.tabulation_model_status(store, store.list_models()[0])
+        gbm_tabulation._cached_tree_blocking_warnings.cache_clear()
+        original_reader = gbm_tabulation._read_tree_table_path
+        with patch.object(gbm_tabulation, "_read_tree_table_path", wraps=original_reader) as reader:
+            status = gbm_tabulation.tabulation_model_status(store, store.list_models()[0])
+            repeated_status = gbm_tabulation.tabulation_model_status(store, store.list_models()[0])
+        self.assertEqual(reader.call_count, 1)
+        self.assertEqual(repeated_status, status)
         self.assertFalse(status["tabulatable"])
         self.assertFalse(status["tabulated"])
         self.assertEqual(status["tables"], [])
@@ -5345,6 +5351,7 @@ COPY (
 
         config = tabulation_config(glm_store, {"model_refs": ["glm:tab-glm", "gbm:tab-gbm"]}, gbm_store=gbm_store)
         table = tabulation_table(glm_store, {"model_refs": ["glm:tab-glm", "gbm:tab-gbm"], "table_id": "Age"}, gbm_store=gbm_store)
+        plot = tabulation_plot(glm_store, {"model_refs": ["glm:tab-glm", "gbm:tab-gbm"], "table_id": "Age"}, gbm_store=gbm_store)
         full_config = tabulation_config(
             glm_store,
             {"model_refs": ["glm:tab-glm", "gbm:tab-gbm", "gbm:untabulated-gbm", "gbm:blocked-gbm"]},
@@ -5359,6 +5366,8 @@ COPY (
         )
         value_columns = [column for column in table["columns"] if column.get("tabulation_value")]
         self.assertEqual([column["field"] for column in value_columns], ["glm:tab-glm", "gbm:tab-gbm"])
+        self.assertEqual([column["title"] for column in value_columns], ["GLM table", "tab-gbm"])
+        self.assertEqual([series["name"] for series in plot["series"]], ["GLM table", "tab-gbm"])
         self.assertEqual(table["rows"][0]["glm:tab-glm"], 0.0)
         self.assertEqual(table["rows"][0]["gbm:tab-gbm"], 0.0)
 

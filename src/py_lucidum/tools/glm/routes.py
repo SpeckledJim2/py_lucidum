@@ -16,7 +16,14 @@ from py_lucidum.app.telemetry import request_operation_id
 from .formula_assist import formula_levels
 from .jobs import GlmJobManager
 from .store import GlmModelNameError, GlmModelStore, GlmSourceProvider
-from .tabulation import export_tabulations, rebase_tabulation, reset_tabulation_rebase, tabulation_config, tabulation_plot, tabulation_table
+from .tabulation import (
+    export_tabulations,
+    rebase_tabulation,
+    reset_tabulation_rebase,
+    tabulation_config,
+    tabulation_plot,
+    tabulation_table,
+)
 from .training import MissingGlmDependency, glm_training_dependencies
 from .validation import DENOMINATOR_COLUMN, RESPONSE_COLUMN, family_options_payload, regularization_options_payload, sample_metadata, validate_request
 

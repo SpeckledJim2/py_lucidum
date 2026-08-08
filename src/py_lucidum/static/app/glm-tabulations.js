@@ -1,5 +1,8 @@
 export const GLM_TABULATION_MODEL_CROSSTAB = "__model__";
 const GLM_TABULATION_Y_AXIS_TARGET_INTERVALS = 15;
+const GLM_TABULATION_X_AXIS_LABEL_DENSITY_LIMIT = 200;
+const GLM_TABULATION_X_AXIS_ZOOM_THRESHOLD = 120;
+const GLM_TABULATION_X_AXIS_LABEL_PADDING = 8;
 
 export function createGlmTabulations({ el, modelNumberOrNull, scheduleResize }) {
   let splitSidebarWidth = null;
@@ -237,6 +240,10 @@ export function createGlmTabulations({ el, modelNumberOrNull, scheduleResize }) 
       };
     }
     if (max < min) [min, max] = [max, min];
+    if (data.scale === "exp") {
+      min = Math.min(min, 1);
+      max = Math.max(max, 1);
+    }
     const dataMin = min;
     const dataMax = max;
     if (min === max) {
@@ -275,7 +282,104 @@ export function createGlmTabulations({ el, modelNumberOrNull, scheduleResize }) 
     };
   }
 
+  function xAxisFeature(data = {}) {
+    const features = Array.isArray(data.features)
+      ? data.features.map((feature) => String(feature || "")).filter(Boolean)
+      : [];
+    if (features.length === 1) return features[0];
+    const crosstab = String(data.crosstab || "");
+    if (features.length === 2 && features.includes(crosstab)) {
+      return features.find((feature) => feature !== crosstab) || "";
+    }
+    return "";
+  }
+
+  function xAxisLabelPolicy(labels = [], chartWidth = 0) {
+    const count = labels.length;
+    const dataZoomEnabled = count > GLM_TABULATION_X_AXIS_ZOOM_THRESHOLD;
+    const dataZoomSpace = dataZoomEnabled ? 36 : 0;
+    if (count >= GLM_TABULATION_X_AXIS_LABEL_DENSITY_LIMIT) {
+      return {
+        show: false,
+        interval: 0,
+        rotate: 0,
+        fontSize: 10,
+        nameGap: 22,
+        bottom: 38 + dataZoomSpace,
+        dataZoomEnabled,
+      };
+    }
+    const fontSize = count > 50 ? 8 : 10;
+    const maxLength = labels.reduce((longest, label) => Math.max(longest, String(label ?? "").length), 0);
+    const estimatedTextWidth = maxLength * fontSize * 0.5;
+    const width = Number(chartWidth);
+    const plotWidth = Math.max(120, (Number.isFinite(width) && width > 0 ? width : 900) - 128);
+    const slotWidth = plotWidth / Math.max(1, count);
+    const horizontalFootprint = estimatedTextWidth + GLM_TABULATION_X_AXIS_LABEL_PADDING;
+    const rotate = count > 30 || maxLength > 10 || horizontalFootprint > slotWidth ? 65 : 0;
+    const radians = (rotate * Math.PI) / 180;
+    const rotatedHeight = estimatedTextWidth * Math.sin(radians) + fontSize * Math.cos(radians);
+    const labelSpace = rotate ? Math.min(140, Math.max(58, Math.ceil(rotatedHeight) + 18)) : 38;
+    const nameGap = rotate ? Math.max(26, labelSpace - 10) : 26;
+    return {
+      show: count > 0,
+      interval: 0,
+      rotate,
+      fontSize,
+      nameGap,
+      bottom: nameGap + 16 + dataZoomSpace,
+      dataZoomEnabled,
+    };
+  }
+
+  function xAxisPresentation(data = {}, chartWidth = 0, theme = {}) {
+    const values = Array.isArray(data.x_axis) ? data.x_axis : [];
+    const labels = values.map((value) => String(value ?? ""));
+    const policy = xAxisLabelPolicy(labels, chartWidth);
+    return {
+      grid: { bottom: policy.bottom },
+      xAxis: {
+        type: "category",
+        data: values,
+        name: xAxisFeature(data),
+        nameLocation: "middle",
+        nameGap: policy.nameGap,
+        nameTextStyle: { color: theme.text || "#334155", fontSize: 13, fontWeight: 700 },
+        axisLine: {
+          onZero: true,
+          lineStyle: { color: theme.line || "#cbd5e1", width: 2 },
+        },
+        axisLabel: {
+          show: policy.show,
+          color: theme.text || "#334155",
+          interval: policy.interval,
+          hideOverlap: false,
+          showMinLabel: true,
+          showMaxLabel: true,
+          rotate: policy.rotate,
+          fontSize: policy.fontSize,
+          margin: 8,
+        },
+      },
+      dataZoom: policy.dataZoomEnabled
+        ? [{ type: "inside" }, { type: "slider", height: 18, bottom: 18 }]
+        : [],
+    };
+  }
+
+  function baselineMarkLine(data = {}, theme = {}) {
+    if (data.scale !== "exp") return null;
+    return {
+      silent: true,
+      symbol: "none",
+      label: { show: false },
+      lineStyle: { color: theme.line || "#cbd5e1", type: "solid", width: 2 },
+      data: [{ yAxis: 1 }],
+    };
+  }
+
   return {
+    baselineMarkLine,
     bindResizer,
     crosstabOptions,
     displayTableSpan,
@@ -288,6 +392,7 @@ export function createGlmTabulations({ el, modelNumberOrNull, scheduleResize }) 
     roundAxisValue,
     savedSplitWidthStyle,
     tableSelectorShellHtml,
+    xAxisPresentation,
     yAxisOptions,
   };
 }

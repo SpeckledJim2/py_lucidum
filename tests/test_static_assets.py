@@ -2589,6 +2589,103 @@ for (const [column, expected] of cases) {{
 """
         self.run_node_script(script)
 
+    def test_glm_tabulation_x_axis_presentation_is_dense_and_responsive(self) -> None:
+        module = Path("src/py_lucidum/static/app/glm-tabulations.js").resolve().as_uri()
+        script = f"""
+import {{ createGlmTabulations }} from "{module}";
+
+const tabulations = createGlmTabulations({{
+  el: () => null,
+  modelNumberOrNull: (value) => Number.isFinite(Number(value)) ? Number(value) : null,
+  scheduleResize: () => {{}},
+}});
+const denseValues = Array.from({{ length: 61 }}, (_, index) => index + 1);
+const dense = tabulations.xAxisPresentation({{
+  features: ["POSTCODE_CATEGORY"],
+  crosstab: "",
+  x_axis: denseValues,
+}}, 900, {{ text: "#111111", line: "#222222" }});
+if (dense.xAxis.name !== "POSTCODE_CATEGORY") throw new Error("one-way x-axis title missing");
+if (dense.xAxis.axisLabel.interval !== 0 || dense.xAxis.axisLabel.fontSize !== 8) throw new Error("dense labels were thinned");
+if (dense.xAxis.axisLabel.rotate !== 65 || dense.xAxis.axisLabel.show !== true) throw new Error("dense labels did not rotate");
+if (dense.xAxis.axisLine.onZero !== true || dense.xAxis.axisLine.lineStyle.width !== 2) throw new Error("zero axis is not prominent");
+
+const interaction = tabulations.xAxisPresentation({{
+  features: ["Age", "Segment"],
+  crosstab: "Segment",
+  x_axis: [30, 40, 50],
+}}, 900);
+if (interaction.xAxis.name !== "Age") throw new Error("interaction x-axis title is incorrect");
+
+const expBaseline = tabulations.baselineMarkLine({{ scale: "exp" }}, {{ line: "#222222" }});
+if (expBaseline?.data?.[0]?.yAxis !== 1 || expBaseline?.lineStyle?.width !== 2) throw new Error("Exp 0% baseline is not prominent");
+if (tabulations.baselineMarkLine({{ scale: "linear" }}) !== null) throw new Error("linear plot received an Exp baseline");
+const expAxis = tabulations.yAxisOptions({{ scale: "exp", min: 1.2, max: 1.8 }});
+if (!(expAxis.min <= 1 && expAxis.max >= 1)) throw new Error("Exp axis omitted the 0% baseline");
+
+const resizePayload = {{
+  features: ["Feature"],
+  crosstab: "",
+  x_axis: Array.from({{ length: 10 }}, (_, index) => `v${{String(index).padStart(4, "0")}}`),
+}};
+const narrow = tabulations.xAxisPresentation(resizePayload, 300);
+const wide = tabulations.xAxisPresentation(resizePayload, 1000);
+if (narrow.xAxis.axisLabel.rotate !== 65 || wide.xAxis.axisLabel.rotate !== 0) throw new Error("width-aware rotation failed");
+
+const zoomed = tabulations.xAxisPresentation({{ ...resizePayload, x_axis: Array.from({{ length: 121 }}, (_, index) => index) }}, 900);
+if (zoomed.dataZoom.length !== 2) throw new Error("dense x-axis zoom missing");
+const hidden = tabulations.xAxisPresentation({{ ...resizePayload, x_axis: Array.from({{ length: 200 }}, (_, index) => index) }}, 900);
+if (hidden.xAxis.axisLabel.show !== false) throw new Error("density limit failed");
+"""
+        self.run_node_script(script)
+
+    def test_glm_tabulation_rebase_ui_exposes_explicit_modes_and_clear_scopes(self) -> None:
+        static_root = Path(__file__).resolve().parents[1] / "src/py_lucidum/static"
+        glm = (static_root / "app/glm-tool.js").read_text(encoding="utf-8")
+        glm_css = (static_root / "styles/glm.css").read_text(encoding="utf-8")
+
+        for contract in (
+            'mode: "cell_to_base"',
+            'mode: "feature_level_to_one_way"',
+            'return "Rebase to this cell; adjust base";',
+            'return `Set ${anchorFeature}=${anchorValue} slice to ${baseline}; adjust ${targetFeature} table`;',
+            'label: "Clear rebasing involving this table"',
+            'label: "Clear all rebasing"',
+            'divider.className = "glm-tabulation-context-menu-divider";',
+            'item.danger ? " glm-tabulation-context-menu-item--danger" : ""',
+            'scope === "table" ? selectedTabulationTableId : ""',
+            'rules.map((rule) =>',
+            'generatedTables.map((table) =>',
+            'Created ${tableId} one-way adjustment table for rebasing',
+        ):
+            self.assertIn(contract, glm)
+        self.assertNotIn("rules.slice(0, 3)", glm)
+        self.assertIn(".glm-tabulation-rebase-table", glm_css)
+        self.assertIn(".glm-tabulation-context-menu-divider", glm_css)
+        self.assertIn("color: var(--danger);", glm_css)
+        self.assertIn("background: color-mix(in srgb, var(--danger) 12%, var(--panel));", glm_css)
+        self.assertNotIn("glmRecalculateTabulationsBtn", glm)
+        self.assertNotIn("/api/glm/tabulations/recalculate", glm)
+
+    def test_glm_tabulation_model_switch_reuses_loaded_config(self) -> None:
+        glm = (
+            Path(__file__).resolve().parents[1]
+            / "src/py_lucidum/static/app/glm-tool.js"
+        ).read_text(encoding="utf-8")
+
+        for contract in (
+            "function tabulationSelectionConfigFromCache(",
+            "async function refreshTabulationSelectionFromCache()",
+            "await renderTabulationSelectorTables();",
+            "if (changed) refreshTabulationSelectionFromCache();",
+            "const changed = previousKey !== tabulationSelectionKey();",
+        ):
+            self.assertIn(contract, glm)
+        self.assertNotIn(
+            "if (selectTabulationModel(modelId, event)) refreshTabulationConfig({ force: true });",
+            glm,
+        )
+
     def test_app_control_strips_use_shared_height_tokens(self) -> None:
         static_root = Path(__file__).resolve().parents[1] / "src/py_lucidum/static"
         foundations = (static_root / "styles/foundations.css").read_text(encoding="utf-8")
@@ -2599,6 +2696,7 @@ for (const [column, expected] of cases) {{
         glm_css = (static_root / "styles/glm.css").read_text(encoding="utf-8")
         gbm_css = (static_root / "styles/gbm.css").read_text(encoding="utf-8")
         glm = (static_root / "app/glm-tool.js").read_text(encoding="utf-8")
+        glm_tabulations = (static_root / "app/glm-tabulations.js").read_text(encoding="utf-8")
         glm_formula_builder = (static_root / "app/glm-formula-builder.js").read_text(encoding="utf-8")
         gbm = (static_root / "app/gbm-tool.js").read_text(encoding="utf-8")
         gbm_evaluation_chart = (static_root / "app/gbm-evaluation-chart.js").read_text(encoding="utf-8")
@@ -2742,6 +2840,11 @@ for (const [column, expected] of cases) {{
         self.assertIn('class="glm-tabulation-export-icon" viewBox="0 0 24 24"', glm)
         self.assertIn('aria-label="${isExportingTabulations ? "Exporting XLSX" : "Export XLSX"}"', glm)
         self.assertNotIn('id="glmExportTabulationsBtn" class="tab ', glm)
+        self.assertIn('id="glmTabulationCopyBtn" class="app-control-button glm-tabulation-copy-button"', glm)
+        self.assertIn('aria-label="Copy tabulation chart" title="Copy tabulation chart" disabled', glm)
+        self.assertIn('class="glm-tabulation-copy-icon" viewBox="0 0 24 24"', glm)
+        self.assertIn('new window.ClipboardItem({ "image/png": blob })', glm)
+        self.assertIn('pixelRatio: 2,', glm)
         self.assertNotIn("exportButton.textContent", glm)
         self.assertIn('tabulationScale = tabulationScale === "exp" ? "linear" : "exp";', glm)
         self.assertIn('tabulationColor = !tabulationColor;', glm)
@@ -2755,6 +2858,16 @@ for (const [column, expected] of cases) {{
         self.assertIn(".glm-tabulation-export-icon {", glm_css)
         self.assertIn('.glm-tabulation-export-button[aria-busy="true"] .glm-tabulation-export-icon {', glm_css)
         self.assertIn(".glm-tabulation-export-button {\n        flex: 0 0 28px;", glm_css)
+        self.assertIn(".glm-tabulation-copy-button {", glm_css)
+        self.assertIn(".glm-tabulation-copy-icon {", glm_css)
+        self.assertIn("grid-template-columns: minmax(420px, var(--glm-tabulation-sidebar-width, 1fr)) 1px minmax(420px, 1fr);", glm_css)
+        self.assertIn("#glmTabulationResizer {\n        align-self: stretch;\n        height: 100%;\n        justify-self: center;\n        width: 12px;", glm_css)
+        self.assertIn("const GLM_TABULATION_X_AXIS_LABEL_DENSITY_LIMIT = 200;", glm_tabulations)
+        self.assertIn("const fontSize = count > 50 ? 8 : 10;", glm_tabulations)
+        self.assertIn("const rotate = count > 30 || maxLength > 10 || horizontalFootprint > slotWidth ? 65 : 0;", glm_tabulations)
+        self.assertIn('lineStyle: { color: theme.line || "#cbd5e1", width: 2 },', glm_tabulations)
+        self.assertIn('data: [{ yAxis: 1 }],', glm_tabulations)
+        self.assertIn("xAxisFeature(data)", glm_tabulations)
         self.assertIn(".glm-tabulation-crosstab-group {\n        align-items: center;\n        display: inline-flex;\n        flex: 1 1 auto;", glm_css)
         self.assertIn(".glm-tabulation-crosstab {\n        background: var(--panel);", glm_css)
         self.assertIn("flex: 1 1 auto;\n        font-size: 12px;", glm_css)

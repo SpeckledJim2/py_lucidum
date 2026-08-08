@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Callable
+from functools import lru_cache
 import math
 import time
 from pathlib import Path
@@ -72,8 +73,7 @@ def _tabulation_manifest(store: GbmModelStore, model_id: str) -> dict[str, Any] 
     return payload if isinstance(payload, dict) else None
 
 
-def _read_tree_table(store: GbmModelStore, model_id: str, best_iteration: Any) -> list[dict[str, Any]]:
-    path = store.artifact_path(model_id, "tree_table")
+def _read_tree_table_path(path: Path, best_iteration: Any) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     best = _positive_int(best_iteration)
@@ -116,6 +116,38 @@ ORDER BY tree_index, node_depth, node_index
     finally:
         con.close()
     return [dict(zip(names, row)) for row in rows]
+
+
+def _read_tree_table(store: GbmModelStore, model_id: str, best_iteration: Any) -> list[dict[str, Any]]:
+    return _read_tree_table_path(store.artifact_path(model_id, "tree_table"), best_iteration)
+
+
+@lru_cache(maxsize=256)
+def _cached_tree_blocking_warnings(
+    path_text: str,
+    modified_ns: int,
+    size: int,
+    best_iteration: int | None,
+) -> tuple[str, ...]:
+    del modified_ns, size
+    _, warnings = _tree_groups(_read_tree_table_path(Path(path_text), best_iteration))
+    return tuple(warnings)
+
+
+def _tree_blocking_warnings(store: GbmModelStore, model_id: str, best_iteration: Any) -> list[str]:
+    path = store.artifact_path(model_id, "tree_table")
+    try:
+        stat = path.stat()
+    except OSError:
+        return []
+    return list(
+        _cached_tree_blocking_warnings(
+            str(path),
+            int(stat.st_mtime_ns),
+            int(stat.st_size),
+            _positive_int(best_iteration),
+        )
+    )
 
 
 def _positive_int(value: Any) -> int | None:
@@ -639,7 +671,7 @@ def tabulation_model_status(store: GbmModelStore, model: dict[str, Any]) -> dict
         model_warnings.append("Rebuild this GBM before tabulating; tree_table.parquet is missing.")
     blocking_warnings: list[str] = []
     if tabulatable and not tables:
-        _, blocking_warnings = _tree_groups(_read_tree_table(store, model_id, model.get("best_iteration")))
+        blocking_warnings = _tree_blocking_warnings(store, model_id, model.get("best_iteration"))
         if blocking_warnings:
             tabulatable = False
             model_warnings.extend(blocking_warnings)

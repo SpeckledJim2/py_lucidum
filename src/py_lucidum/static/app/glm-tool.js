@@ -172,6 +172,7 @@ export function createGlmTool({
   let tabulationChart = null;
   let tabulationPayload = null;
   let tabulationRenderSeq = 0;
+  let tabulationSelectionRefreshSeq = 0;
   let tabulationSelectorRenderSeq = 0;
   let tabulationModelSelectorSignature = "";
   let tabulationTableSelectorSignature = "";
@@ -543,6 +544,12 @@ export function createGlmTool({
             <div id="glmTabulationFallback" class="glm-tabulation-fallback"></div>
           </div>
           <div class="glm-tabulation-view-shell ${tabulationView === "plot" ? "" : "hidden"}" data-glm-tabulation-view-panel="plot">
+            <button id="glmTabulationCopyBtn" class="app-control-button glm-tabulation-copy-button" type="button" aria-label="Copy tabulation chart" title="Copy tabulation chart" disabled>
+              <svg class="glm-tabulation-copy-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <rect x="8" y="8" width="10" height="10" rx="1.5"></rect>
+                <path d="M6 14H5.5A1.5 1.5 0 0 1 4 12.5v-7A1.5 1.5 0 0 1 5.5 4h7A1.5 1.5 0 0 1 14 5.5V6"></path>
+              </svg>
+            </button>
             <div id="glmTabulationPlot" class="glm-tabulation-plot"></div>
           </div>
         </section>
@@ -597,6 +604,30 @@ export function createGlmTool({
     return models.find((model) => tabulationModelRef(model) === ref || String(model.model_id || "") === String(modelId || "")) || null;
   }
 
+  function tabulationSelectionConfigFromCache(modelRefs = tabulationSelectedModelIds()) {
+    const allModels = Array.isArray(tabulationConfig?.all_models) ? tabulationConfig.all_models : [];
+    if (!allModels.length || !modelRefs.length) return null;
+    const byRef = new Map(allModels.map((model) => [tabulationModelRef(model), model]));
+    const models = modelRefs.map((modelRef) => byRef.get(normaliseTabulationRef(modelRef))).filter(Boolean);
+    if (models.length !== modelRefs.length) return null;
+    const tablesById = new Map();
+    const warnings = [];
+    models.forEach((model) => {
+      modelTabulationTables(model).forEach((table) => {
+        const tableId = String(table.table_id || "");
+        if (tableId && !tablesById.has(tableId)) tablesById.set(tableId, table);
+      });
+      (Array.isArray(model.warnings) ? model.warnings : []).forEach((warning) => {
+        if (warning) warnings.push(String(warning));
+      });
+    });
+    const tables = Array.from(tablesById.values()).sort((left, right) => (
+      (tabulationTableIndex(left) - tabulationTableIndex(right))
+      || String(left.table_id || "").localeCompare(String(right.table_id || ""))
+    ));
+    return { ...tabulationConfig, models, tables, warnings };
+  }
+
   function selectedTabulationModel() {
     const refs = tabulationSelectedModelIds();
     return refs.length === 1 ? tabulationConfigModel(refs[0]) : null;
@@ -614,16 +645,21 @@ export function createGlmTool({
     return Array.isArray(rules) ? rules : [];
   }
 
-  function activeTabulationRebaseTransferFeature() {
-    const table = activeTabulationTable();
-    const features = Array.isArray(table?.features) ? table.features : [];
-    return features.length >= 2 && tabulationCrosstab && tabulationCrosstab !== GLM_TABULATION_MODEL_CROSSTAB && features.includes(tabulationCrosstab)
-      ? tabulationCrosstab
-      : "";
+  function selectedTabulationGeneratedTables() {
+    const model = selectedTabulationModel();
+    const generated = model?.rebasing?.generated_tables;
+    return Array.isArray(generated) ? generated : [];
   }
 
-  function activeTabulationRebaseTargetLabel() {
-    return activeTabulationRebaseTransferFeature() || "base";
+  function tabulationRebaseRuleTarget(rule = {}) {
+    return String(rule.target_table_id || rule.transfer_feature || "base");
+  }
+
+  function selectedTableHasRebaseInvolvement() {
+    const tableId = String(selectedTabulationTableId || "");
+    return Boolean(tableId && selectedTabulationRebaseRules().some((rule) => (
+      String(rule.table_id || "") === tableId || tabulationRebaseRuleTarget(rule) === tableId
+    )));
   }
 
   function canRebaseSelectedTable() {
@@ -654,37 +690,49 @@ export function createGlmTool({
     if (!model || String(model.model_kind || "glm").toLowerCase() !== "glm") return "Only GLM tabulations can be rebased.";
     if (!table || selectedTabulationTableId === "base" || !features.length) return "Choose a non-base GLM tabulation table to rebase.";
     if (tabulationView !== "table") return "Switch to table view before rebasing.";
-    return `Right-click an OK numeric table cell to rebase into ${activeTabulationRebaseTargetLabel()}.`;
+    return "Right-click an OK numeric table cell to choose a rebase action.";
   }
 
   function tabulationRebaseAnchorLabel(anchorCell = {}, features = []) {
     return features.map((feature) => `${feature}=${anchorCell[feature]}`).join(", ");
   }
 
-  function tabulationRebaseContextForCell(row = {}, column = {}) {
-    if (!canRebaseActiveTabulation() || !column?.tabulation_value) return null;
+  function tabulationRebaseContextsForCell(row = {}, column = {}) {
+    if (!canRebaseActiveTabulation() || !column?.tabulation_value) return [];
     const field = String(column.field || "");
     const statusField = String(column.status_field || `__status__${field}`);
     const status = row[statusField] || "ok";
     const value = row[field];
-    if (status !== "ok" || value === null || value === undefined || !Number.isFinite(Number(value))) return null;
+    if (status !== "ok" || value === null || value === undefined || !Number.isFinite(Number(value))) return [];
     const table = activeTabulationTable();
     const features = Array.isArray(table?.features) ? table.features : [];
     const anchorCell = {};
     features.forEach((feature) => {
       anchorCell[feature] = feature === tabulationCrosstab ? column.title : row[feature];
     });
-    if (features.some((feature) => anchorCell[feature] === undefined || anchorCell[feature] === null)) return null;
+    if (features.some((feature) => anchorCell[feature] === undefined || anchorCell[feature] === null)) return [];
     const modelRef = tabulationSelectedModelIds()[0] || "";
-    if (!modelRef) return null;
-    const transferFeature = activeTabulationRebaseTransferFeature();
-    return {
+    if (!modelRef) return [];
+    const contexts = [{
       model_ref: modelRef,
       table_id: selectedTabulationTableId,
       anchor_cell: anchorCell,
-      transfer_feature: transferFeature,
-      label: `${tabulationRebaseAnchorLabel(anchorCell, features)} -> ${transferFeature || "base"}`,
-    };
+      mode: "cell_to_base",
+      anchor_feature: "",
+    }];
+    if (features.length === 2) {
+      features.forEach((anchorFeature) => {
+        contexts.push({
+          model_ref: modelRef,
+          table_id: selectedTabulationTableId,
+          anchor_cell: anchorCell,
+          mode: "feature_level_to_one_way",
+          anchor_feature: anchorFeature,
+          target_feature: features.find((feature) => feature !== anchorFeature) || "",
+        });
+      });
+    }
+    return contexts;
   }
 
   function tabulationRebaseContextValueLabel(value) {
@@ -693,13 +741,14 @@ export function createGlmTool({
   }
 
   function tabulationRebaseActionLabel(rebaseContext = {}) {
-    const transferFeature = String(rebaseContext.transfer_feature || "");
-    if (transferFeature) {
-      const transferValue = tabulationRebaseContextValueLabel(rebaseContext.anchor_cell?.[transferFeature]);
-      const slice = transferValue ? `${transferFeature}=${transferValue}` : transferFeature;
-      return `Rebase ${slice} slice to this cell; offset ${transferFeature} table`;
+    if (rebaseContext.mode === "feature_level_to_one_way") {
+      const anchorFeature = String(rebaseContext.anchor_feature || "");
+      const anchorValue = tabulationRebaseContextValueLabel(rebaseContext.anchor_cell?.[anchorFeature]);
+      const targetFeature = String(rebaseContext.target_feature || "");
+      const baseline = tabulationScale === "exp" ? "1.0000" : "0";
+      return `Set ${anchorFeature}=${anchorValue} slice to ${baseline}; adjust ${targetFeature} table`;
     }
-    return "Rebase whole table to this cell; offset base";
+    return "Rebase to this cell; adjust base";
   }
 
   function glmTabulationContextMenu() {
@@ -759,18 +808,27 @@ export function createGlmTool({
     window.addEventListener("scroll", viewport, true);
   }
 
-  function openGlmTabulationContextMenu(event, rebaseContext = null) {
+  function openGlmTabulationContextMenu(event, rebaseContexts = []) {
     const actions = [];
-    if (rebaseContext) {
+    rebaseContexts.forEach((rebaseContext) => {
       actions.push({
         label: tabulationRebaseActionLabel(rebaseContext),
         action: () => applyTabulationRebaseContext(rebaseContext),
       });
-    }
+    });
     if (selectedTabulationRebaseRules().length) {
+      if (selectedTableHasRebaseInvolvement()) {
+        actions.push({
+          label: "Clear rebasing involving this table",
+          separatorBefore: true,
+          action: () => resetSelectedTabulationRebase("table"),
+        });
+      }
       actions.push({
-        label: "Reset rebase",
-        action: () => resetSelectedTabulationRebase(),
+        label: "Clear all rebasing",
+        separatorBefore: true,
+        danger: true,
+        action: () => resetSelectedTabulationRebase("all"),
       });
     }
     if (!actions.length) {
@@ -783,9 +841,15 @@ export function createGlmTool({
     const menu = glmTabulationContextMenu();
     menu.innerHTML = "";
     actions.forEach((item) => {
+      if (item.separatorBefore) {
+        const divider = document.createElement("div");
+        divider.className = "glm-tabulation-context-menu-divider";
+        divider.setAttribute("role", "separator");
+        menu.appendChild(divider);
+      }
       const button = document.createElement("button");
       button.type = "button";
-      button.className = "glm-tabulation-context-menu-item";
+      button.className = `glm-tabulation-context-menu-item${item.danger ? " glm-tabulation-context-menu-item--danger" : ""}`;
       button.setAttribute("role", "menuitem");
       button.textContent = item.label;
       button.addEventListener("click", () => {
@@ -1000,13 +1064,15 @@ export function createGlmTool({
       .map((model) => {
         const warnings = Array.isArray(model.warnings) ? model.warnings.filter(Boolean) : [];
         const rules = Array.isArray(model?.rebasing?.rules) ? model.rebasing.rules : [];
+        const generatedTables = Array.isArray(model?.rebasing?.generated_tables) ? model.rebasing.generated_tables : [];
         if (!model.tabulatable && !warnings.length) warnings.push("rebuild required");
-        if (!warnings.length && !rules.length) return "";
+        if (!warnings.length && !rules.length && !generatedTables.length) return "";
         return `
           <div class="glm-tabulation-model-diagnostic">
             <strong>${escapeHtml(tabulationModelLabel(model))}</strong>
             ${warnings.slice(0, 3).map((warning) => `<span class="glm-tabulation-warning">${escapeHtml(warning)}</span>`).join("")}
-            ${rules.slice(0, 3).map((rule) => `<span class="glm-tabulation-rebase-rule">${escapeHtml(tabulationRebaseRuleLabel(rule))}</span>`).join("")}
+            ${rules.map((rule) => `<span class="glm-tabulation-rebase-rule">${escapeHtml(tabulationRebaseRuleLabel(rule))}</span>`).join("")}
+            ${generatedTables.map((table) => `<span class="glm-tabulation-rebase-table">${escapeHtml(tabulationGeneratedTableLabel(table))}</span>`).join("")}
           </div>
         `;
       })
@@ -1018,9 +1084,21 @@ export function createGlmTool({
   function tabulationRebaseRuleLabel(rule = {}) {
     const anchor = rule.anchor_cell || {};
     const anchorLabel = Object.entries(anchor).map(([feature, value]) => `${feature}=${value}`).join(", ");
-    const table = String(rule.table_id || "");
-    const target = String(rule.target_table_id || rule.transfer_feature || "base");
-    return `Rebased ${table} at ${anchorLabel || "selected cell"} -> ${target}`;
+    const table = String(rule.table_id || "").replaceAll("|", " × ");
+    if (rule.mode === "feature_level_to_one_way") {
+      const anchorFeature = String(rule.anchor_feature || "");
+      const anchorValue = rule.anchor_level ?? anchor[anchorFeature];
+      return `Rebased ${table}: ${anchorFeature}=${anchorValue} slice`;
+    }
+    if (rule.mode === "legacy_slice_to_one_way" || (!rule.mode && rule.transfer_feature)) {
+      return `Legacy rebase ${table} at ${anchorLabel || "selected cell"}`;
+    }
+    return `Rebased ${table} at ${anchorLabel || "selected cell"}`;
+  }
+
+  function tabulationGeneratedTableLabel(table = {}) {
+    const tableId = String(table.label || table.table_id || "");
+    return `Created ${tableId} one-way adjustment table for rebasing`;
   }
 
   function refreshTabulationDiagnostics() {
@@ -1184,9 +1262,38 @@ export function createGlmTool({
     if (!next.size) next.add(modelRef);
     selectedTabulationModelIds = next;
     tabulationSelectionAnchorModelId = modelRef;
-    if (previousKey !== tabulationSelectionKey()) resetTabulationCrosstabDefault();
+    const changed = previousKey !== tabulationSelectionKey();
+    if (changed) resetTabulationCrosstabDefault();
     closeGlmTabulationContextMenu();
-    return true;
+    return changed;
+  }
+
+  async function refreshTabulationSelectionFromCache() {
+    const seq = tabulationSelectionRefreshSeq + 1;
+    tabulationSelectionRefreshSeq = seq;
+    const modelRefs = tabulationSelectedModelIds();
+    const nextConfig = tabulationSelectionConfigFromCache(modelRefs);
+    if (!nextConfig) {
+      await refreshTabulationConfig({ force: false });
+      return;
+    }
+    tabulationConfig = nextConfig;
+    tabulationPayload = null;
+    const previousTableId = selectedTabulationTableId;
+    const tables = Array.isArray(tabulationConfig.tables) ? tabulationConfig.tables : [];
+    if (tables.length && !tables.some((table) => String(table.table_id || "") === selectedTabulationTableId)) {
+      selectedTabulationTableId = String(tables[0]?.table_id || "base");
+    }
+    if (previousTableId !== selectedTabulationTableId) resetTabulationCrosstabDefault();
+    setGlmNotice("");
+    const shellRebuilt = ensureTabulationShell();
+    if (!shellRebuilt) {
+      await renderTabulationSelectorTables();
+      if (seq !== tabulationSelectionRefreshSeq) return;
+      syncTabulationControls();
+    }
+    if (seq !== tabulationSelectionRefreshSeq) return;
+    await loadTabulationView();
   }
 
   function bindTabulationControls() {
@@ -1234,6 +1341,7 @@ export function createGlmTool({
     });
     el("glmBuildTabulationsBtn")?.addEventListener("click", buildSelectedTabulations);
     el("glmExportTabulationsBtn")?.addEventListener("click", exportSelectedTabulations);
+    el("glmTabulationCopyBtn")?.addEventListener("click", copyTabulationChartToClipboard);
   }
 
   function bindTabulationFallbackSelectors() {
@@ -1241,14 +1349,14 @@ export function createGlmTool({
       row.addEventListener("click", (event) => {
         const modelId = String(row.dataset.glmTabulationModelId || "");
         if (!modelId) return;
-        if (selectTabulationModel(modelId, event)) refreshTabulationConfig({ force: true });
+        if (selectTabulationModel(modelId, event)) refreshTabulationSelectionFromCache();
       });
       row.addEventListener("keydown", (event) => {
         if (event.key !== "Enter" && event.key !== " ") return;
         event.preventDefault();
         const modelId = String(row.dataset.glmTabulationModelId || "");
         if (!modelId) return;
-        if (selectTabulationModel(modelId, event)) refreshTabulationConfig({ force: true });
+        if (selectTabulationModel(modelId, event)) refreshTabulationSelectionFromCache();
       });
     });
     document.querySelectorAll("[data-glm-tabulation-table-id]").forEach((row) => {
@@ -1349,9 +1457,9 @@ export function createGlmTool({
       const data = row.getData() || {};
       const modelRef = String(data.model_ref || "");
       if (!modelRef) return;
-      selectTabulationModel(modelRef, event);
+      const changed = selectTabulationModel(modelRef, event);
       syncTabulationModelSelectorSelection();
-      refreshTabulationConfig({ force: true });
+      if (changed) refreshTabulationSelectionFromCache();
     });
     tabulationModelTable.on("tableBuilt", syncTabulationModelSelectorSelection);
     syncTabulationModelSelectorSelection();
@@ -1619,6 +1727,7 @@ export function createGlmTool({
   }
 
   async function refreshTabulationConfig(options = {}) {
+    tabulationSelectionRefreshSeq += 1;
     let model_ids = tabulationSelectedModelIds();
     const previousKey = tabulationSelectionKey(model_ids, selectedTabulationTableId);
     selectedTabulationModelIds = new Set(model_ids);
@@ -1795,11 +1904,11 @@ export function createGlmTool({
           model_ref: rebaseContext.model_ref,
           table_id: rebaseContext.table_id,
           anchor_cell: rebaseContext.anchor_cell,
-          transfer_feature: rebaseContext.transfer_feature || "",
+          mode: rebaseContext.mode || "cell_to_base",
+          anchor_feature: rebaseContext.anchor_feature || "",
         }),
       });
       await refreshAfterTabulationArtifactMutation();
-      await loadTabulationView();
     } catch (error) {
       setInlineTabulationNotice([error.message]);
     } finally {
@@ -1807,7 +1916,7 @@ export function createGlmTool({
     }
   }
 
-  async function resetSelectedTabulationRebase() {
+  async function resetSelectedTabulationRebase(scope = "all") {
     if (isRebasing) return;
     const modelRef = tabulationSelectedModelIds()[0] || "";
     if (!modelRef || !selectedTabulationRebaseRules().length) return;
@@ -1815,10 +1924,13 @@ export function createGlmTool({
     try {
       await api("/api/glm/tabulations/rebase/reset", {
         method: "POST",
-        body: JSON.stringify({ model_ref: modelRef }),
+        body: JSON.stringify({
+          model_ref: modelRef,
+          scope,
+          table_id: scope === "table" ? selectedTabulationTableId : "",
+        }),
       });
       await refreshAfterTabulationArtifactMutation();
-      await loadTabulationView();
     } catch (error) {
       setInlineTabulationNotice([error.message]);
     } finally {
@@ -1848,15 +1960,15 @@ export function createGlmTool({
       if (tabulationView === "plot") {
         const data = await api("/api/glm/tabulations/plot", { method: "POST", body: JSON.stringify(payload) });
         if (seq !== tabulationRenderSeq) return;
-        tabulationPayload = data;
+        tabulationPayload = { ...data, crosstab: tabulationCrosstab };
         refreshTabulationDiagnostics();
-        renderTabulationPlot(data);
+        renderTabulationPlot(tabulationPayload);
       } else {
         const data = await api("/api/glm/tabulations/table", { method: "POST", body: JSON.stringify(payload) });
         if (seq !== tabulationRenderSeq) return;
         tabulationPayload = data;
         refreshTabulationDiagnostics();
-        renderTabulationTable(data);
+        await renderTabulationTable(data, seq);
       }
     } catch (error) {
       tabulationPayload = null;
@@ -1872,29 +1984,33 @@ export function createGlmTool({
     tabulationPayload = null;
     refreshTabulationDiagnostics();
     disposeTabulationTable();
+    disposeTabulationChart();
     tabulationFallbackRows = [];
     tabulationFallbackColumns = [];
     if (grid) grid.innerHTML = "";
     if (fallback) fallback.innerHTML = `<div class="glm-empty-state">${escapeHtml(message)}</div>`;
     if (plot) plot.innerHTML = `<div class="glm-empty-state">${escapeHtml(message)}</div>`;
+    syncTabulationCopyButton();
   }
 
-  async function renderTabulationTable(data = {}) {
+  async function renderTabulationTable(data = {}, renderSeq = null) {
     const grid = el("glmTabulationTable");
     const fallback = el("glmTabulationFallback");
     if (!grid || !fallback) return;
-    disposeTabulationTable();
-    grid.innerHTML = "";
-    fallback.innerHTML = "";
-    setInlineTabulationNotice(data.notices || []);
     const rows = Array.isArray(data.rows) ? data.rows : [];
     const columns = Array.isArray(data.columns) ? data.columns : [];
+    if (renderSeq !== null && renderSeq !== tabulationRenderSeq) return;
+    setInlineTabulationNotice(data.notices || []);
     if (!rows.length || !columns.length) {
       renderTabulationEmpty("No rows for this tabulation");
       return;
     }
     try {
       const Tabulator = await loadTabulator();
+      if (renderSeq !== null && renderSeq !== tabulationRenderSeq) return;
+      disposeTabulationTable();
+      grid.innerHTML = "";
+      fallback.innerHTML = "";
       const columnMetadataByField = new Map(
         columns.map((column) => [String(column.field || ""), column]),
       );
@@ -1910,6 +2026,10 @@ export function createGlmTool({
         (event, cell) => openGlmTabulationContextMenuForTabulatorCell(event, cell, columnMetadataByField),
       );
     } catch (_) {
+      if (renderSeq !== null && renderSeq !== tabulationRenderSeq) return;
+      disposeTabulationTable();
+      grid.innerHTML = "";
+      fallback.innerHTML = "";
       renderTabulationFallbackTable(columns, rows, data);
     }
   }
@@ -1918,7 +2038,7 @@ export function createGlmTool({
     const row = cell?.getRow?.().getData?.() || {};
     const field = String(cell?.getField?.() || "");
     const column = columnMetadataByField?.get(field) || {};
-    openGlmTabulationContextMenu(event, tabulationRebaseContextForCell(row, column));
+    openGlmTabulationContextMenu(event, tabulationRebaseContextsForCell(row, column));
   }
 
   function tabulationColumnDefinition(column, data = {}) {
@@ -2006,7 +2126,7 @@ export function createGlmTool({
           const tabulationValue = Boolean(column.tabulation_value);
           const numeric = tabulationValue || tabulationSelectedModelIds().includes(column.field);
           const status = row[column.status_field || `__status__${column.field}`] || "ok";
-          const rebasable = Boolean(tabulationRebaseContextForCell(row, column));
+          const rebasable = tabulationRebaseContextsForCell(row, column).length > 0;
           const style = numeric && tabulationColor && status === "ok" ? ` style="background:${tabulationCellColor(value, data.min, data.max)}"` : "";
           return `<td data-glm-tabulation-fallback-cell="true" data-glm-tabulation-fallback-row-index="${rowIndex}" data-glm-tabulation-fallback-column-index="${columnIndex}" class="${numeric ? "numeric" : ""}${status !== "ok" ? " glm-tabulation-na-cell" : ""}${rebasable ? " glm-tabulation-rebase-cell" : ""}"${style}>${value === null || value === undefined ? "NA" : escapeHtml(tabulationValue ? formatTabulationValue(value) : (numeric ? formatModelMetric(value) : value))}</td>`;
         }).join("")}</tr>`).join("")}</tbody>
@@ -2023,7 +2143,7 @@ export function createGlmTool({
     const columnIndex = Number(target?.dataset?.glmTabulationFallbackColumnIndex);
     const row = Number.isInteger(rowIndex) ? tabulationFallbackRows[rowIndex] || {} : {};
     const column = Number.isInteger(columnIndex) ? tabulationFallbackColumns[columnIndex] || {} : {};
-    openGlmTabulationContextMenu(event, tabulationRebaseContextForCell(row, column));
+    openGlmTabulationContextMenu(event, tabulationRebaseContextsForCell(row, column));
   }
 
   function renderTabulationPlot(data = {}) {
@@ -2032,7 +2152,9 @@ export function createGlmTool({
     setInlineTabulationNotice(data.notices || []);
     disposeTabulationChart();
     if (!data.plottable || !Array.isArray(data.series) || !data.series.length) {
-      plot.innerHTML = `<div class="glm-empty-state">${escapeHtml((data.notices || [])[0] || "Plot is unavailable for this table")}</div>`;
+      plot.innerHTML = (data.notices || []).filter(Boolean).length
+        ? ""
+        : '<div class="glm-empty-state">Plot is unavailable for this table</div>';
       return;
     }
     if (!window.echarts) {
@@ -2041,14 +2163,74 @@ export function createGlmTool({
     }
     plot.innerHTML = "";
     tabulationChart = window.echarts.init(plot);
+    const theme = tabulationChartTheme();
+    const xAxisPresentation = tabulations.xAxisPresentation(
+      data,
+      tabulationChart.getWidth?.() || plot.clientWidth,
+      theme,
+    );
+    const series = data.series.map((item) => ({ ...item }));
+    const baselineMarkLine = tabulations.baselineMarkLine(data, theme);
+    if (baselineMarkLine && series.length) {
+      series[0].markLine = baselineMarkLine;
+    }
     tabulationChart.setOption({
       animation: false,
       tooltip: { trigger: "axis", valueFormatter: (value) => formatTabulationAxisTick(value, data.scale) },
       legend: { type: "scroll", top: 4, right: 8 },
-      grid: { left: 54, right: 24, top: 48, bottom: 52 },
-      xAxis: { type: "category", data: data.x_axis || [], axisLabel: { hideOverlap: true } },
+      grid: { left: 54, right: 24, top: 48, ...xAxisPresentation.grid },
+      xAxis: xAxisPresentation.xAxis,
       yAxis: tabulationYAxisOptions(data),
-      series: data.series,
+      dataZoom: xAxisPresentation.dataZoom,
+      series,
+    });
+    syncTabulationCopyButton();
+  }
+
+  function tabulationChartTheme() {
+    const style = window.getComputedStyle(document.body);
+    return {
+      panel: style.getPropertyValue("--panel").trim() || "#fff",
+      text: style.getPropertyValue("--text").trim() || "#334155",
+      line: style.getPropertyValue("--line").trim() || "#cbd5e1",
+    };
+  }
+
+  async function copyTabulationChartToClipboard() {
+    if (!tabulationChart || !navigator.clipboard?.write || typeof window.ClipboardItem !== "function") {
+      showClipboardToast("Could not copy tabulation chart image", true);
+      return;
+    }
+    try {
+      const dataUrl = tabulationChart.getDataURL({
+        type: "png",
+        pixelRatio: 2,
+        backgroundColor: tabulationChartTheme().panel,
+      });
+      const blob = await fetch(dataUrl).then((response) => response.blob());
+      await navigator.clipboard.write([new window.ClipboardItem({ "image/png": blob })]);
+      showClipboardToast("Tabulation chart image copied");
+    } catch (_) {
+      showClipboardToast("Could not copy tabulation chart image", true);
+    }
+  }
+
+  function syncTabulationCopyButton() {
+    const button = el("glmTabulationCopyBtn");
+    if (button) button.disabled = !tabulationChart;
+  }
+
+  function refreshTabulationChartXAxis() {
+    const plot = el("glmTabulationPlot");
+    if (!tabulationChart || !tabulationPayload || !plot) return;
+    const presentation = tabulations.xAxisPresentation(
+      tabulationPayload,
+      tabulationChart.getWidth?.() || plot.clientWidth,
+      tabulationChartTheme(),
+    );
+    tabulationChart.setOption({
+      grid: presentation.grid,
+      xAxis: presentation.xAxis,
     });
   }
 
@@ -2059,6 +2241,7 @@ export function createGlmTool({
     } catch (_) {
     }
     tabulationChart = null;
+    syncTabulationCopyButton();
   }
 
   function scheduleTabulationResize() {
@@ -2066,6 +2249,7 @@ export function createGlmTool({
     tabulationResizeFrame = window.requestAnimationFrame(() => {
       tabulationResizeFrame = null;
       tabulationChart?.resize?.();
+      refreshTabulationChartXAxis();
       safeTabulatorRedraw(tabulationModelTable);
       safeTabulatorRedraw(tabulationCommonTable);
       safeTabulatorRedraw(tabulationOtherTable);

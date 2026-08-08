@@ -15545,6 +15545,100 @@ COPY (
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_glm_tabulation_model_switch_reuses_cached_config(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "sample.csv"
+            data_path.write_text(
+                "actualNumerator,denominator,Age,Segment\n"
+                "10,1,30,A\n"
+                "20,1,40,B\n"
+                "30,1,50,A\n",
+                encoding="utf-8",
+            )
+            store = GlmModelStore(data_path)
+            self.write_glm_prediction_model(store, "fast-a", "Fast A", "2026-08-08T12:00:00Z", [10.0, 20.0, 30.0])
+            self.write_glm_prediction_model(store, "fast-b", "Fast B", "2026-08-08T11:00:00Z", [11.0, 21.0, 31.0])
+            self.write_glm_tabulation_artifacts(store, "fast-a", include_segment=True, offset=0.1)
+            self.write_glm_tabulation_artifacts(store, "fast-b", include_segment=False, offset=0.2)
+            store.activate_model("fast-a")
+            base_url, server, thread = self.start_app(
+                data_path,
+                tools=["line_bar", "glm"],
+                defaults={"x": "Age", "actual": "actualNumerator", "denominator": "denominator"},
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    config_requests: list[dict[str, Any]] = []
+                    table_requests: list[dict[str, Any]] = []
+
+                    def capture_request(request: Any) -> None:
+                        payload = json.loads(request.post_data or "{}")
+                        if request.url.endswith("/api/glm/tabulations/config"):
+                            config_requests.append(payload)
+                        elif request.url.endswith("/api/glm/tabulations/table"):
+                            table_requests.append(payload)
+
+                    page.on("request", capture_request)
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    page.locator("#glmTool").click()
+                    page.get_by_role("tab", name="Tabulations").click()
+                    page.wait_for_function(
+                        """
+                        () => document.querySelector("#glmTabulationModelGrid .tabulator-row.tabulator-selected")
+                          ?.textContent.includes("Fast A")
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator("#glmTabulationTableGrid .tabulator-row", has_text="Age").click()
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const headers = [...document.querySelectorAll("#glmTabulationTable .tabulator-col-title")]
+                            .map((node) => node.textContent.trim());
+                          return headers.includes("Age") && headers.some((text) => text.includes("Fast A"));
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    page.evaluate("() => { window.__lucidumTabulationModelGrid = document.querySelector('#glmTabulationModelGrid'); }")
+                    config_count = len(config_requests)
+                    table_count = len(table_requests)
+
+                    page.locator("#glmTabulationModelGrid .tabulator-row", has_text="Fast B").click()
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const headers = [...document.querySelectorAll("#glmTabulationTable .tabulator-col-title")]
+                            .map((node) => node.textContent.trim());
+                          return headers.includes("Age") && headers.some((text) => text.includes("Fast B"));
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    self.assertEqual(len(config_requests), config_count)
+                    self.assertEqual(len(table_requests), table_count + 1)
+                    self.assertTrue(
+                        page.evaluate(
+                            "() => window.__lucidumTabulationModelGrid === document.querySelector('#glmTabulationModelGrid')"
+                        )
+                    )
+                    self.assertEqual(page.locator("#glmTabulationTableGrid .tabulator-row").count(), 2)
+
+                    settled_table_count = len(table_requests)
+                    page.locator("#glmTabulationModelGrid .tabulator-row", has_text="Fast B").click()
+                    page.wait_for_timeout(150)
+                    self.assertEqual(len(config_requests), config_count)
+                    self.assertEqual(len(table_requests), settled_table_count)
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     @unittest.skipUnless(importlib.util.find_spec("glum") is not None, "glum is not installed")
     def test_glm_tabulation_rebase_smoke(self) -> None:
         with TemporaryDirectory() as tmp_dir:
@@ -19401,6 +19495,36 @@ COPY (
                     page.locator("#glmTabulationContextMenu:not([hidden])").wait_for(timeout=10_000)
                     page.get_by_role("menuitem", name=name).click()
 
+                page.add_init_script(
+                    """
+                    window.__lucidumCopiedTabulationImage = null;
+                    if (typeof window.ClipboardItem !== "function") {
+                      window.ClipboardItem = class ClipboardItem {
+                        constructor(items) {
+                          this.items = items;
+                          this.types = Object.keys(items);
+                        }
+                        getType(type) {
+                          return Promise.resolve(this.items[type]);
+                        }
+                      };
+                    }
+                    Object.defineProperty(navigator, "clipboard", {
+                      configurable: true,
+                      value: {
+                        write: async (items) => {
+                          const item = items?.[0];
+                          const blob = item ? await item.getType("image/png") : null;
+                          window.__lucidumCopiedTabulationImage = {
+                            types: item ? Array.from(item.types || []) : [],
+                            type: blob?.type || "",
+                            size: blob?.size || 0,
+                          };
+                        },
+                      },
+                    });
+                    """
+                )
                 page.goto(base_url, wait_until="domcontentloaded")
                 page.locator("#lineBarTool.active").wait_for(timeout=10_000)
                 page.wait_for_function(
@@ -19500,6 +19624,82 @@ COPY (
                     """,
                     timeout=10_000,
                 )
+                interaction_plot_state = page.evaluate(
+                    """
+                    () => {
+                      const target = document.querySelector("#glmTabulationPlot");
+                      const chart = window.echarts.getInstanceByDom(target);
+                      const option = chart?.getOption?.() || {};
+                      const xAxis = option.xAxis?.[0] || {};
+                      const copy = document.querySelector("#glmTabulationCopyBtn");
+                      const copyRect = copy.getBoundingClientRect();
+                      const shellRect = copy.closest(".glm-tabulation-view-shell").getBoundingClientRect();
+                      const copyStyle = getComputedStyle(copy);
+                      return {
+                        xAxisName: xAxis.name,
+                        xAxisInterval: xAxis.axisLabel?.interval,
+                        xAxisLineWidth: xAxis.axisLine?.lineStyle?.width,
+                        xAxisOnZero: xAxis.axisLine?.onZero,
+                        copyDisabled: copy.disabled,
+                        copyLabel: copy.getAttribute("aria-label"),
+                        copyTitle: copy.getAttribute("title"),
+                        copyBorder: copyStyle.borderTopWidth,
+                        copyBackground: copyStyle.backgroundColor,
+                        copySize: [copyRect.width, copyRect.height],
+                        copyIconSize: (() => {
+                          const rect = copy.querySelector("svg").getBoundingClientRect();
+                          return [rect.width, rect.height];
+                        })(),
+                        copyOffset: [copyRect.left - shellRect.left, copyRect.top - shellRect.top],
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(interaction_plot_state["xAxisName"], "Age")
+                self.assertEqual(interaction_plot_state["xAxisInterval"], 0)
+                self.assertEqual(interaction_plot_state["xAxisLineWidth"], 2)
+                self.assertTrue(interaction_plot_state["xAxisOnZero"])
+                self.assertFalse(interaction_plot_state["copyDisabled"])
+                self.assertEqual(interaction_plot_state["copyLabel"], "Copy tabulation chart")
+                self.assertEqual(interaction_plot_state["copyTitle"], "Copy tabulation chart")
+                self.assertEqual(interaction_plot_state["copyBorder"], "0px")
+                self.assertEqual(interaction_plot_state["copyBackground"], "rgba(0, 0, 0, 0)")
+                self.assertEqual(interaction_plot_state["copySize"], [28, 28])
+                self.assertEqual(interaction_plot_state["copyIconSize"], [16, 16])
+                self.assertEqual(interaction_plot_state["copyOffset"], [8, 4])
+                page.locator("#glmTabulationCopyBtn").click()
+                page.wait_for_function(
+                    """
+                    () => window.__lucidumCopiedTabulationImage
+                      && window.__lucidumCopiedTabulationImage.types.includes("image/png")
+                      && window.__lucidumCopiedTabulationImage.type === "image/png"
+                      && window.__lucidumCopiedTabulationImage.size > 0
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#glmTabulationCrosstab").select_option("")
+                page.locator("#glmTabulationNotice", has_text="Choose a feature crosstab").wait_for(timeout=10_000)
+                no_crosstab_state = page.evaluate(
+                    """
+                    () => {
+                      const main = document.querySelector(".glm-tabulation-main");
+                      const notice = document.querySelector("#glmTabulationNotice")?.textContent.trim() || "";
+                      const mainText = main?.innerText || "";
+                      return {
+                        notice,
+                        occurrences: notice ? mainText.split(notice).length - 1 : 0,
+                        plotText: document.querySelector("#glmTabulationPlot")?.textContent.trim() || "",
+                        copyDisabled: document.querySelector("#glmTabulationCopyBtn")?.disabled,
+                      };
+                    }
+                    """
+                )
+                self.assertTrue(no_crosstab_state["notice"].startswith("Choose a feature crosstab"))
+                self.assertEqual(no_crosstab_state["occurrences"], 1)
+                self.assertEqual(no_crosstab_state["plotText"], "")
+                self.assertTrue(no_crosstab_state["copyDisabled"])
+                page.locator("#glmTabulationCrosstab").select_option("Segment")
+                page.locator("#glmTabulationPlot canvas").first.wait_for(timeout=10_000)
                 page.locator('[data-glm-tabulation-view="table"]').click()
                 page.locator("#glmTabulationTable .tabulator-row").first.wait_for(timeout=10_000)
                 page.locator('[data-glm-tabulation-scale="exp"]').click()
@@ -19535,6 +19735,14 @@ COPY (
                 )
                 page.wait_for_timeout(150)
                 self.assertEqual(page.locator("#glmTabulationContextMenu:not([hidden])").count(), 0)
+                diagnostics_before_rebase = page.evaluate(
+                    """
+                    () => ({
+                      meanError: document.querySelector('#glmTabulationModelGrid .tabulator-cell[tabulator-field="mean_error"]')?.textContent.trim() || "",
+                      linearSdError: document.querySelector('#glmTabulationModelGrid .tabulator-cell[tabulator-field="linear_sd_error"]')?.textContent.trim() || "",
+                    })
+                    """
+                )
                 before = page.evaluate(
                     """
                     () => {
@@ -19566,22 +19774,42 @@ COPY (
                     """,
                     before,
                 )
-                click_tabulation_menu_item("Rebase Segment=B slice to this cell; offset Segment table")
+                menu_items = page.locator("#glmTabulationContextMenu:not([hidden]) [role=menuitem]").all_text_contents()
+                self.assertEqual(
+                    menu_items,
+                    [
+                        "Rebase to this cell; adjust base",
+                        f"Set Age={before['age']} slice to 1.0000; adjust Segment table",
+                        "Set Segment=B slice to 1.0000; adjust Age table",
+                    ],
+                )
+                click_tabulation_menu_item(f"Set Age={before['age']} slice to 1.0000; adjust Segment table")
                 page.wait_for_function(
                     """
                     ({ age }) => {
-                      const headers = [...document.querySelectorAll("#glmTabulationTable .tabulator-col")];
-                      const bField = headers.find((header) => header.textContent.trim() === "B")?.getAttribute("tabulator-field");
                       const row = [...document.querySelectorAll("#glmTabulationTable .tabulator-row")]
                         .find((candidate) => candidate.querySelector('.tabulator-cell[tabulator-field="Age"]')?.textContent.trim() === age);
-                      const text = row?.querySelector(`.tabulator-cell[tabulator-field="${bField}"]`)?.textContent.trim() || "";
-                      return text === "1.0000"
+                      const values = [...(row?.querySelectorAll(".tabulator-cell.glm-tabulation-rebase-cell") || [])]
+                        .map((cell) => cell.textContent.trim());
+                      return values.length > 0 && values.every((value) => value === "1.0000")
                         && document.querySelector("#glmTabulationDiagnostics")?.textContent.includes("Rebased");
                     }
                     """,
                     arg={"age": before["age"]},
                     timeout=15_000,
                 )
+                diagnostics_after_rebase = page.evaluate(
+                    """
+                    () => ({
+                      meanError: document.querySelector('#glmTabulationModelGrid .tabulator-cell[tabulator-field="mean_error"]')?.textContent.trim() || "",
+                      linearSdError: document.querySelector('#glmTabulationModelGrid .tabulator-cell[tabulator-field="linear_sd_error"]')?.textContent.trim() || "",
+                      hasRecalculate: Boolean(document.querySelector("#glmRecalculateTabulationsBtn")),
+                    })
+                    """
+                )
+                self.assertEqual(diagnostics_after_rebase["meanError"], diagnostics_before_rebase["meanError"])
+                self.assertEqual(diagnostics_after_rebase["linearSdError"], diagnostics_before_rebase["linearSdError"])
+                self.assertFalse(diagnostics_after_rebase["hasRecalculate"])
                 right_click_tabulation_cell(
                     """
                     ({ age, bField }) => {
@@ -19593,7 +19821,27 @@ COPY (
                     """,
                     before,
                 )
-                click_tabulation_menu_item("Reset rebase")
+                clear_menu_items = page.locator("#glmTabulationContextMenu:not([hidden]) [role=menuitem]").all_text_contents()
+                self.assertIn("Clear rebasing involving this table", clear_menu_items)
+                self.assertIn("Clear all rebasing", clear_menu_items)
+                clear_menu_style = page.evaluate(
+                    """
+                    () => {
+                      const menu = document.querySelector("#glmTabulationContextMenu:not([hidden])");
+                      const danger = [...(menu?.querySelectorAll("[role=menuitem]") || [])]
+                        .find((item) => item.textContent.trim() === "Clear all rebasing");
+                      return {
+                        dividerCount: menu?.querySelectorAll('[role="separator"].glm-tabulation-context-menu-divider').length || 0,
+                        dangerClass: danger?.classList.contains("glm-tabulation-context-menu-item--danger") || false,
+                        dangerColor: danger ? getComputedStyle(danger).color : "",
+                      };
+                    }
+                    """
+                )
+                self.assertEqual(clear_menu_style["dividerCount"], 2)
+                self.assertTrue(clear_menu_style["dangerClass"])
+                self.assertTrue(clear_menu_style["dangerColor"].startswith("rgb"))
+                click_tabulation_menu_item("Clear rebasing involving this table")
                 page.wait_for_function(
                     """
                     ({ age, text }) => {
@@ -19610,6 +19858,95 @@ COPY (
                     arg=before,
                     timeout=15_000,
                 )
+                right_click_tabulation_cell(
+                    """
+                    ({ age, bField }) => {
+                      const row = [...document.querySelectorAll("#glmTabulationTable .tabulator-row")]
+                        .find((candidate) => candidate.querySelector('.tabulator-cell[tabulator-field="Age"]')?.textContent.trim() === age);
+                      return row?.querySelector(`.tabulator-cell[tabulator-field="${bField}"]`) || null;
+                    }
+                    """,
+                    before,
+                )
+                click_tabulation_menu_item("Set Segment=B slice to 1.0000; adjust Age table")
+                page.wait_for_function(
+                    """
+                    ({ bField }) => {
+                      const cells = [...document.querySelectorAll(`#glmTabulationTable .tabulator-cell[tabulator-field="${bField}"].glm-tabulation-rebase-cell`)];
+                      return cells.length > 0 && cells.every((cell) => cell.textContent.trim() === "1.0000")
+                        && document.querySelector("#glmTabulationDiagnostics")?.textContent.includes("Segment=B slice");
+                    }
+                    """,
+                    arg={"bField": before["bField"]},
+                    timeout=15_000,
+                )
+                right_click_tabulation_cell(
+                    """
+                    ({ age, bField }) => {
+                      const row = [...document.querySelectorAll("#glmTabulationTable .tabulator-row")]
+                        .find((candidate) => candidate.querySelector('.tabulator-cell[tabulator-field="Age"]')?.textContent.trim() === age);
+                      return row?.querySelector(`.tabulator-cell[tabulator-field="${bField}"]`) || null;
+                    }
+                    """,
+                    before,
+                )
+                click_tabulation_menu_item("Clear rebasing involving this table")
+                page.wait_for_function(
+                    """
+                    ({ age, text, bField }) => {
+                      const row = [...document.querySelectorAll("#glmTabulationTable .tabulator-row")]
+                        .find((candidate) => candidate.querySelector('.tabulator-cell[tabulator-field="Age"]')?.textContent.trim() === age);
+                      return row?.querySelector(`.tabulator-cell[tabulator-field="${bField}"]`)?.textContent.trim() === text
+                        && !document.querySelector("#glmTabulationDiagnostics")?.textContent.includes("Rebased");
+                    }
+                    """,
+                    arg=before,
+                    timeout=15_000,
+                )
+                page.locator('[data-glm-tabulation-scale="exp"]').click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector('[data-glm-tabulation-scale="exp"]')?.getAttribute("aria-pressed") === "false"
+                    """,
+                    timeout=10_000,
+                )
+                right_click_tabulation_cell(
+                    """
+                    ({ age, bField }) => {
+                      const row = [...document.querySelectorAll("#glmTabulationTable .tabulator-row")]
+                        .find((candidate) => candidate.querySelector('.tabulator-cell[tabulator-field="Age"]')?.textContent.trim() === age);
+                      return row?.querySelector(`.tabulator-cell[tabulator-field="${bField}"]`) || null;
+                    }
+                    """,
+                    before,
+                )
+                linear_menu_items = page.locator("#glmTabulationContextMenu:not([hidden]) [role=menuitem]").all_text_contents()
+                self.assertIn(f"Set Age={before['age']} slice to 0; adjust Segment table", linear_menu_items)
+                page.keyboard.press("Escape")
+                page.locator('[data-glm-tabulation-scale="exp"]').click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector('[data-glm-tabulation-scale="exp"]')?.getAttribute("aria-pressed") === "true"
+                    """,
+                    timeout=10_000,
+                )
+                page.locator("#glmTabulationCrosstab").select_option("Age")
+                page.wait_for_function(
+                    """
+                    () => document.querySelector("#glmTabulationCrosstab")?.value === "Age"
+                      && document.querySelector("#glmTabulationTable .tabulator-cell.glm-tabulation-rebase-cell")
+                    """,
+                    timeout=10_000,
+                )
+                right_click_tabulation_cell(
+                    '() => document.querySelector("#glmTabulationTable .tabulator-cell.glm-tabulation-rebase-cell")'
+                )
+                swapped_menu_items = page.locator("#glmTabulationContextMenu:not([hidden]) [role=menuitem]").all_text_contents()
+                self.assertTrue(swapped_menu_items[1].startswith("Set Age="))
+                self.assertTrue(swapped_menu_items[1].endswith("slice to 1.0000; adjust Segment table"))
+                self.assertTrue(swapped_menu_items[2].startswith("Set Segment="))
+                self.assertTrue(swapped_menu_items[2].endswith("slice to 1.0000; adjust Age table"))
+                page.keyboard.press("Escape")
                 selected_segment = page.evaluate(
                     """
                     () => {
@@ -19631,6 +19968,7 @@ COPY (
                       const headers = [...document.querySelectorAll("#glmTabulationTable .tabulator-col")];
                       return document.querySelector("#glmTabulationCrosstab")?.value === ""
                         && headers.some((header) => header.textContent.trim() === "Segment")
+                        && headers.some((header) => header.textContent.includes("Browser rebase GLM"))
                         && document.querySelectorAll("#glmTabulationTable .tabulator-row").length > 0;
                     }
                     """,
@@ -19674,7 +20012,7 @@ COPY (
                     """,
                     one_way_before,
                 )
-                click_tabulation_menu_item("Rebase whole table to this cell; offset base")
+                click_tabulation_menu_item("Rebase to this cell; adjust base")
                 page.wait_for_function(
                     """
                     () => {
@@ -19690,10 +20028,10 @@ COPY (
                 right_click_tabulation_cell(
                     '() => document.querySelector("#glmTabulationTable .tabulator-cell.glm-tabulation-rebase-cell")'
                 )
-                click_tabulation_menu_item("Reset rebase")
+                click_tabulation_menu_item("Clear all rebasing")
                 page.wait_for_function(
                     """
-                    ({ text, segment }) => {
+                    ({ segment, text }) => {
                       const row = [...document.querySelectorAll("#glmTabulationTable .tabulator-row")]
                         .find((candidate) => candidate.querySelector('.tabulator-cell[tabulator-field="Segment"]')?.textContent.trim() === segment);
                       const current = row?.querySelector(".tabulator-cell.glm-tabulation-rebase-cell")?.textContent.trim() || "";
@@ -19704,6 +20042,17 @@ COPY (
                     arg=one_way_before,
                     timeout=15_000,
                 )
+                one_way_after_clear = page.evaluate(
+                    """
+                    ({ segment }) => {
+                      const row = [...document.querySelectorAll("#glmTabulationTable .tabulator-row")]
+                        .find((candidate) => candidate.querySelector('.tabulator-cell[tabulator-field="Segment"]')?.textContent.trim() === segment);
+                      return row?.querySelector(".tabulator-cell.glm-tabulation-rebase-cell")?.textContent.trim() || "";
+                    }
+                    """,
+                    one_way_before,
+                )
+                self.assertEqual(one_way_after_clear, one_way_before["text"])
                 self.assertFalse(page_errors)
                 invalid_column_warnings = [
                     warning
@@ -20127,6 +20476,7 @@ COPY (
             profile_requests = 0
             profile_detail_requests = 0
             chart_requests = 0
+            tabulation_plot_requests = 0
 
             page.on("pageerror", lambda error: page_errors.append(str(error)))
             page.on(
@@ -20135,7 +20485,7 @@ COPY (
             )
 
             def count_request(request: object) -> None:
-                nonlocal profile_requests, profile_detail_requests, chart_requests
+                nonlocal profile_requests, profile_detail_requests, chart_requests, tabulation_plot_requests
                 url = request.url
                 if url.endswith("/api/column-profile/summary"):
                     profile_requests += 1
@@ -20143,6 +20493,8 @@ COPY (
                     profile_detail_requests += 1
                 elif url.endswith("/api/chart"):
                     chart_requests += 1
+                elif url.endswith("/api/glm/tabulations/plot"):
+                    tabulation_plot_requests += 1
 
             page.on("request", count_request)
 
@@ -22994,9 +23346,20 @@ COPY (
                         ),
                         resizerTopGap: resizerRect.top - layoutRect.top,
                         resizerBottomGap: layoutRect.bottom - resizerRect.bottom,
+                        resizerHitWidth: resizerRect.width,
                         resizerRuleTop: resizerRule.top,
                         resizerRuleBottom: resizerRule.bottom,
                         resizerRuleWidth: resizerRule.width,
+                        dividerTrackWidth: mainRect.left - sidebarRect.right,
+                        sidebarRuleDelta: Math.abs(
+                          sidebarRect.right - (resizerRect.left + parseFloat(resizerRule.left || "0"))
+                        ),
+                        mainRuleDelta: Math.abs(
+                          mainRect.left - (resizerRect.left + parseFloat(resizerRule.left || "0"))
+                        ),
+                        rightDividerRuleDelta: Math.abs(
+                          rightControlsRect.left - (resizerRect.left + parseFloat(resizerRule.left || "0"))
+                        ),
                         modelGridLeftGap: modelGridRect.left - sidebarRect.left,
                         modelGridRightGap: sidebarRect.right - modelGridRect.right,
                         tableGridLeftGap: tableGridRect.left - sidebarRect.left,
@@ -23076,9 +23439,14 @@ COPY (
                 self.assertLessEqual(tabulation_geometry["crosstabCenterDelta"], 0.1)
                 self.assertAlmostEqual(tabulation_geometry["resizerTopGap"], 0, delta=0.5)
                 self.assertAlmostEqual(tabulation_geometry["resizerBottomGap"], 0, delta=0.5)
+                self.assertEqual(tabulation_geometry["resizerHitWidth"], 12)
                 self.assertEqual(tabulation_geometry["resizerRuleTop"], "0px")
                 self.assertEqual(tabulation_geometry["resizerRuleBottom"], "0px")
                 self.assertEqual(tabulation_geometry["resizerRuleWidth"], "1px")
+                self.assertEqual(tabulation_geometry["dividerTrackWidth"], 1)
+                self.assertLessEqual(tabulation_geometry["sidebarRuleDelta"], 0.5)
+                self.assertLessEqual(tabulation_geometry["mainRuleDelta"], 0.5)
+                self.assertLessEqual(tabulation_geometry["rightDividerRuleDelta"], 0.5)
                 for key in (
                     "modelGridLeftGap", "modelGridRightGap", "tableGridLeftGap", "tableGridRightGap",
                     "tableGridBottomGap", "resultGridLeftGap", "resultGridRightGap", "resultGridBottomGap",
@@ -23276,6 +23644,8 @@ COPY (
                 self.assertTrue(tabulation_single_state["diagnosticsHidden"])
                 self.assertLess(tabulation_single_state["splitDelta"], 36)
                 self.assertIn("Age", tabulation_single_state["resultHeaders"])
+                self.assertIn("Browser smoke GLM", tabulation_single_state["resultHeaders"])
+                self.assertNotIn("GLM · Browser smoke GLM", tabulation_single_state["resultHeaders"])
 
                 tabulation_light_colour = page.evaluate(
                     """
@@ -23453,6 +23823,8 @@ COPY (
                     () => {
                       const table = document.querySelector('[data-glm-tabulation-view="table"]');
                       const plot = document.querySelector('[data-glm-tabulation-view="plot"]');
+                      const chart = window.echarts.getInstanceByDom(document.querySelector("#glmTabulationPlot"));
+                      const firstSeries = chart?.getOption?.()?.series?.[0] || {};
                       return {
                         tablePressed: table?.getAttribute('aria-pressed'),
                         plotPressed: plot?.getAttribute('aria-pressed'),
@@ -23462,6 +23834,10 @@ COPY (
                         plotWeight: getComputedStyle(plot).fontWeight,
                         tableWidth: table?.getBoundingClientRect().width,
                         plotWidth: plot?.getBoundingClientRect().width,
+                        xAxisName: chart?.getOption?.()?.xAxis?.[0]?.name,
+                        seriesNames: chart?.getOption?.()?.series?.map((series) => series.name) || [],
+                        expBaselineValue: firstSeries.markLine?.data?.[0]?.yAxis,
+                        expBaselineWidth: firstSeries.markLine?.lineStyle?.width,
                         storage: localStorage.getItem('py_lucidum_glm_tabulation_view'),
                       };
                     }
@@ -23474,6 +23850,10 @@ COPY (
                 self.assertEqual(tabulation_plot_state["plotWeight"], "700")
                 self.assertAlmostEqual(tabulation_plot_state["tableWidth"], tabulation_inactive_controls["widths"]["table"], delta=0.1)
                 self.assertAlmostEqual(tabulation_plot_state["plotWidth"], tabulation_inactive_controls["widths"]["plot"], delta=0.1)
+                self.assertEqual(tabulation_plot_state["xAxisName"], "Age")
+                self.assertEqual(tabulation_plot_state["seriesNames"], ["Browser smoke GLM"])
+                self.assertEqual(tabulation_plot_state["expBaselineValue"], 1)
+                self.assertEqual(tabulation_plot_state["expBaselineWidth"], 2)
                 self.assertEqual(tabulation_plot_state["storage"], "plot")
                 initial_plot_width = page.evaluate(
                     """
@@ -23481,6 +23861,7 @@ COPY (
                     """
                 )
                 self.assertGreater(initial_plot_width, 0)
+                plot_requests_before_resize = tabulation_plot_requests
                 page.locator("#sidebarToggleBtn").click()
                 page.wait_for_function(
                     """
@@ -23510,6 +23891,7 @@ COPY (
                     arg=collapsed_plot_width,
                     timeout=10_000,
                 )
+                self.assertEqual(tabulation_plot_requests, plot_requests_before_resize)
                 page.locator('[data-glm-tabulation-view="table"]').click()
                 page.locator("#glmTabulationTable .tabulator-row").first.wait_for(timeout=10_000)
                 self.assertEqual(page.locator('[data-glm-tabulation-view="table"]').get_attribute("aria-pressed"), "true")
