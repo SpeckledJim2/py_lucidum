@@ -19085,12 +19085,24 @@ COPY (
 
                     page.locator("#gbmTool").click()
                     page.get_by_role("tab", name="Model navigator").click()
-                    gbm_row = page.locator("#gbmModelGrid .tabulator-row", has_text="GBM 1")
-                    gbm_row.wait_for(timeout=10_000)
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const tables = window.Tabulator?.findTable?.("#gbmModelGrid") || [];
+                          const tabulatorRow = tables
+                            .filter((table) => table?.element?.isConnected)
+                            .flatMap((table) => table.getRows?.() || [])
+                            .some((row) => row.getData()?.model_id === "gbm-one");
+                          return tabulatorRow
+                            || Boolean(document.querySelector('[data-gbm-model-row="gbm-one"]'));
+                        }
+                        """,
+                        timeout=10_000,
+                    )
                     gbm_button = page.locator("#gbmOpenModelFolderBtn")
                     self.assertTrue(gbm_button.is_disabled())
                     page.wait_for_timeout(250)
-                    gbm_row.locator('.tabulator-cell[tabulator-field="model_label"]').click()
+                    self.select_gbm_navigator_model(page, "gbm-one", "GBM 1")
                     page.wait_for_function("() => !document.querySelector('#gbmOpenModelFolderBtn')?.disabled")
                     with page.expect_response(
                         lambda response: response.url.endswith("/api/gbm/models/gbm-one/open-folder"),
@@ -19099,7 +19111,11 @@ COPY (
                         gbm_button.click()
                     self.assertEqual(gbm_open_response.value.status, 200)
                     self.assertEqual(opened[-1], gbm_store.model_dir("gbm-one").resolve())
-                    self.assertEqual(page.locator("#gbmModelGrid .tabulator-row.tabulator-selected").count(), 1)
+                    gbm_selected_rows = page.locator(
+                        "#gbmModelGrid .tabulator-row.tabulator-selected, "
+                        '#gbmModelGrid [data-gbm-model-row][aria-selected="true"]'
+                    )
+                    self.assertEqual(gbm_selected_rows.count(), 1)
 
                     fail_open["enabled"] = True
                     with page.expect_response(
@@ -19110,7 +19126,7 @@ COPY (
                     self.assertEqual(failed_open_response.value.status, 503)
                     page.locator("#gbmNotice", has_text="Browser smoke folder failure").wait_for(timeout=10_000)
                     page.wait_for_function("() => !document.querySelector('#gbmOpenModelFolderBtn')?.disabled")
-                    self.assertEqual(page.locator("#gbmModelGrid .tabulator-row.tabulator-selected").count(), 1)
+                    self.assertEqual(gbm_selected_rows.count(), 1)
                     self.assertEqual(page_errors, [])
                     browser.close()
             finally:
