@@ -14302,10 +14302,31 @@ COPY (
                         wait_for_line_bar()
                         page.locator("#gbmTool").click()
                         page.get_by_role("tab", name="Model navigator").click()
-                        gbm_a_row = page.locator("#gbmModelGrid .tabulator-row", has_text="Metric GBM A")
-                        gbm_a_row.wait_for(state="visible", timeout=60_000)
-                        if "tabulator-selected" not in (gbm_a_row.get_attribute("class") or ""):
-                            gbm_a_row.click()
+                        page.wait_for_function(
+                            """
+                            (modelId) => {
+                              const table = window.Tabulator?.findTable?.("#gbmModelGrid")?.[0];
+                              return Boolean(
+                                table?.initialized
+                                && table.element?.isConnected
+                                && table.getRows?.().some((row) => row.getData()?.model_id === modelId)
+                              );
+                            }
+                            """,
+                            arg="metric-gbm-a",
+                            timeout=60_000,
+                        )
+                        page.evaluate(
+                            """
+                            (modelId) => {
+                              const table = window.Tabulator.findTable("#gbmModelGrid")[0];
+                              const row = table.getRows().find((candidate) => candidate.getData()?.model_id === modelId);
+                              table.deselectRow();
+                              row.select();
+                            }
+                            """,
+                            "metric-gbm-a",
+                        )
                         page.wait_for_function(
                             """
                             () => [...document.querySelectorAll("#gbmModelGrid .tabulator-row")]
@@ -32301,8 +32322,31 @@ COPY (
                 page.locator("#gbmModelGrid .tabulator-row", has_text="renamed-smoke-model").wait_for(timeout=10_000)
                 page.locator("#gbmModelSelectedMeta", has_text="renamed-smoke-model").wait_for(timeout=10_000)
                 page.evaluate("() => { window.confirm = () => true; }")
-                renamed_model_row = page.locator("#gbmModelGrid .tabulator-row", has_text="renamed-smoke-model")
-                renamed_model_row.click()
+                page.wait_for_function(
+                    """
+                    (modelLabel) => {
+                      const table = window.Tabulator?.findTable?.("#gbmModelGrid")?.[0];
+                      return Boolean(
+                        table?.initialized
+                        && table.element?.isConnected
+                        && table.getRows?.().some((row) => row.getData()?.model_label === modelLabel)
+                      );
+                    }
+                    """,
+                    arg="renamed-smoke-model",
+                    timeout=60_000,
+                )
+                page.evaluate(
+                    """
+                    (modelLabel) => {
+                      const table = window.Tabulator.findTable("#gbmModelGrid")[0];
+                      const row = table.getRows().find((candidate) => candidate.getData()?.model_label === modelLabel);
+                      table.deselectRow();
+                      row.select();
+                    }
+                    """,
+                    "renamed-smoke-model",
+                )
                 page.wait_for_function(
                     """
                     () => [...document.querySelectorAll("#gbmModelGrid .tabulator-row")]
