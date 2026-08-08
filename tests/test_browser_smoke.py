@@ -12260,13 +12260,25 @@ COPY (
                     with page.expect_response(lambda response: response.url.endswith("/api/line-bar/table") and response.status == 200, timeout=10_000):
                         page.locator('.segmented[data-control="sort"] button[data-value="volume"]').click()
                     self.assertEqual(chart_requests, chart_requests_before_sort)
-                    page.locator("#lineBarTableGrid .tabulator-tableholder").wait_for(timeout=10_000)
-                    page.evaluate(
+                    page.wait_for_function(
                         """
                         () => {
-                          const holder = document.querySelector("#lineBarTableGrid .tabulator-tableholder");
-                          holder.scrollTop = holder.scrollHeight;
-                          holder.dispatchEvent(new Event("scroll"));
+                          const table = (window.Tabulator?.findTable?.("#lineBarTableGrid") || [])
+                            .find((candidate) => candidate?.element?.isConnected);
+                          const rows = table?.getRows?.() || [];
+                          return rows.length === 10_000
+                            && rows.some((row) => row.getData()?.x === "G09999");
+                        }
+                        """,
+                        timeout=20_000,
+                    )
+                    page.evaluate(
+                        """
+                        async () => {
+                          const table = (window.Tabulator.findTable("#lineBarTableGrid") || [])
+                            .find((candidate) => candidate?.element?.isConnected);
+                          const row = table.getRows().find((candidate) => candidate.getData()?.x === "G09999");
+                          await table.scrollToRow(row, "bottom", true);
                         }
                         """
                     )
