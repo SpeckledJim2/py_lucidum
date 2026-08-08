@@ -26,6 +26,7 @@ from py_lucidum.app.telemetry import TelemetryStore
 from py_lucidum.core import Dataset, sql_literal
 from py_lucidum.core.features import load_features
 from py_lucidum.tools.glm import tabulation as glm_tabulation
+from py_lucidum.tools.glm import worker_progress
 from py_lucidum.tools.glm.jobs import GlmJobManager
 from py_lucidum.tools.glm.store import GlmModelStore, GlmSourceProvider
 from py_lucidum.tools.glm.tabulation import build_tabulations, export_tabulations, tabulation_config, tabulation_plot, tabulation_table
@@ -2545,6 +2546,26 @@ USING (__lucidum_row_id)
 
         worker.assert_called_once()
         self.assertEqual(result, worker_result)
+
+    def test_glm_worker_progress_retries_transient_replace_lock(self) -> None:
+        progress_path = self.root / "progress.json"
+        real_replace = Path.replace
+        replace_attempts = 0
+
+        def replace_after_transient_lock(path: Path, target: Path) -> Path:
+            nonlocal replace_attempts
+            replace_attempts += 1
+            if replace_attempts == 1:
+                raise PermissionError(13, "Progress file is temporarily locked")
+            return real_replace(path, target)
+
+        with patch.object(Path, "replace", new=replace_after_transient_lock):
+            with patch.object(worker_progress.time, "sleep") as sleep:
+                worker_progress.write_worker_progress(progress_path, {"phase": "tabulating"})
+
+        self.assertEqual(json.loads(progress_path.read_text(encoding="utf-8")), {"phase": "tabulating"})
+        self.assertEqual(replace_attempts, 2)
+        sleep.assert_called_once_with(worker_progress.PROGRESS_REPLACE_DELAY_SECONDS)
 
     def test_glm_tabulation_worker_returns_payload_when_lightgbm_loaded(self) -> None:
         self.require_glm_dependencies()

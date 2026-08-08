@@ -10,6 +10,7 @@ from py_lucidum.core import Dataset
 
 from .store import GlmModelStore
 from .training import _train_model_impl
+from .worker_progress import write_worker_progress
 
 
 def dataset_signature(path: Path) -> tuple[int, int]:
@@ -40,9 +41,7 @@ def error_response(exc: Exception) -> dict[str, Any]:
 
 
 def write_progress(path: Path, progress: dict[str, Any]) -> None:
-    pending_path = path.with_name(f"{path.name}.tmp")
-    pending_path.write_text(json.dumps(progress, default=str), encoding="utf-8")
-    pending_path.replace(path)
+    write_worker_progress(path, progress)
 
 
 def run_worker(

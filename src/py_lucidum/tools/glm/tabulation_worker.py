@@ -11,6 +11,7 @@ from py_lucidum.tools.gbm.store import GbmModelStore
 
 from .store import GlmModelStore
 from .tabulation import _build_tabulations_impl
+from .worker_progress import write_worker_progress
 
 
 def run_worker(request_path: Path, response_path: Path) -> int:
@@ -28,8 +29,7 @@ def run_worker(request_path: Path, response_path: Path) -> int:
         if progress_path is None:
             return
         pending_path = progress_path.with_suffix(f".{os.getpid()}.tmp")
-        pending_path.write_text(json.dumps(progress, default=str), encoding="utf-8")
-        pending_path.replace(progress_path)
+        write_worker_progress(progress_path, progress, pending_path=pending_path)
 
     result = _build_tabulations_impl(
         dataset,
