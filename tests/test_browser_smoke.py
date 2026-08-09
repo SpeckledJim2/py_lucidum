@@ -16238,7 +16238,12 @@ COPY (
                             """
                         )
                         page.wait_for_function(
-                            '() => document.querySelector("#ukMap")?._lucidumBaseMap === "openFreeMapDark"',
+                            """() => {
+                              const container = document.querySelector("#ukMap");
+                              return container?._lucidumBaseMap === "openFreeMapDark"
+                                && container?._lucidumRequestedBaseMap === "openFreeMapDark"
+                                && container?._lucidumMapLibre?.isStyleLoaded();
+                            }""",
                             timeout=10_000,
                         )
                         assert_vector_layer_order("unit")
@@ -17484,6 +17489,27 @@ COPY (
                         if request.url.endswith("/api/uk-map/summary")
                         else None,
                     )
+                    page.route(
+                        "https://tiles.openfreemap.org/styles/**",
+                        lambda route: route.fulfill(
+                            status=200,
+                            content_type="application/json",
+                            headers={"access-control-allow-origin": "*"},
+                            body=json.dumps(
+                                {
+                                    "version": 8,
+                                    "sources": {},
+                                    "layers": [
+                                        {
+                                            "id": "ofm-background",
+                                            "type": "background",
+                                            "paint": {"background-color": "#f5f5f4"},
+                                        }
+                                    ],
+                                }
+                            ),
+                        ),
+                    )
                     page.add_init_script(
                         """
                         (() => {
@@ -17531,6 +17557,10 @@ COPY (
                             page.locator('#mapLevelTiles input[name="mapLevel"][value="sector"]').check()
                         page.wait_for_function('() => document.querySelector("#mapGroupMeta")?.textContent.includes("sectors matched")')
                         page.locator('#mapBaseLayerTiles input[name="baseMap"][value="openFreeMapPositron"]').check()
+                        page.wait_for_function(
+                            '() => document.querySelector("#ukMap")?._lucidumBaseMap === "openFreeMapPositron"',
+                            timeout=10_000,
+                        )
                         page.locator('.map-palette-button[data-palette="viridis"]').click()
                         page.wait_for_function(
                             """() => document.querySelector('.map-palette-button[data-palette="viridis"]')?.classList.contains("active")
@@ -17671,7 +17701,8 @@ COPY (
                         summary_count_before_cached_restore = len(summary_requests)
                         page.locator(f'.saved-favourite-option[data-favourite-id="{map_favourite_id}"]').click()
                         page.wait_for_function(
-                            """([id]) => document.querySelector(`.saved-favourite-option[data-favourite-id="${id}"]`)?.classList.contains("active")""",
+                            """([id]) => document.querySelector(`.saved-favourite-option[data-favourite-id="${id}"]`)?.classList.contains("active")
+                              && document.querySelector("#ukMap")?._lucidumBaseMap === "openFreeMapPositron" """,
                             arg=[map_favourite_id],
                             timeout=10_000,
                         )

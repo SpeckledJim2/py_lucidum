@@ -489,6 +489,7 @@ export function createUkMapTool({
   let baseLabelLayer = null;
   let renderedBaseMap = "blank";
   let baseMapChangeGeneration = 0;
+  let baseMapChangePending = false;
   let mapViewportControl = null;
   let mapResizeObserver = null;
   let activeMapPopupSelection = null;
@@ -1277,11 +1278,13 @@ export function createUkMapTool({
     state.baseMap = nextBaseMap;
     syncMapControls();
     if (!ukMap) return false;
-    if (renderedBaseMatches(nextBaseMap)) {
+    const hadPendingBaseMapChange = baseMapChangePending;
+    const generation = ++baseMapChangeGeneration;
+    if (renderedBaseMatches(nextBaseMap) && !hadPendingBaseMapChange) {
       syncBaseMapVisualState();
       return true;
     }
-    const generation = ++baseMapChangeGeneration;
+    baseMapChangePending = true;
     try {
       return await installBaseMap(nextBaseMap, generation);
     } catch (error) {
@@ -1304,6 +1307,8 @@ export function createUkMapTool({
       syncBaseMapVisualState();
       syncMapControls();
       return false;
+    } finally {
+      if (generation === baseMapChangeGeneration) baseMapChangePending = false;
     }
   }
 
@@ -1519,10 +1524,10 @@ export function createUkMapTool({
     state.mapViewRestorePending = next.view;
     state.pendingMapZoom = null;
     state.mapStartupFitDone = Boolean(next.view);
-    setBaseMap(next.baseMap);
+    const baseMapPromise = setBaseMap(next.baseMap);
     syncMapControls();
     syncFloatingMapControl();
-    return next;
+    return baseMapPromise;
   }
 
   function syncMapControls() {

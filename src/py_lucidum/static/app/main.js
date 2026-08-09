@@ -3389,11 +3389,14 @@
         applyFavouriteFilterState(view);
         state.mapFavouriteRestoreInProgress = true;
         try {
-          ukMapTool.applyFavouriteState(view.map || {});
+          const baseMapRestore = ukMapTool.applyFavouriteState(view.map || {});
           renderFavourites();
           setTool("uk_map", false);
           beginFavouriteViewRestore();
-          const data = await refreshMapFavouriteViewData();
+          const [data] = await Promise.all([
+            refreshMapFavouriteViewData(),
+            baseMapRestore,
+          ]);
           syncSidebarSummariesFromToolData(data);
         } finally {
           await finishMapFavouriteRestore();
