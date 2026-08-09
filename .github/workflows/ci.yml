@@ -89,3 +89,73 @@ jobs:
           path: browser-artifacts/shard-${{ matrix.shard }}/
           if-no-files-found: warn
           retention-days: 14
+
+  windows-package-and-unit:
+    name: Windows package and unit tests
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[glm,gbm]" pytest pipx
+
+      - name: Smoke-test pipx installation and launcher
+        run: python scripts/run_tests.py pipx
+
+      - name: Run complete non-browser gate
+        run: python scripts/run_tests.py prepush --skip-browser
+
+  windows-browser-smoke:
+    name: Windows browser smoke
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install browser test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[glm,gbm]" pytest playwright
+          python -m playwright install chromium webkit
+
+      - name: Run browser smoke tests
+        env:
+          PY_LUCIDUM_BROWSER_ARTIFACT_DIR: ${{ github.workspace }}/browser-artifacts
+        run: >-
+          python scripts/run_browser_smoke.py --direct
+          --
+          --junitxml=${{ github.workspace }}/browser-artifacts/results.xml
+
+      - name: Store browser failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-browser-failure
+          path: browser-artifacts/
+          if-no-files-found: warn
+          retention-days: 14
