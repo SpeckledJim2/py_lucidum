@@ -15854,6 +15854,12 @@ COPY (
                                             "paint": {"fill-color": "#303030" if dark else "#e7e5e4"},
                                         },
                                         {
+                                            "id": "ofm-road",
+                                            "type": "line",
+                                            "source": "ofm-mock",
+                                            "paint": {"line-color": "#d4d4d4", "line-width": 1},
+                                        },
+                                        {
                                             "id": "ofm-label",
                                             "type": "symbol",
                                             "source": "ofm-mock",
@@ -15895,14 +15901,25 @@ COPY (
                                 ? Object.values(map?._layers || {}).find((layer) => layer?.data?.level === "unit")
                                   ?.canvasMapLayer
                                 : Object.values(map?._layers || {}).find((layer) => layer?.fillLayerId);
-                              const analysisLayerId = level === "unit" ? analysis?.layerId : analysis?.fillLayerId;
                               return {
                                 base: layers.indexOf("ofm-base"),
-                                analysis: layers.indexOf(analysisLayerId),
+                                road: layers.indexOf("ofm-road"),
+                                analysisFill: layers.indexOf(
+                                  level === "unit" ? analysis?.layerId : analysis?.fillLayerId
+                                ),
+                                analysisOutline: level === "unit"
+                                  ? null
+                                  : layers.indexOf(analysis?.lineLayerId),
                                 label: layers.indexOf("ofm-label"),
-                                sourcePresent: level === "unit"
-                                  ? Boolean(raw?.getSource(analysis?.sourceId))
-                                  : Boolean(raw?.getSource(analysis?.sourceId)),
+                                labelPaint: {
+                                  color: raw?.getPaintProperty("ofm-label", "text-color"),
+                                  opacity: raw?.getPaintProperty("ofm-label", "text-opacity"),
+                                  haloColor: raw?.getPaintProperty("ofm-label", "text-halo-color"),
+                                  haloWidth: raw?.getPaintProperty("ofm-label", "text-halo-width"),
+                                  haloBlur: raw?.getPaintProperty("ofm-label", "text-halo-blur"),
+                                },
+                                roadWidth: raw?.getPaintProperty("ofm-road", "line-width"),
+                                sourcePresent: Boolean(raw?.getSource(analysis?.sourceId)),
                                 foreground: container?._lucidumBaseStyleForegroundLayerIds || [],
                                 eventHandlerCount: level === "unit" ? null : analysis?._eventHandlers?.length,
                               };
@@ -15911,10 +15928,28 @@ COPY (
                             level,
                         )
                         self.assertGreaterEqual(layer_state["base"], 0)
-                        self.assertGreater(layer_state["analysis"], layer_state["base"])
-                        self.assertGreater(layer_state["label"], layer_state["analysis"])
+                        self.assertGreater(layer_state["road"], layer_state["base"])
+                        if level == "unit":
+                            self.assertGreater(layer_state["analysisFill"], layer_state["road"])
+                            self.assertGreater(layer_state["label"], layer_state["analysisFill"])
+                        else:
+                            self.assertGreater(layer_state["analysisFill"], layer_state["base"])
+                            self.assertGreater(layer_state["road"], layer_state["analysisFill"])
+                            self.assertGreater(layer_state["analysisOutline"], layer_state["road"])
+                            self.assertGreater(layer_state["label"], layer_state["analysisOutline"])
                         self.assertTrue(layer_state["sourcePresent"])
-                        self.assertEqual(layer_state["foreground"], ["ofm-label"])
+                        self.assertEqual(layer_state["foreground"], ["ofm-road", "ofm-label"])
+                        self.assertEqual(layer_state["roadWidth"], ["*", 1, 0.7])
+                        self.assertEqual(
+                            layer_state["labelPaint"],
+                            {
+                                "color": "#1f2937",
+                                "opacity": 1,
+                                "haloColor": "rgba(255, 255, 255, 0.96)",
+                                "haloWidth": 1.75,
+                                "haloBlur": 0.25,
+                            },
+                        )
                         if level != "unit":
                             self.assertEqual(layer_state["eventHandlerCount"], 3)
 
@@ -18930,9 +18965,9 @@ COPY (
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
-    def test_uk_map_unit_viewport_expands_on_zoom_out_and_fit_uk(self) -> None:
+    def test_uk_map_unit_geometry_survives_metric_changes_and_camera_moves(self) -> None:
         with TemporaryDirectory() as tmp_dir:
-            data_path = Path(tmp_dir) / "unit_viewport.csv"
+            data_path = Path(tmp_dir) / "unit_full_layer.csv"
             data_path.write_text(
                 "PostcodeArea,PostcodeSector,PostcodeUnit,lat,long,price,value\n"
                 "E,E1 1,E1 1AA,51.5074,-0.1278,100,10\n"
@@ -18964,7 +18999,7 @@ COPY (
                     try:
                         page.goto(base_url, wait_until="domcontentloaded")
                         self.wait_for_app_ready(page)
-                        page.locator("#datasetMeta").get_by_text("unit_viewport.csv").wait_for(timeout=10_000)
+                        page.locator("#datasetMeta").get_by_text("unit_full_layer.csv").wait_for(timeout=10_000)
                         page.wait_for_function(
                             '() => document.querySelector("#mapGroupMeta")?.textContent.includes("areas matched")',
                             timeout=10_000,
@@ -18990,6 +19025,7 @@ COPY (
                                 )
                         initial_request = json.loads(initial_request_info.value.post_data or "{}")
                         self.assertIsNone(initial_request.get("unitViewportBounds"))
+                        self.assertFalse(initial_request["reuseUnitGeometry"])
                         page.wait_for_function(
                             """
                             () => Object.values(document.querySelector("#ukMap")?._lucidumMap?._layers || {})
@@ -19188,9 +19224,8 @@ COPY (
                             }
                             """
                         )
-                        # Raster opacity is transitionable in MapLibre and can report a
-                        # stale value mid-zoom. Layout visibility is the immediate,
-                        # authoritative control used to prevent stale points flashing.
+                        # The settled canvas texture remains visible while MapLibre
+                        # transforms it. Hit testing stays disabled until the redraw.
                         page.wait_for_function(
                             """
                             () => {
@@ -19201,11 +19236,12 @@ COPY (
                                 .find((candidate) => candidate?.data?.level === "unit");
                               return raw?.isZooming()
                                 && unitLayer?.zooming
-                                && unitLayer?.canvasMapLayer?.visible === false
+                                && unitLayer?.canvasMapLayer?.visible === true
+                                && unitLayer?.hitGrid?.size === 0
                                 && raw?.getLayoutProperty(
                                   unitLayer.canvasMapLayer.layerId,
                                   "visibility"
-                                ) === "none";
+                                ) === "visible";
                             }
                             """,
                             timeout=10_000,
@@ -19242,8 +19278,8 @@ COPY (
                             {
                                 "zooming": True,
                                 "unitZooming": True,
-                                "visible": False,
-                                "visibility": "none",
+                                "visible": True,
+                                "visibility": "visible",
                             },
                         )
                         page.evaluate(
@@ -19260,7 +19296,7 @@ COPY (
                               document.querySelector("#ukMap")?._lucidumMap?._layers || {}
                             ).some((candidate) => candidate?.data?.level === "unit"
                               && candidate.zoomGeneration > generation
-                              && candidate.canvasMapLayer?.visible === false)
+                              && candidate.canvasMapLayer?.visible === true)
                             """,
                             arg=first_zoom_generation,
                             timeout=10_000,
@@ -19276,11 +19312,12 @@ COPY (
                                   const unitLayer = Object.values(map?._layers || {})
                                     .find((candidate) => candidate?.data?.level === "unit");
                                   return raw?.isZooming()
-                                    && unitLayer?.canvasMapLayer?.visible === false
+                                    && unitLayer?.canvasMapLayer?.visible === true
+                                    && unitLayer?.hitGrid?.size === 0
                                     && raw?.getLayoutProperty(
                                       unitLayer.canvasMapLayer.layerId,
                                       "visibility"
-                                    ) === "none";
+                                    ) === "visible";
                                 }
                                 """
                             )
@@ -19403,6 +19440,7 @@ COPY (
                             """
                         )
 
+                        summary_request_count_before_metric = len(summary_requests)
                         with page.expect_request(
                             lambda request: request.url.endswith("/api/uk-map/summary"),
                             timeout=10_000,
@@ -19413,46 +19451,22 @@ COPY (
                             ):
                                 page.locator("#actualNumerator").select_option("value")
                         metric_request = json.loads(metric_request_info.value.post_data or "{}")
-                        regional_bounds = metric_request.get("unitViewportBounds")
-                        self.assertIsInstance(regional_bounds, dict)
-                        assert isinstance(regional_bounds, dict)
-                        self.assertFalse(metric_request["reuseUnitGeometry"])
-                        self.assertLess(regional_bounds["south"], 51.5074)
-                        self.assertGreater(regional_bounds["north"], 51.5074)
-                        self.assertLess(regional_bounds["west"], -0.1278)
-                        self.assertGreater(regional_bounds["east"], -0.1278)
+                        self.assertIsNone(metric_request.get("unitViewportBounds"))
+                        self.assertTrue(metric_request["reuseUnitGeometry"])
                         page.wait_for_function(
-                            """
-                            (bounds) => {
-                              const current = Object.values(
-                                document.querySelector("#ukMap")?._lucidumMap?._layers || {}
-                              ).find((layer) => layer?.data?.level === "unit" && layer?.pointCount > 0);
-                              return current?.pointCount === 2
-                                && JSON.stringify(current?.coverageBounds) === JSON.stringify(bounds);
-                            }
-                            """,
-                            arg=regional_bounds,
-                            timeout=10_000,
-                        )
-                        regional_layer = page.evaluate(
                             """
                             () => {
                               const current = Object.values(
                                 document.querySelector("#ukMap")?._lucidumMap?._layers || {}
                               ).find((layer) => layer?.data?.level === "unit" && layer?.pointCount > 0);
-                              window.__unitRegionalLayer = current;
-                              return {
-                                replaced: current !== window.__unitFullLayer,
-                                pointCount: current?.pointCount || 0,
-                                coverageBounds: current?.coverageBounds || null,
-                              };
+                              return current === window.__unitFullLayer
+                                && current?.pointCount === 4
+                                && current?.coverageBounds === null
+                                && current?.data?.response?.numerator === "value";
                             }
-                            """
+                            """,
+                            timeout=10_000,
                         )
-                        self.assertTrue(regional_layer["replaced"], regional_layer)
-                        self.assertEqual(regional_layer["pointCount"], 2)
-                        self.assertEqual(regional_layer["coverageBounds"], regional_bounds)
-                        page.wait_for_timeout(250)
 
                         with page.expect_request(
                             lambda request: request.url.endswith("/api/uk-map/summary"),
@@ -19465,92 +19479,100 @@ COPY (
                                 page.locator("#actualNumerator").select_option("price")
                         reused_request = json.loads(reused_request_info.value.post_data or "{}")
                         self.assertTrue(reused_request["reuseUnitGeometry"], reused_request)
-                        self.assertEqual(reused_request["unitViewportBounds"], regional_bounds)
+                        self.assertIsNone(reused_request["unitViewportBounds"])
                         self.assertTrue(
                             page.evaluate(
                                 """
                                 () => Object.values(document.querySelector("#ukMap")?._lucidumMap?._layers || {})
                                   .find((layer) => layer?.data?.level === "unit" && layer?.pointCount > 0)
-                                  === window.__unitRegionalLayer
+                                  === window.__unitFullLayer
                                 """
                             )
                         )
 
-                        with page.expect_request(
-                            lambda request: request.url.endswith("/api/uk-map/summary"),
-                            timeout=10_000,
-                        ) as expanded_request_info:
-                            with page.expect_response(
-                                lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200,
-                                timeout=10_000,
-                            ):
-                                stale_layer_visibility = page.evaluate(
-                                    """
-                                    () => {
-                                      const map = document.querySelector("#ukMap")?._lucidumMap;
-                                      const layer = window.__unitRegionalLayer;
-                                      map?.setView([54.5, -2.0], 5, { animate: false });
-                                      return {
-                                        stillMounted: Boolean(layer && map?.hasLayer(layer)),
-                                        visibility: layer?.canvas?.style?.visibility || "",
-                                        mapLayerVisible: layer?.canvasMapLayer?.visible,
-                                        mapLayerVisibility: map?.raw?.getLayoutProperty(
-                                          layer?.canvasMapLayer?.layerId,
-                                          "visibility"
-                                        ),
-                                      };
-                                    }
-                                    """
-                                )
-                        self.assertEqual(
-                            stale_layer_visibility,
-                            {
-                                "stillMounted": True,
-                                "visibility": "hidden",
-                                "mapLayerVisible": False,
-                                "mapLayerVisibility": "none",
-                            },
+                        camera_request_count = len(summary_requests)
+                        page.evaluate(
+                            """
+                            () => document.querySelector("#ukMap")?._lucidumMap
+                              ?.setView([54.5, -2.0], 5, { animate: false })
+                            """
                         )
-                        expanded_request = json.loads(expanded_request_info.value.post_data or "{}")
-                        expanded_bounds = expanded_request.get("unitViewportBounds")
-                        self.assertIsInstance(expanded_bounds, dict)
-                        assert isinstance(expanded_bounds, dict)
-                        self.assertFalse(expanded_request["reuseUnitGeometry"])
-                        regional_area = (regional_bounds["north"] - regional_bounds["south"]) * (
-                            regional_bounds["east"] - regional_bounds["west"]
-                        )
-                        expanded_area = (expanded_bounds["north"] - expanded_bounds["south"]) * (
-                            expanded_bounds["east"] - expanded_bounds["west"]
-                        )
-                        self.assertGreater(expanded_area, regional_area * 3)
                         page.wait_for_function(
                             """
-                            () => Object.values(document.querySelector("#ukMap")?._lucidumMap?._layers || {})
-                              .some((layer) => layer?.data?.level === "unit" && layer?.pointCount === 4)
+                            () => {
+                              const container = document.querySelector("#ukMap");
+                              const map = container?._lucidumMap;
+                              const raw = container?._lucidumMapLibre;
+                              const layer = Object.values(map?._layers || {})
+                                .find((candidate) => candidate?.data?.level === "unit");
+                              return !raw?.isMoving()
+                                && layer === window.__unitFullLayer
+                                && layer?.pointCount === 4
+                                && layer?.canvasMapLayer?.visible === true;
+                            }
                             """,
                             timeout=10_000,
                         )
+                        page.wait_for_timeout(250)
+                        self.assertEqual(len(summary_requests), camera_request_count)
+
+                        page.locator("#mapFitUk").click()
+                        page.wait_for_function(
+                            """
+                            () => {
+                              const container = document.querySelector("#ukMap");
+                              const map = container?._lucidumMap;
+                              const raw = container?._lucidumMapLibre;
+                              const layer = Object.values(map?._layers || {})
+                                .find((candidate) => candidate?.data?.level === "unit");
+                              return !raw?.isMoving()
+                                && layer === window.__unitFullLayer
+                                && layer?.pointCount === 4
+                                && layer?.coverageBounds === null;
+                            }
+                            """,
+                            timeout=10_000,
+                        )
+                        page.wait_for_timeout(250)
+                        self.assertEqual(len(summary_requests), camera_request_count)
+                        self.assertEqual(camera_request_count, summary_request_count_before_metric + 2)
 
                         with page.expect_request(
                             lambda request: request.url.endswith("/api/uk-map/summary"),
                             timeout=10_000,
-                        ) as full_request_info:
+                        ) as filtered_request_info:
                             with page.expect_response(
                                 lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200,
                                 timeout=10_000,
                             ):
-                                page.locator("#mapFitUk").click()
-                        full_request = json.loads(full_request_info.value.post_data or "{}")
-                        self.assertIsNone(full_request.get("unitViewportBounds"))
+                                page.locator("#filterInput").evaluate(
+                                    """
+                                    (input) => {
+                                      input.value = "PostcodeArea = 'E'";
+                                      input.dispatchEvent(new Event("input", { bubbles: true }));
+                                    }
+                                    """
+                                )
+                                page.locator("#filterApplyBtn").evaluate("(button) => button.click()")
+                        filtered_request = json.loads(filtered_request_info.value.post_data or "{}")
+                        self.assertEqual(filtered_request["filter"], "PostcodeArea = 'E'")
+                        self.assertIsNone(filtered_request.get("unitViewportBounds"))
+                        self.assertFalse(filtered_request["reuseUnitGeometry"])
                         page.wait_for_function(
                             """
-                            () => Object.values(document.querySelector("#ukMap")?._lucidumMap?._layers || {})
-                              .some((layer) => layer?.data?.level === "unit"
-                                && layer?.pointCount === 4
-                                && layer?.coverageBounds === null)
+                            () => {
+                              const map = document.querySelector("#ukMap")?._lucidumMap;
+                              const layer = Object.values(map?._layers || {})
+                                .find((candidate) => candidate?.data?.level === "unit");
+                              return layer !== window.__unitFullLayer
+                                && layer?.pointCount === 1
+                                && layer?.coverageBounds === null
+                                && layer?.data?.filter === "PostcodeArea = 'E'";
+                            }
                             """,
                             timeout=10_000,
                         )
+                        self.assertEqual(len(summary_requests), camera_request_count + 1)
                         self.assertEqual(page_errors, [])
                     finally:
                         browser.close()
