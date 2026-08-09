@@ -3820,9 +3820,15 @@ COPY (
                             map_requests.append(json.loads(request.post_data or "{}"))
 
                     def open_region_panel() -> Any:
-                        page.locator("#ukMap").click(
+                        map_locator = page.locator("#ukMap")
+                        map_box = map_locator.bounding_box()
+                        self.assertIsNotNone(map_box)
+                        map_locator.click(
                             button="right",
-                            position={"x": 580, "y": 690},
+                            position={
+                                "x": min(580, max(1, int(map_box["width"] - 8))),
+                                "y": min(690, max(1, int(map_box["height"] - 8))),
+                            },
                         )
                         panel = page.locator("#mapRegionFilterPanel:not([hidden])")
                         panel.wait_for(timeout=5_000)
@@ -16059,6 +16065,26 @@ COPY (
                         )
 
                     def assert_vector_layer_order(level: str) -> None:
+                        page.wait_for_function(
+                            """
+                            (level) => {
+                              const container = document.querySelector("#ukMap");
+                              const map = container?._lucidumMap;
+                              const raw = container?._lucidumMapLibre;
+                              const analysis = level === "unit"
+                                ? Object.values(map?._layers || {}).find((layer) => layer?.data?.level === "unit")
+                                  ?.canvasMapLayer
+                                : Object.values(map?._layers || {}).find((layer) => layer?.fillLayerId);
+                              if (!analysis || !raw) return false;
+                              return level === "unit"
+                                ? Boolean(raw.getLayer(analysis.layerId))
+                                : Boolean(raw.getLayer(analysis.fillLayerId)
+                                  && raw.getLayer(analysis.lineLayerId));
+                            }
+                            """,
+                            arg=level,
+                            timeout=10_000,
+                        )
                         layer_state = page.evaluate(
                             """
                             (level) => {
