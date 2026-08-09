@@ -1,3 +1,5 @@
+import { bindSettingsStripOverflowCue } from "./shared/settings-strip.js";
+
 const MAP_LEVELS = {
   area: {
     label: "areas",
@@ -90,7 +92,7 @@ export function ukMapShapefileMatchSummary({
   let matchText = "";
   let matchState = "warning";
   if (eligibleRowCount <= 0) {
-    matchText = `No ${levelConfig.label} to match`;
+    matchText = `no ${levelConfig.label} to match`;
   } else if (unmatchedRowCount <= 0) {
     matchText = `All ${levelConfig.label} matched`;
     matchState = "complete";
@@ -99,7 +101,7 @@ export function ukMapShapefileMatchSummary({
   }
   const missingText = missingRowCount > 0
     ? `${missingRowCount.toLocaleString()} ${missingRowCount === 1 ? "row" : "rows"} missing ${levelConfig.singular} (${missingPercentageText}%)`
-    : `No rows missing ${levelConfig.singular}`;
+    : `no rows missing ${levelConfig.singular}`;
 
   return {
     matchedRows,
@@ -430,6 +432,7 @@ export function createUkMapTool({
   const MAP_UNIT_ADAPTIVE_SPARSE_DIAMETER = 6;
   const MAP_UNIT_ADAPTIVE_ZOOM_RANGE = 6;
   const MAP_UNIT_DOT_SIZE_MODES = new Set(["min", "adaptive"]);
+  const MAP_OPACITY_PRESETS = [0.2, 0.6, 1];
   const MAP_DEFAULT_VIEW = { center: { lat: 54.5, lng: -3.2 }, zoom: 6 };
   const MAP_AREA_LABEL_MODES = new Set(["off", "on"]);
   const MAP_AREA_LABEL_MIN_FONT_SIZE = 6;
@@ -444,8 +447,7 @@ export function createUkMapTool({
   const MAP_VECTOR_LABEL_HALO_BLUR = 0.25;
   const MAP_VECTOR_ROAD_WIDTH_SCALE = 0.7;
   const MAP_INITIAL_FIT_OPTIONS = { animate: false };
-  const MAP_CONTROL_EXPANDED_ICON = '<path d="M7 17 17 7"></path><path d="M10 7h7v7"></path>';
-  const MAP_CONTROL_COLLAPSED_ICON = '<path d="M17 7 7 17"></path><path d="M14 17H7v-7"></path>';
+  const MAP_TOOLBAR_CHEVRON_ICON = '<path d="m18 15-6-6-6 6"></path>';
   const MAP_BASE_LAYERS = {
     blank: { label: "Blank" },
     esri: {
@@ -463,30 +465,20 @@ export function createUkMapTool({
       url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
       attribution: "Tiles &copy; Esri",
     },
-    grey: {
-      label: "Light",
-      url: "https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png",
-      labelUrl: "https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png",
-      attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
-      themePair: { light: "grey", dark: "darkGrey" },
-    },
-    darkGrey: {
-      label: "Dark",
-      url: "https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png",
-      labelUrl: "https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png",
-      attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
-      themePair: { light: "grey", dark: "darkGrey" },
-    },
     openFreeMapPositron: {
-      label: "Positron",
+      label: "Light",
       styleUrl: "https://tiles.openfreemap.org/styles/positron",
       themePair: { light: "openFreeMapPositron", dark: "openFreeMapDark" },
     },
     openFreeMapDark: {
-      label: "OFM Dark",
+      label: "Dark",
       styleUrl: "https://tiles.openfreemap.org/styles/dark",
       themePair: { light: "openFreeMapPositron", dark: "openFreeMapDark" },
     },
+  };
+  const MAP_LEGACY_BASE_LAYERS = {
+    grey: "openFreeMapPositron",
+    darkGrey: "openFreeMapDark",
   };
 
   let ukMap = null;
@@ -622,7 +614,9 @@ export function createUkMapTool({
   }
 
   function setMapRowMeta(message) {
-    el("mapRowMeta").textContent = message || "";
+    const target = el("mapRowMeta");
+    target.textContent = message || "";
+    target.title = target.textContent.trim();
   }
 
   function setMapMatchLiveStatus(message, { persist = true } = {}) {
@@ -1024,7 +1018,7 @@ export function createUkMapTool({
 
   function mapRegionFilterIgnoresTarget(target) {
     return Boolean(target?.closest?.(
-      "button, input, select, textarea, a, [contenteditable], .maplibregl-ctrl, .maplibregl-popup, .map-floating-control",
+      "button, input, select, textarea, a, [contenteditable], .maplibregl-ctrl, .maplibregl-popup",
     ));
   }
 
@@ -1167,7 +1161,6 @@ export function createUkMapTool({
     if (!target) return;
     mapResizeObserver = new ResizeObserver(() => {
       if (state.tool !== "uk_map") return;
-      clampMapFloatingControl();
       scheduleMapViewportSync({ mode: "preserve" });
     });
     mapResizeObserver.observe(target);
@@ -1278,7 +1271,8 @@ export function createUkMapTool({
   }
 
   async function setBaseMap(baseMap) {
-    const nextBaseMap = MAP_BASE_LAYERS[baseMap] ? baseMap : "blank";
+    const requestedBaseMap = MAP_LEGACY_BASE_LAYERS[baseMap] || baseMap;
+    const nextBaseMap = MAP_BASE_LAYERS[requestedBaseMap] ? requestedBaseMap : "blank";
     const previousBaseMap = renderedBaseMap;
     state.baseMap = nextBaseMap;
     syncMapControls();
@@ -1459,18 +1453,33 @@ export function createUkMapTool({
     return Number(legacyLabelSize) > 0 ? "on" : "off";
   }
 
+  function normaliseMapBorderWeight(value) {
+    const weight = Number(value);
+    if (!Number.isFinite(weight)) return 1;
+    if (weight <= 0) return 0;
+    return weight <= 2 ? 1 : 3;
+  }
+
+  function normaliseMapOpacity(value) {
+    const opacity = clampMapNumber(value, 1, 0, 1);
+    if (opacity < 0.4) return MAP_OPACITY_PRESETS[0];
+    if (opacity < 0.8) return MAP_OPACITY_PRESETS[1];
+    return MAP_OPACITY_PRESETS[2];
+  }
+
   function normaliseFavouriteMapState(map = {}) {
     const payload = map && typeof map === "object" ? map : {};
     const level = normaliseFavouriteMapLevel(payload.level);
-    const baseMap = MAP_BASE_LAYERS[payload.baseMap] ? String(payload.baseMap) : "blank";
+    const requestedBaseMap = MAP_LEGACY_BASE_LAYERS[payload.baseMap] || String(payload.baseMap || "");
+    const baseMap = MAP_BASE_LAYERS[requestedBaseMap] ? requestedBaseMap : "blank";
     const palette = MAP_PALETTES[payload.palette] ? String(payload.palette) : "divergent";
     return {
       level,
       baseMap,
       palette,
-      lineWeight: clampMapNumber(payload.lineWeight, 1, 0, 10, { integer: true }),
+      lineWeight: normaliseMapBorderWeight(payload.lineWeight),
       dotSizeMode: normaliseMapDotSizeMode(payload.dotSizeMode),
-      opacity: clampMapNumber(payload.opacity, 1, 0, 1),
+      opacity: normaliseMapOpacity(payload.opacity),
       hotspots: clampMapNumber(payload.hotspots, 0, -9, 9, { integer: true }),
       areaLabels: normaliseMapAreaLabels(payload.areaLabels, payload.labelSize),
       smoothingLevel: clampMapNumber(payload.smoothingLevel, 0, 0, 5, { integer: true }),
@@ -1485,9 +1494,9 @@ export function createUkMapTool({
       level: state.mapLevel,
       baseMap: state.baseMap,
       palette: state.mapPalette,
-      lineWeight: Number(state.mapLineWeight),
+      lineWeight: normaliseMapBorderWeight(state.mapLineWeight),
       dotSizeMode: normaliseMapDotSizeMode(state.mapDotSizeMode),
-      opacity: Number(state.mapOpacity),
+      opacity: normaliseMapOpacity(state.mapOpacity),
       hotspots: Number(state.mapHotspots),
       areaLabels: normaliseMapAreaLabels(state.mapAreaLabels),
       smoothingLevel: Number(state.mapSmoothingLevel),
@@ -1547,6 +1556,9 @@ export function createUkMapTool({
       onAdd() {
         const container = L.DomUtil.create("div", "map-viewport-control maplibregl-ctrl");
         container.innerHTML = `
+          <button id="mapControlReset" class="map-viewport-button map-toolbar-toggle" type="button" title="Collapse map controls" aria-label="Collapse map controls" aria-controls="mapToolbar mapInfoStrip" aria-expanded="true">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">${MAP_TOOLBAR_CHEVRON_ICON}</svg>
+          </button>
           <button id="mapZoomIn" class="map-viewport-button" type="button" title="Zoom in" aria-label="Zoom in">+</button>
           <button id="mapZoomOut" class="map-viewport-button" type="button" title="Zoom out" aria-label="Zoom out">&minus;</button>
           <button id="mapFitUk" class="map-viewport-button" type="button" title="Fit UK map layer" aria-label="Fit UK map layer">
@@ -1558,10 +1570,12 @@ export function createUkMapTool({
         `;
         L.DomEvent.disableClickPropagation(container);
         L.DomEvent.disableScrollPropagation(container);
+        container.querySelector("#mapControlReset").addEventListener("click", toggleMapToolbarCollapsed);
         container.querySelector("#mapZoomIn").addEventListener("click", () => zoomMapBy(Number(ukMap?.options?.zoomDelta) || 1));
         container.querySelector("#mapZoomOut").addEventListener("click", () => zoomMapBy(-(Number(ukMap?.options?.zoomDelta) || 1)));
         container.querySelector("#mapFitUk").addEventListener("click", () => fitMapToLayer());
         container.querySelector("#mapZoomLondon").addEventListener("click", () => zoomMapToLondon());
+        syncMapToolbarVisibility();
         return container;
       },
     });
@@ -1604,14 +1618,6 @@ export function createUkMapTool({
 
   function activeMapPalette() {
     return MAP_PALETTES[state.mapPalette] || MAP_PALETTES.viridis;
-  }
-
-  function activeMapExtremeColors() {
-    const palette = activeMapPalette();
-    return {
-      low: palette[0] || MAP_MISSING_COLOR,
-      high: palette[palette.length - 1] || MAP_MISSING_COLOR,
-    };
   }
 
   function hexToRgb(hex) {
@@ -1853,6 +1859,11 @@ export function createUkMapTool({
   function createMapPolygonLayer(level, geoJson) {
     const levelConfig = MAP_LEVELS[level] || MAP_LEVELS.area;
     return L.geoJSON(geoJson, {
+      // MapLibre antialiases each fill feature independently. Adjacent postcode
+      // polygons can therefore expose pale hairline seams on dark basemaps even
+      // when the explicit border layer is disabled. Borders are rendered by the
+      // separate line layer below, so the fills themselves should stay crisp.
+      fillAntialias: false,
       smoothFactor: levelConfig.smoothFactor ?? 1,
       style: mapPolygonFeatureStyle,
       onEachFeature: (feature, layer) => {
@@ -2703,10 +2714,10 @@ export function createUkMapTool({
     const groupMeta = `${plottedCount.toLocaleString()} / ${summaryCount.toLocaleString()} units plotted`;
     const missingValueText = missingValueCount > 0
       ? `${missingValueCount.toLocaleString()} ${missingValueCount === 1 ? "unit" : "units"} missing KPI value`
-      : "No units missing KPI value";
+      : "no units missing KPI value";
     const missingCoordinateText = missingCoordinateCount > 0
       ? `${missingCoordinateCount.toLocaleString()} ${missingCoordinateCount === 1 ? "unit" : "units"} missing coordinates`
-      : "No units missing coordinates";
+      : "no units missing coordinates";
     const missingValueWarningClass = missingValueCount > 0
       ? " map-shapefile-match-status--warning"
       : "";
@@ -2883,43 +2894,36 @@ export function createUkMapTool({
   }
 
   function syncMapSliderProgressStyles() {
-    ["mapLineWeight", "mapOpacity", "mapHotspots", "mapSmoothing"]
-      .forEach((id) => updateMapSliderProgress(el(id)));
-  }
-
-  function syncMapExtremeLabels() {
-    const colors = activeMapExtremeColors();
-    const lowLabel = el("mapHotspotsMinLabel");
-    const highLabel = el("mapHotspotsMaxLabel");
-    lowLabel.textContent = "Low";
-    highLabel.textContent = "High";
-    lowLabel.style.setProperty("--map-extreme-color", colors.low);
-    highLabel.style.setProperty("--map-extreme-color", colors.high);
+    updateMapSliderProgress(el("mapHotspots"));
   }
 
   function syncFloatingMapControl() {
     const metric = el("mapControlMetric");
     const kpiName = String(getSelectedKpi()?.name || "").trim();
     metric.textContent = kpiName;
+    metric.title = kpiName;
     metric.hidden = !kpiName;
+    el("mapMetricSeparator").hidden = !kpiName;
     syncActiveFilterLabels();
     document.querySelectorAll(".map-palette-button").forEach((button) => {
       button.classList.toggle("active", button.dataset.palette === state.mapPalette);
     });
     const unitMode = state.mapLevel === "unit";
-    el("mapLineWeight").value = String(state.mapLineWeight);
-    el("mapOpacity").value = String(opacitySliderValue(state.mapOpacity));
     el("mapHotspots").value = String(state.mapHotspots);
-    el("mapSmoothing").value = String(state.mapSmoothingLevel);
-    el("mapLineWeightValue").textContent = String(state.mapLineWeight);
-    el("mapOpacityValue").textContent = formatOpacitySliderValue(state.mapOpacity);
     el("mapHotspotsValue").textContent = formatHotspotSliderValue(state.mapHotspots);
-    syncMapExtremeLabels();
-    el("mapSmoothingValue").textContent = formatSmoothingLevel(state.mapSmoothingLevel);
-    el("mapSliderGrid").classList.toggle("unit-mode", unitMode);
-    const lineWeightControl = el("mapLineWeightControl") || el("mapLineWeight").closest(".map-slider-control");
+    document.querySelectorAll("[data-map-opacity]").forEach((button) => {
+      const active = Number(button.dataset.mapOpacity) === normaliseMapOpacity(state.mapOpacity);
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", String(active));
+    });
+    const lineWeightControl = el("mapLineWeightControl");
     if (lineWeightControl) lineWeightControl.hidden = unitMode;
-    el("mapLineWeight").disabled = unitMode;
+    document.querySelectorAll("[data-map-line-weight]").forEach((button) => {
+      const active = Number(button.dataset.mapLineWeight) === normaliseMapBorderWeight(state.mapLineWeight);
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", String(active));
+      button.disabled = unitMode;
+    });
     lineWeightControl?.classList.toggle("disabled", unitMode);
     const dotSizeControl = el("mapDotSizeControl");
     if (dotSizeControl) dotSizeControl.hidden = !unitMode;
@@ -2939,31 +2943,16 @@ export function createUkMapTool({
       button.disabled = labelHidden;
     });
     const smoothingHidden = state.mapLevel !== "sector";
-    const smoothingControl = el("mapSmoothingControl") || el("mapSmoothing").closest(".map-slider-control");
+    const smoothingControl = el("mapSmoothingControl");
     if (smoothingControl) smoothingControl.hidden = smoothingHidden;
-    el("mapSmoothing").disabled = smoothingHidden;
+    document.querySelectorAll("[data-map-smoothing]").forEach((button) => {
+      const active = Number(button.dataset.mapSmoothing) === Number(state.mapSmoothingLevel);
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", String(active));
+      button.disabled = smoothingHidden;
+    });
     smoothingControl?.classList.toggle("disabled", smoothingHidden);
     syncMapSliderProgressStyles();
-  }
-
-  function formatCompactSliderValue(value) {
-    const number = Number(value);
-    if (!Number.isFinite(number)) return "";
-    return Number.isInteger(number) ? String(number) : String(Number(number.toFixed(1)));
-  }
-
-  function formatOpacitySliderValue(value) {
-    return String(opacitySliderValue(value));
-  }
-
-  function opacitySliderValue(value = state.mapOpacity) {
-    const number = Math.max(0, Math.min(1, Number(value) || 0));
-    return Math.round(number * 10);
-  }
-
-  function opacityFromSliderValue(value) {
-    const number = Math.max(0, Math.min(10, Number(value) || 0));
-    return number / 10;
   }
 
   function formatHotspotSliderValue(value) {
@@ -3137,237 +3126,55 @@ export function createUkMapTool({
     syncMapLegendCollapseButton();
   }
 
-  function setupMapFloatingControlDrag() {
-    const panel = el("mapFloatingControl");
-    const dragThreshold = 3;
-
-    let dragging = false;
-    let dragMoved = false;
-    let startX = 0;
-    let startY = 0;
-    let startLeft = 0;
-    let startTop = 0;
-    panel.addEventListener("pointerdown", (event) => {
-      if (state.mapControlCollapsed || event.button !== 0 || isMapFloatingInteractiveTarget(event.target)) return;
-      event.preventDefault();
-      dragging = true;
-      dragMoved = false;
-      startX = event.clientX;
-      startY = event.clientY;
-      startLeft = panel.offsetLeft;
-      startTop = panel.offsetTop;
-      panel.classList.add("dragging");
-      document.body.classList.add("dragging-map-control");
-      panel.setPointerCapture(event.pointerId);
-      window.getSelection()?.removeAllRanges();
-    });
-    panel.addEventListener("pointermove", (event) => {
-      if (!dragging) return;
-      event.preventDefault();
-      const deltaX = event.clientX - startX;
-      const deltaY = event.clientY - startY;
-      if (!dragMoved && Math.hypot(deltaX, deltaY) < dragThreshold) return;
-      dragMoved = true;
-      state.mapControlMoved = true;
-      setMapFloatingPosition(startLeft + deltaX, startTop + deltaY);
-    });
-    function finishDrag(event) {
-      if (!dragging) return;
-      dragging = false;
-      panel.classList.remove("dragging");
-      document.body.classList.remove("dragging-map-control");
-      window.getSelection()?.removeAllRanges();
-      if (event.pointerId !== undefined) {
-        try {
-          panel.releasePointerCapture(event.pointerId);
-        } catch (_) {
-        }
-      }
-    }
-    panel.addEventListener("pointerup", finishDrag);
-    panel.addEventListener("pointercancel", finishDrag);
-  }
-
-  function isMapFloatingInteractiveTarget(target) {
-    return Boolean(target?.closest?.("button, input, select, textarea, label, a"));
-  }
-
-  function setMapFloatingPosition(rawLeft, rawTop, { updateState = true } = {}) {
-    const panel = el("mapFloatingControl");
-    const frame = mapFloatingPositionFrame();
-    if (!frame) return null;
-    const margin = 8;
-    const topMargin = 4;
-    const maxLeft = Math.max(margin, frame.width - panel.offsetWidth - margin);
-    const maxTop = Math.max(topMargin, frame.height - panel.offsetHeight - margin);
-    const left = Math.min(Math.max(rawLeft, margin), maxLeft);
-    const top = Math.min(Math.max(rawTop, topMargin), maxTop);
-    panel.style.left = `${left}px`;
-    panel.style.top = `${top}px`;
-    panel.style.right = "auto";
-    if (updateState) state.mapControlPosition = { left, top };
-    return { left, top };
-  }
-
-  function clampMapFloatingControl() {
-    const panel = el("mapFloatingControl");
-    if (state.mapControlCollapsed) {
-      positionCollapsedMapFloatingControlTopRight();
-      return;
-    }
-    if (state.mapControlMoved) {
-      if (state.mapControlPosition) {
-        setMapFloatingPosition(state.mapControlPosition.left, state.mapControlPosition.top);
-      } else {
-        setMapFloatingPosition(panel.offsetLeft, panel.offsetTop);
-      }
-      return;
-    }
-    positionMapFloatingControlTopRight();
-  }
-
-  function positionCollapsedMapFloatingControlTopRight() {
-    const position = mapFloatingTopRightButtonPosition();
-    if (position) setMapFloatingCollapsedPosition(position.left, position.top);
-  }
-
-  function positionMapFloatingControlTopRight() {
-    const position = mapFloatingTopRightPanelPosition();
-    if (position) {
-      setMapFloatingPosition(position.left, position.top, { updateState: false });
-    }
-    state.mapControlPosition = null;
-  }
-
-  function mapFloatingPositionFrame() {
-    const panel = el("mapFloatingControl");
-    const container = panel.offsetParent || panel.closest(".workspace");
-    const rect = container?.getBoundingClientRect();
-    if (!container || !rect) return null;
-    return {
-      left: rect.left + container.clientLeft,
-      top: rect.top + container.clientTop,
-      width: container.clientWidth,
-      height: container.clientHeight,
-    };
-  }
-
-  function mapFloatingButtonPosition() {
-    const frame = mapFloatingPositionFrame();
-    if (!frame) return null;
-    const buttonRect = el("mapControlReset").getBoundingClientRect();
-    return {
-      left: buttonRect.left - frame.left,
-      top: buttonRect.top - frame.top,
-    };
-  }
-
-  function mapFloatingButtonOffset() {
-    const panelRect = el("mapFloatingControl").getBoundingClientRect();
-    const buttonRect = el("mapControlReset").getBoundingClientRect();
-    return {
-      left: buttonRect.left - panelRect.left,
-      top: buttonRect.top - panelRect.top,
-    };
-  }
-
-  function mapFloatingTopRightPanelPosition() {
-    const panel = el("mapFloatingControl");
-    const frame = mapFloatingPositionFrame();
-    if (!frame) return null;
-    const margin = 8;
-    const topMargin = 4;
-    return {
-      left: Math.max(margin, frame.width - panel.offsetWidth - margin),
-      top: topMargin,
-    };
-  }
-
-  function mapFloatingTopRightButtonPosition() {
-    const panel = el("mapFloatingControl");
-    if (!panel) return null;
-    const wasCollapsed = panel.classList.contains("collapsed");
-    const previous = {
-      left: panel.style.left,
-      top: panel.style.top,
-      right: panel.style.right,
-    };
-    if (wasCollapsed) panel.classList.remove("collapsed");
-    const panelPosition = mapFloatingTopRightPanelPosition();
-    let buttonPosition = null;
-    if (panelPosition) {
-      setMapFloatingPosition(panelPosition.left, panelPosition.top, { updateState: false });
-      const buttonOffset = mapFloatingButtonOffset();
-      buttonPosition = {
-        left: panelPosition.left + buttonOffset.left,
-        top: panelPosition.top + buttonOffset.top,
-      };
-    }
-    panel.style.left = previous.left;
-    panel.style.top = previous.top;
-    panel.style.right = previous.right;
-    if (wasCollapsed) panel.classList.add("collapsed");
-    return buttonPosition;
-  }
-
-  function setMapFloatingCollapsedPosition(rawLeft, rawTop) {
-    const position = setMapFloatingPosition(rawLeft, rawTop, { updateState: false });
-    if (position) state.mapControlCollapsedPosition = position;
-  }
-
-  function syncMapControlCollapseButton() {
+  function syncMapToolbarCollapseButton() {
     const button = el("mapControlReset");
-    const collapsed = Boolean(state.mapControlCollapsed);
+    if (!button) return;
+    const collapsed = Boolean(state.mapToolbarCollapsed);
     const label = collapsed ? "Expand map controls" : "Collapse map controls";
     button.title = label;
     button.setAttribute("aria-label", label);
     button.setAttribute("aria-expanded", String(!collapsed));
-    button.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">${collapsed ? MAP_CONTROL_COLLAPSED_ICON : MAP_CONTROL_EXPANDED_ICON}</svg>`;
   }
 
-  function syncMapFloatingControlCollapsedState() {
-    el("mapFloatingControl").classList.toggle("collapsed", Boolean(state.mapControlCollapsed));
-    syncMapControlCollapseButton();
+  function syncMapToolbarVisibility() {
+    const toolbar = el("mapToolbar");
+    const infoStrip = el("mapInfoStrip");
+    const hidden = state.tool !== "uk_map" || Boolean(state.mapToolbarCollapsed);
+    [toolbar, infoStrip].forEach((region) => {
+      region.classList.toggle("hidden", hidden);
+      region.toggleAttribute("inert", hidden);
+    });
+    if (hidden) {
+      toolbar.setAttribute("aria-hidden", "true");
+      infoStrip.setAttribute("aria-hidden", "true");
+      if (toolbar.contains(document.activeElement) || infoStrip.contains(document.activeElement)) {
+        document.activeElement?.blur?.();
+      }
+    } else {
+      toolbar.removeAttribute("aria-hidden");
+      infoStrip.removeAttribute("aria-hidden");
+    }
+    syncMapToolbarCollapseButton();
   }
 
-  function collapseMapFloatingControl() {
-    const panelPosition = mapFloatingTopRightPanelPosition();
-    if (!panelPosition) return;
-    state.mapControlMoved = false;
-    state.mapControlPosition = null;
-    state.mapControlCollapsed = true;
-    el("mapFloatingControl").classList.add("collapsed");
-    syncMapControlCollapseButton();
-    positionCollapsedMapFloatingControlTopRight();
-  }
-
-  function expandMapFloatingControl() {
-    const buttonPosition = mapFloatingButtonPosition();
-    if (!buttonPosition) return;
-    state.mapControlCollapsed = false;
-    state.mapControlCollapsedPosition = null;
-    el("mapFloatingControl").classList.remove("collapsed");
-    syncMapControlCollapseButton();
-    if (!state.mapControlMoved) {
-      positionMapFloatingControlTopRight();
+  function setMapToolbarCollapsed(collapsed) {
+    const nextCollapsed = Boolean(collapsed);
+    if (state.mapToolbarCollapsed === nextCollapsed) {
+      syncMapToolbarVisibility();
       return;
     }
-    const buttonOffset = mapFloatingButtonOffset();
-    setMapFloatingPosition(buttonPosition.left - buttonOffset.left, buttonPosition.top - buttonOffset.top);
+    state.mapToolbarCollapsed = nextCollapsed;
+    syncMapToolbarVisibility();
+    scheduleMapViewportSync({ mode: "preserve" });
   }
 
-  function toggleMapFloatingControlCollapsed() {
-    if (state.mapControlCollapsed) {
-      expandMapFloatingControl();
-    } else {
-      collapseMapFloatingControl();
-    }
+  function toggleMapToolbarCollapsed() {
+    setMapToolbarCollapsed(!state.mapToolbarCollapsed);
   }
 
-  function bindMapFloatingControls() {
-    syncMapFloatingControlCollapsedState();
+  function bindMapToolbarControls() {
+    syncMapToolbarVisibility();
     syncMapLegendCollapseButton();
-    el("mapControlReset").addEventListener("click", toggleMapFloatingControlCollapsed);
     el("mapLegendToggle").addEventListener("click", toggleMapLegendCollapsed);
     el("mapBaseLayerTiles").addEventListener("change", handleMapLayerControlChange);
     el("mapLevelTiles").addEventListener("change", handleMapLayerControlChange);
@@ -3398,32 +3205,43 @@ export function createUkMapTool({
         if (state.mapLevel === "area") redrawMapLabelsInPlace();
       });
     });
-    [
-      ["mapLineWeight", "mapLineWeight"],
-      ["mapOpacity", "mapOpacity"],
-      ["mapHotspots", "mapHotspots"],
-    ].forEach(([id, stateKey]) => {
-      el(id).addEventListener("input", (event) => {
-        state[stateKey] = id === "mapOpacity" ? opacityFromSliderValue(event.target.value) : Number(event.target.value);
-        updateMapSliderProgress(event.target);
+    document.querySelectorAll("[data-map-line-weight]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const weight = normaliseMapBorderWeight(button.dataset.mapLineWeight);
+        if (weight === state.mapLineWeight) return;
+        state.mapLineWeight = weight;
         clearActiveMapFavourite({ force: true });
-        if (
-          id === "mapLineWeight" && state.mapLevel === "unit"
-        ) {
-          syncFloatingMapControl();
-          return;
-        }
+        syncFloatingMapControl();
+        if (state.mapLevel !== "unit") redrawMapInPlace();
+      });
+    });
+    document.querySelectorAll("[data-map-opacity]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const opacity = normaliseMapOpacity(button.dataset.mapOpacity);
+        if (opacity === state.mapOpacity) return;
+        state.mapOpacity = opacity;
+        clearActiveMapFavourite({ force: true });
+        syncFloatingMapControl();
         redrawMapInPlace();
       });
     });
-    el("mapSmoothing").addEventListener("input", (event) => {
-      state.mapSmoothingLevel = Number(event.target.value);
+    el("mapHotspots").addEventListener("input", (event) => {
+      state.mapHotspots = Number(event.target.value);
       updateMapSliderProgress(event.target);
       clearActiveMapFavourite({ force: true });
-      syncFloatingMapControl();
-      if (state.mapLevel !== "sector") return;
-      captureMapView("smoothing-change");
-      refreshMap();
+      redrawMapInPlace();
+    });
+    document.querySelectorAll("[data-map-smoothing]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const level = Math.max(0, Math.min(5, Math.round(Number(button.dataset.mapSmoothing) || 0)));
+        if (level === state.mapSmoothingLevel) return;
+        state.mapSmoothingLevel = level;
+        clearActiveMapFavourite({ force: true });
+        syncFloatingMapControl();
+        if (state.mapLevel !== "sector") return;
+        captureMapView("smoothing-change");
+        refreshMap();
+      });
     });
     el("mapPostcodeSearch").addEventListener("click", searchMapPostcode);
     el("mapPostcodeClear").addEventListener("click", () => {
@@ -3440,12 +3258,10 @@ export function createUkMapTool({
 
   function activate() {
     initMap().then(() => {
-      syncMapFloatingControlCollapsedState();
+      syncMapToolbarVisibility();
       syncFloatingMapControl();
       syncMapControls();
-      clampMapFloatingControl();
       requestAnimationFrame(() => {
-        clampMapFloatingControl();
         scheduleMapViewportSync({ mode: "preserve" });
       });
     }).catch((error) => {
@@ -3508,8 +3324,8 @@ export function createUkMapTool({
   }
 
   function bindControls() {
-    setupMapFloatingControlDrag();
-    bindMapFloatingControls();
+    bindSettingsStripOverflowCue(el("mapToolbarScroll"));
+    bindMapToolbarControls();
     el("ukMap").addEventListener("click", handleMapPopupAction, true);
     el("ukMap").addEventListener("contextmenu", handleMapContextMenu, true);
     el("ukMap").addEventListener("keydown", handleMapContextMenuKeydown, true);
@@ -3522,7 +3338,7 @@ export function createUkMapTool({
   }
 
   function syncViewport(options = {}) {
-    clampMapFloatingControl();
+    syncMapToolbarVisibility();
     scheduleMapViewportSync(options);
   }
 

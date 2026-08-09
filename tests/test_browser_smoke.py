@@ -2318,7 +2318,7 @@ COPY (
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
-    def test_uk_map_overlays_start_collapsed_without_expanded_frame(self) -> None:
+    def test_uk_map_control_strip_is_full_bleed_collapsible_and_preserves_view(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "sample.csv"
             data_path.write_text(
@@ -2341,59 +2341,13 @@ COPY (
                     page.on("pageerror", lambda error: page_errors.append(str(error)))
                     page.add_init_script(
                         """
-                        window.__ukMapLegendVisibleExpanded = false;
-                        window.__ukMapControlVisibleExpanded = false;
-                        window.__ukMapLegendMonitorActive = true;
-                        window.__ukMapStartupFrameSeen = false;
-                        window.__ukMapStartupLegacyCardSeen = false;
-                        window.__ukMapStartupMonitorActive = true;
-                        const hasNonZeroPadding = (style) => [
-                          style.paddingTop,
-                          style.paddingRight,
-                          style.paddingBottom,
-                          style.paddingLeft,
-                        ].some((value) => value !== "0px");
-                        const sampleUkMapStartupWorkspace = () => {
-                          const visual = document.querySelector("#visualArea");
-                          const workspace = document.querySelector(".workspace");
-                          const main = document.querySelector("main");
-                          if (visual?.classList.contains("startup-mode") && workspace && main) {
-                            window.__ukMapStartupFrameSeen = true;
-                            const workspaceStyle = getComputedStyle(workspace);
-                            const mainStyle = getComputedStyle(main);
-                            if (
-                              workspaceStyle.backgroundColor !== "rgba(0, 0, 0, 0)"
-                              || workspaceStyle.borderTopWidth !== "0px"
-                              || workspaceStyle.borderTopLeftRadius !== "0px"
-                              || workspaceStyle.boxShadow !== "none"
-                              || hasNonZeroPadding(workspaceStyle)
-                              || hasNonZeroPadding(mainStyle)
-                            ) {
-                              window.__ukMapStartupLegacyCardSeen = true;
-                            }
-                          }
-                          if (window.__ukMapStartupMonitorActive) requestAnimationFrame(sampleUkMapStartupWorkspace);
+                        window.__ukMapSummaryRequests = 0;
+                        const originalFetch = window.fetch.bind(window);
+                        window.fetch = (...args) => {
+                          const url = String(args[0]?.url || args[0] || "");
+                          if (url.includes("/api/uk-map/summary")) window.__ukMapSummaryRequests += 1;
+                          return originalFetch(...args);
                         };
-                        const sampleUkMapLegend = () => {
-                          const legend = document.querySelector("#mapLegend");
-                          const body = document.querySelector("#mapLegendBody");
-                          const control = document.querySelector("#mapFloatingControl");
-                          if (legend && body) {
-                            const visible = !legend.classList.contains("hidden") && legend.offsetParent !== null;
-                            const expanded = !legend.classList.contains("collapsed")
-                              || getComputedStyle(body).display !== "none";
-                            if (visible && expanded) window.__ukMapLegendVisibleExpanded = true;
-                          }
-                          if (control) {
-                            const visible = !control.classList.contains("hidden") && control.offsetParent !== null;
-                            if (visible && !control.classList.contains("collapsed")) {
-                              window.__ukMapControlVisibleExpanded = true;
-                            }
-                          }
-                          if (window.__ukMapLegendMonitorActive) requestAnimationFrame(sampleUkMapLegend);
-                        };
-                        requestAnimationFrame(sampleUkMapStartupWorkspace);
-                        requestAnimationFrame(sampleUkMapLegend);
                         """
                     )
                     try:
@@ -2401,22 +2355,48 @@ COPY (
                         page.locator("#datasetMeta").get_by_text("sample.csv").wait_for(timeout=10_000)
                         page.locator("#ukMap:not(.hidden)").wait_for(timeout=10_000)
                         page.locator("#mapZoomIn").wait_for(timeout=10_000)
-                        page.evaluate("() => { window.__ukMapStartupMonitorActive = false; }")
-                        self.assertTrue(page.evaluate("() => window.__ukMapStartupFrameSeen"))
-                        self.assertFalse(page.evaluate("() => window.__ukMapStartupLegacyCardSeen"))
+                        page.locator("#mapToolbar:not(.hidden)").wait_for(timeout=10_000)
+                        page.wait_for_function(
+                            '() => document.querySelector("#mapGroupMeta")?.textContent.includes("areas matched")',
+                            timeout=20_000,
+                        )
                         map_surface = page.evaluate(
                             """
                             () => {
                               const main = document.querySelector("main");
+                              const toolbar = document.querySelector("#mapToolbar");
+                              const infoStrip = document.querySelector("#mapInfoStrip");
                               const visual = document.querySelector("#visualArea");
                               const workspace = document.querySelector(".workspace");
                               const map = document.querySelector("#ukMap");
                               const mainRect = main.getBoundingClientRect();
+                              const toolbarRect = toolbar.getBoundingClientRect();
+                              const infoRect = infoStrip.getBoundingClientRect();
                               const visualRect = visual.getBoundingClientRect();
                               const workspaceRect = workspace.getBoundingClientRect();
                               const mapRect = map.getBoundingClientRect();
+                              const baseImages = [...document.querySelectorAll("#mapBaseLayerTiles .map-strip-option img")]
+                                .map((node) => node.getBoundingClientRect());
+                              const firstResolutionImage = document.querySelector(
+                                "#mapLevelTiles .map-strip-option:first-child img"
+                              ).getBoundingClientRect();
+                              const firstLabel = document.querySelector(
+                                "#mapBaseLayerTiles .map-strip-option:first-child > span > span:last-child"
+                              );
+                              const firstOption = document.querySelector(
+                                "#mapBaseLayerTiles .map-strip-option:first-child > span"
+                              );
+                              const extremesTitle = document.querySelector("#mapHotspotsControl h3");
+                              const extremesTitleStyle = getComputedStyle(extremesTitle);
+                              const extremesLow = document.querySelector("#mapHotspotsMinLabel");
+                              const extremesSlider = document.querySelector("#mapHotspots");
+                              const searchTitle = document.querySelector(".map-strip-postcode-control h3");
+                              const searchTitleStyle = getComputedStyle(searchTitle);
+                              const postcodeInput = document.querySelector("#mapPostcodeInput");
+                              const postcodeInputStyle = getComputedStyle(postcodeInput);
                               const workspaceStyle = getComputedStyle(workspace);
                               const mapStyle = getComputedStyle(map);
+                              const headerStyle = getComputedStyle(document.querySelector("header"));
                               return {
                                 mainPadding: getComputedStyle(main).padding,
                                 workspaceBackground: workspaceStyle.backgroundColor,
@@ -2425,10 +2405,35 @@ COPY (
                                 workspaceShadow: workspaceStyle.boxShadow,
                                 workspacePadding: workspaceStyle.padding,
                                 mapRadius: mapStyle.borderTopLeftRadius,
+                                stripHeight: toolbarRect.height,
+                                infoStripHeight: infoRect.height,
+                                infoStripTopGap: infoRect.top - toolbarRect.bottom,
+                                sharedStripHeight: parseFloat(getComputedStyle(document.documentElement)
+                                  .getPropertyValue("--app-control-strip-height")),
+                                tileTopGap: baseImages[0].top - toolbarRect.top,
+                                imageGap: baseImages[1].left - baseImages[0].right,
+                                sectionImageGap: firstResolutionImage.left - baseImages.at(-1).right,
+                                labelBottomGap: toolbarRect.bottom - firstLabel.getBoundingClientRect().bottom,
+                                labelClipped: firstLabel.scrollHeight > firstLabel.clientHeight,
+                                selectedBoxShadow: getComputedStyle(firstOption).boxShadow,
+                                extremesTitleTextLeft: extremesTitle.getBoundingClientRect().left
+                                  + parseFloat(extremesTitleStyle.paddingLeft),
+                                extremesLowLeft: extremesLow.getBoundingClientRect().left,
+                                extremesSliderWidth: extremesSlider.getBoundingClientRect().width,
+                                searchTitle: searchTitle.textContent.trim(),
+                                searchTitleTextLeft: searchTitle.getBoundingClientRect().left
+                                  + parseFloat(searchTitleStyle.paddingLeft),
+                                postcodeTextLeft: postcodeInput.getBoundingClientRect().left
+                                  + parseFloat(postcodeInputStyle.paddingLeft),
+                                postcodeBorderBottom: postcodeInputStyle.borderBottomWidth,
+                                headerBorderWidth: headerStyle.borderBottomWidth,
+                                headerBorderColor: headerStyle.borderBottomColor,
+                                panelColor: getComputedStyle(toolbar).backgroundColor,
                                 visualGaps: [
                                   visualRect.left - mainRect.left,
                                   mainRect.right - visualRect.right,
-                                  visualRect.top - mainRect.top,
+                                  toolbarRect.top - mainRect.top,
+                                  visualRect.top - infoRect.bottom,
                                   mainRect.bottom - visualRect.bottom,
                                 ],
                                 workspaceGaps: [
@@ -2454,8 +2459,147 @@ COPY (
                         self.assertEqual(map_surface["workspaceShadow"], "none")
                         self.assertEqual(map_surface["workspacePadding"], "0px")
                         self.assertEqual(map_surface["mapRadius"], "0px")
+                        self.assertAlmostEqual(map_surface["stripHeight"], 50, delta=0.5)
+                        self.assertAlmostEqual(
+                            map_surface["stripHeight"], map_surface["sharedStripHeight"], delta=0.5
+                        )
+                        self.assertAlmostEqual(map_surface["infoStripHeight"], 16, delta=0.5)
+                        self.assertAlmostEqual(map_surface["infoStripTopGap"], 0, delta=0.5)
+                        self.assertAlmostEqual(map_surface["tileTopGap"], 0, delta=0.5)
+                        self.assertAlmostEqual(map_surface["imageGap"], 2, delta=0.5)
+                        self.assertAlmostEqual(map_surface["sectionImageGap"], 5, delta=0.5)
+                        self.assertGreaterEqual(map_surface["labelBottomGap"], 0)
+                        self.assertLessEqual(map_surface["labelBottomGap"], 2)
+                        self.assertFalse(map_surface["labelClipped"])
+                        self.assertEqual(map_surface["selectedBoxShadow"], "none")
+                        self.assertAlmostEqual(
+                            map_surface["extremesLowLeft"], map_surface["extremesTitleTextLeft"], delta=0.5
+                        )
+                        self.assertAlmostEqual(map_surface["extremesSliderWidth"], 108, delta=0.5)
+                        self.assertEqual(map_surface["searchTitle"], "Search")
+                        self.assertAlmostEqual(
+                            map_surface["postcodeTextLeft"], map_surface["searchTitleTextLeft"], delta=0.5
+                        )
+                        self.assertEqual(map_surface["postcodeBorderBottom"], "0px")
+                        self.assertEqual(map_surface["headerBorderWidth"], "1px")
+                        self.assertNotEqual(map_surface["headerBorderColor"], map_surface["panelColor"])
+                        tooltip_tail_style = page.evaluate(
+                            """
+                            () => {
+                              const originalDark = document.body.classList.contains("dark");
+                              const popup = document.createElement("div");
+                              popup.className = "maplibregl-popup maplibregl-popup-anchor-bottom maplibre-tooltip";
+                              popup.innerHTML = '<div class="maplibregl-popup-tip"></div>'
+                                + '<div class="maplibregl-popup-content">Tooltip</div>';
+                              document.querySelector("#ukMap").append(popup);
+                              const tip = popup.querySelector(".maplibregl-popup-tip");
+                              const content = popup.querySelector(".maplibregl-popup-content");
+                              const snapshot = (dark) => {
+                                document.body.classList.toggle("dark", dark);
+                                const tipStyle = getComputedStyle(tip);
+                                const contentStyle = getComputedStyle(content);
+                                return {
+                                  tipBackground: tipStyle.backgroundColor,
+                                  tipBorder: tipStyle.borderTopColor,
+                                  tipBorderWidth: tipStyle.borderTopWidth,
+                                  transparentSideBorder: tipStyle.borderLeftColor,
+                                  contentBackground: contentStyle.backgroundColor,
+                                  contentPaddingTop: contentStyle.paddingTop,
+                                  contentPaddingBottom: contentStyle.paddingBottom,
+                                };
+                              };
+                              const result = { light: snapshot(false), dark: snapshot(true) };
+                              document.body.classList.toggle("dark", originalDark);
+                              popup.remove();
+                              return result;
+                            }
+                            """
+                        )
+                        for theme_style in tooltip_tail_style.values():
+                            self.assertEqual(theme_style["tipBackground"], "rgba(0, 0, 0, 0)")
+                            self.assertEqual(theme_style["tipBorder"], theme_style["contentBackground"])
+                            self.assertEqual(theme_style["tipBorderWidth"], "7px")
+                            self.assertEqual(theme_style["transparentSideBorder"], "rgba(0, 0, 0, 0)")
+                            self.assertEqual(theme_style["contentPaddingTop"], "6px")
+                            self.assertEqual(theme_style["contentPaddingBottom"], "6px")
+                        self.assertNotEqual(
+                            tooltip_tail_style["light"]["contentBackground"],
+                            tooltip_tail_style["dark"]["contentBackground"],
+                        )
                         for gaps in (map_surface["visualGaps"], map_surface["workspaceGaps"], map_surface["mapGaps"]):
                             self.assertTrue(all(abs(gap) <= 0.5 for gap in gaps))
+                        status_line = page.evaluate(
+                            """
+                            () => {
+                              const status = document.querySelector("#mapToolbarStatus");
+                              const children = [...status.children].filter((node) => !node.hidden);
+                              const rows = children.map((node) => {
+                                const rect = node.getBoundingClientRect();
+                                return { top: rect.top, bottom: rect.bottom, center: (rect.top + rect.bottom) / 2 };
+                              });
+                              return {
+                                fontSize: getComputedStyle(status).fontSize,
+                                rows,
+                                separators: [...status.querySelectorAll(".map-info-separator")]
+                                  .map((node) => {
+                                    const style = getComputedStyle(node);
+                                    return {
+                                      text: node.textContent,
+                                      hidden: node.hidden,
+                                      marginLeft: style.marginLeft,
+                                      marginRight: style.marginRight,
+                                    };
+                                  }),
+                                metricHidden: document.querySelector("#mapControlMetric").hidden,
+                                gap: getComputedStyle(status).gap,
+                                internalSeparatorMargins: (() => {
+                                  const node = document.querySelector("#mapGroupMeta > div:nth-child(2)");
+                                  const style = getComputedStyle(node, "::before");
+                                  return { left: style.marginLeft, right: style.marginRight };
+                                })(),
+                              };
+                            }
+                            """
+                        )
+                        self.assertEqual(status_line["fontSize"], "11px")
+                        self.assertEqual(
+                            [(item["text"], item["hidden"]) for item in status_line["separators"]],
+                            [("·", status_line["metricHidden"]), ("·", False)],
+                        )
+                        self.assertEqual(status_line["gap"], "0px")
+                        for separator in status_line["separators"]:
+                            self.assertEqual(separator["marginLeft"], status_line["internalSeparatorMargins"]["left"])
+                            self.assertEqual(separator["marginRight"], status_line["internalSeparatorMargins"]["right"])
+                        self.assertTrue(status_line["rows"])
+                        self.assertTrue(all(
+                            abs(row["center"] - status_line["rows"][0]["center"]) <= 0.5
+                            for row in status_line["rows"][1:]
+                        ))
+                        self.assertEqual(
+                            page.locator("[data-map-line-weight]").all_inner_texts(),
+                            ["Off", "Thin", "Bold"],
+                        )
+                        self.assertEqual(page.locator("#mapBorderThin").get_attribute("aria-pressed"), "true")
+                        border_requests = page.evaluate("() => window.__ukMapSummaryRequests")
+                        page.locator("#mapBorderBold").click()
+                        self.assertEqual(page.locator("#mapBorderBold").get_attribute("aria-pressed"), "true")
+                        page.locator("#mapBorderOff").click()
+                        self.assertEqual(page.locator("#mapBorderOff").get_attribute("aria-pressed"), "true")
+                        page.locator("#mapBorderThin").click()
+                        self.assertEqual(page.locator("#mapBorderThin").get_attribute("aria-pressed"), "true")
+                        self.assertEqual(page.evaluate("() => window.__ukMapSummaryRequests"), border_requests)
+                        self.assertEqual(
+                            page.locator("[data-map-opacity]").all_inner_texts(),
+                            ["Faint", "Medium", "Solid"],
+                        )
+                        self.assertEqual(page.locator("#mapStrengthSolid").get_attribute("aria-pressed"), "true")
+                        page.locator("#mapStrengthFaint").click()
+                        self.assertEqual(page.locator("#mapStrengthFaint").get_attribute("aria-pressed"), "true")
+                        page.locator("#mapStrengthMedium").click()
+                        self.assertEqual(page.locator("#mapStrengthMedium").get_attribute("aria-pressed"), "true")
+                        page.locator("#mapStrengthSolid").click()
+                        self.assertEqual(page.locator("#mapStrengthSolid").get_attribute("aria-pressed"), "true")
+                        self.assertEqual(page.evaluate("() => window.__ukMapSummaryRequests"), border_requests)
                         self.assertEqual(
                             page.locator("#mapZoomIn").evaluate("node => getComputedStyle(node).fontWeight"),
                             "600",
@@ -2469,15 +2613,11 @@ COPY (
                             () => {
                               const legend = document.querySelector("#mapLegend");
                               const body = document.querySelector("#mapLegendBody");
-                              const control = document.querySelector("#mapFloatingControl");
                               return legend
                                 && body
-                                && control
                                 && !legend.classList.contains("hidden")
                                 && legend.classList.contains("collapsed")
-                                && getComputedStyle(body).display === "none"
-                                && !control.classList.contains("hidden")
-                                && control.classList.contains("collapsed");
+                                && getComputedStyle(body).display === "none";
                             }
                             """,
                             timeout=20_000,
@@ -2490,57 +2630,65 @@ COPY (
                         self.assertEqual(legend_toggle.get_attribute("title"), "Expand legend")
                         self.assertEqual(legend_toggle.get_attribute("aria-label"), "Expand legend")
                         self.assertEqual(legend_toggle.get_attribute("aria-expanded"), "false")
-                        self.assertFalse(page.evaluate("() => window.__ukMapLegendVisibleExpanded"))
                         control_toggle = page.locator("#mapControlReset")
-                        self.assertEqual(control_toggle.get_attribute("title"), "Expand map controls")
-                        self.assertEqual(control_toggle.get_attribute("aria-label"), "Expand map controls")
-                        self.assertEqual(control_toggle.get_attribute("aria-expanded"), "false")
-                        collapsed_toggle_style = control_toggle.evaluate(
-                            """
-                            (button) => {
-                              const style = getComputedStyle(button);
-                              const rect = button.getBoundingClientRect();
-                              return {
-                                background: style.backgroundColor,
-                                border: style.borderTopWidth,
-                                height: rect.height,
-                                width: rect.width,
-                              };
-                            }
-                            """
-                        )
-                        self.assertEqual(collapsed_toggle_style["background"], "rgba(0, 0, 0, 0)")
-                        self.assertEqual(collapsed_toggle_style["border"], "0px")
-                        self.assertAlmostEqual(collapsed_toggle_style["height"], 36, delta=0.5)
-                        self.assertAlmostEqual(collapsed_toggle_style["width"], 36, delta=0.5)
-                        self.assertFalse(page.evaluate("() => window.__ukMapControlVisibleExpanded"))
-                        page.evaluate("() => { window.__ukMapLegendMonitorActive = false; }")
-
-                        control_toggle.click()
-                        page.wait_for_function(
-                            '() => !document.querySelector("#mapFloatingControl")?.classList.contains("collapsed")'
-                        )
                         self.assertEqual(control_toggle.get_attribute("title"), "Collapse map controls")
                         self.assertEqual(control_toggle.get_attribute("aria-label"), "Collapse map controls")
                         self.assertEqual(control_toggle.get_attribute("aria-expanded"), "true")
-                        expanded_toggle_style = control_toggle.evaluate(
+                        self.assertTrue(control_toggle.evaluate("node => node.parentElement.firstElementChild === node"))
+                        self.assertLess(
+                            control_toggle.bounding_box()["y"], page.locator("#mapZoomIn").bounding_box()["y"]
+                        )
+                        expanded_view = page.evaluate(
                             """
-                            (button) => {
-                              const style = getComputedStyle(button);
+                            () => {
+                              const map = document.querySelector("#ukMap")._lucidumMap;
+                              const center = map.getCenter();
                               return {
-                                background: style.backgroundColor,
-                                border: style.borderTopWidth,
+                                center: { lat: center.lat, lng: center.lng },
+                                zoom: map.getZoom(),
+                                mapHeight: document.querySelector("#ukMap").getBoundingClientRect().height,
+                                requests: window.__ukMapSummaryRequests,
                               };
                             }
                             """
                         )
-                        self.assertEqual(expanded_toggle_style["background"], "rgba(0, 0, 0, 0)")
-                        self.assertEqual(expanded_toggle_style["border"], "0px")
                         control_toggle.click()
                         page.wait_for_function(
-                            '() => document.querySelector("#mapFloatingControl")?.classList.contains("collapsed")'
+                            '() => document.querySelector("#mapToolbar")?.classList.contains("hidden")'
+                            ' && document.querySelector("#mapInfoStrip")?.classList.contains("hidden")'
                         )
+                        page.wait_for_timeout(100)
+                        self.assertEqual(control_toggle.get_attribute("title"), "Expand map controls")
+                        self.assertEqual(control_toggle.get_attribute("aria-label"), "Expand map controls")
                         self.assertEqual(control_toggle.get_attribute("aria-expanded"), "false")
+                        collapsed_view = page.evaluate(
+                            """
+                            () => {
+                              const map = document.querySelector("#ukMap")._lucidumMap;
+                              const center = map.getCenter();
+                              return {
+                                center: { lat: center.lat, lng: center.lng },
+                                zoom: map.getZoom(),
+                                mapHeight: document.querySelector("#ukMap").getBoundingClientRect().height,
+                                requests: window.__ukMapSummaryRequests,
+                              };
+                            }
+                            """
+                        )
+                        self.assertAlmostEqual(
+                            collapsed_view["mapHeight"] - expanded_view["mapHeight"], 66, delta=1
+                        )
+                        self.assertAlmostEqual(collapsed_view["center"]["lat"], expanded_view["center"]["lat"], places=6)
+                        self.assertAlmostEqual(collapsed_view["center"]["lng"], expanded_view["center"]["lng"], places=6)
+                        self.assertAlmostEqual(collapsed_view["zoom"], expanded_view["zoom"], places=6)
+                        self.assertEqual(collapsed_view["requests"], expanded_view["requests"])
+
+                        control_toggle.click()
+                        page.wait_for_function(
+                            '() => !document.querySelector("#mapToolbar")?.classList.contains("hidden")'
+                            ' && !document.querySelector("#mapInfoStrip")?.classList.contains("hidden")'
+                        )
+                        self.assertEqual(control_toggle.get_attribute("aria-expanded"), "true")
 
                         legend_toggle.click()
                         page.wait_for_function(
@@ -2656,11 +2804,7 @@ COPY (
                             """,
                             timeout=20_000,
                         )
-                        page.locator("#mapControlReset").click()
-                        page.wait_for_function(
-                            '() => !document.querySelector("#mapFloatingControl")?.classList.contains("collapsed")',
-                            timeout=10_000,
-                        )
+                        page.locator("#mapToolbar:not(.hidden)").wait_for(timeout=10_000)
                         area_meta = page.locator("#mapGroupMeta").inner_text()
                         self.assertIn("2 / 124 areas matched", area_meta)
                         self.assertIn("1 row unmatched (33.3%)", area_meta)
@@ -2691,37 +2835,51 @@ COPY (
                                 rows: typography("#mapRowMeta"),
                                 metricHidden: document.querySelector("#mapControlMetric")?.hidden,
                                 metricRects: document.querySelector("#mapControlMetric")?.getClientRects().length,
-                                headerTop: document.querySelector(".map-floating-header")?.getBoundingClientRect().top,
-                                lineTops: [
+                                toolbarHeight: document.querySelector("#mapToolbar")?.getBoundingClientRect().height,
+                                infoStripHeight: document.querySelector("#mapInfoStrip")?.getBoundingClientRect().height,
+                                statusRight: document.querySelector("#mapToolbarStatus")?.getBoundingClientRect().right,
+                                infoStripRight: document.querySelector("#mapInfoStrip")?.getBoundingClientRect().right,
+                                rowTop: document.querySelector("#mapRowMeta")?.getBoundingClientRect().top,
+                                filterTop: document.querySelector("#mapControlFilter")?.getBoundingClientRect().top,
+                                separator: (() => {
+                                  const node = document.querySelector("#mapGroupMeta > div:nth-child(2)");
+                                  const style = getComputedStyle(node, "::before");
+                                  return {
+                                    content: style.content,
+                                    marginLeft: parseFloat(style.marginLeft),
+                                    marginRight: parseFloat(style.marginRight),
+                                  };
+                                })(),
+                                metaTops: [
                                   ".map-group-meta-count",
                                   ".map-shapefile-match-status",
                                   ".map-shapefile-missing-status",
-                                  "#mapRowMeta",
-                                  "#mapControlFilterText",
                                 ].map((selector) => document.querySelector(selector)?.getBoundingClientRect().top),
+                                statusTitle: document.querySelector("#mapGroupMeta")?.title,
                               };
                             }
                             """
                         )
                         self.assertEqual(inactive_filter_typography["filterText"], "no filter")
                         self.assertEqual(inactive_filter_typography["filter"], inactive_filter_typography["rows"])
-                        line_tops = inactive_filter_typography["lineTops"]
-                        self.assertTrue(all(top is not None for top in line_tops), line_tops)
+                        meta_tops = inactive_filter_typography["metaTops"]
+                        self.assertTrue(all(top is not None for top in meta_tops), meta_tops)
                         self.assertTrue(inactive_filter_typography["metricHidden"])
                         self.assertEqual(inactive_filter_typography["metricRects"], 0)
+                        self.assertAlmostEqual(inactive_filter_typography["toolbarHeight"], 50, delta=0.5)
+                        self.assertAlmostEqual(inactive_filter_typography["infoStripHeight"], 16, delta=0.5)
                         self.assertAlmostEqual(
-                            line_tops[0] - inactive_filter_typography["headerTop"],
-                            2,
+                            inactive_filter_typography["statusRight"],
+                            inactive_filter_typography["infoStripRight"],
                             delta=0.5,
                         )
-                        line_steps = [
-                            line_tops[index + 1] - line_tops[index]
-                            for index in range(len(line_tops) - 1)
-                        ]
-                        self.assertTrue(
-                            all(abs(step - line_steps[0]) <= 0.5 for step in line_steps[1:]),
-                            line_steps,
-                        )
+                        self.assertTrue(all(abs(top - meta_tops[0]) <= 0.5 for top in meta_tops[1:]))
+                        self.assertAlmostEqual(inactive_filter_typography["rowTop"], meta_tops[0], delta=0.5)
+                        self.assertAlmostEqual(inactive_filter_typography["filterTop"], meta_tops[0], delta=0.5)
+                        self.assertIn("·", inactive_filter_typography["separator"]["content"])
+                        self.assertGreater(inactive_filter_typography["separator"]["marginLeft"], 0)
+                        self.assertGreater(inactive_filter_typography["separator"]["marginRight"], 0)
+                        self.assertIn("1 row unmatched (33.3%)", inactive_filter_typography["statusTitle"])
                         match_status_layout = page.evaluate(
                             """
                             () => {
@@ -2777,7 +2935,7 @@ COPY (
                             timeout=10_000,
                         )
 
-                        area_panel_height = page.locator("#mapFloatingControl").evaluate(
+                        area_panel_height = page.locator("#mapToolbar").evaluate(
                             "node => node.getBoundingClientRect().height"
                         )
                         page.evaluate(
@@ -2796,7 +2954,7 @@ COPY (
                             """,
                             timeout=10_000,
                         )
-                        pending_panel_height = page.locator("#mapFloatingControl").evaluate(
+                        pending_panel_height = page.locator("#mapToolbar").evaluate(
                             "node => node.getBoundingClientRect().height"
                         )
                         self.assertAlmostEqual(pending_panel_height, area_panel_height, delta=1)
@@ -2812,7 +2970,7 @@ COPY (
                             """,
                             timeout=20_000,
                         )
-                        sector_panel_height = page.locator("#mapFloatingControl").evaluate(
+                        sector_panel_height = page.locator("#mapToolbar").evaluate(
                             "node => node.getBoundingClientRect().height"
                         )
                         self.assertAlmostEqual(sector_panel_height, area_panel_height, delta=1)
@@ -2850,7 +3008,7 @@ COPY (
                             "() => performance.now() - window.__lucidumDelayedUnitStartedAt"
                         )
                         self.assertGreaterEqual(delayed_unit_elapsed, 450)
-                        unit_pending_panel_height = page.locator("#mapFloatingControl").evaluate(
+                        unit_pending_panel_height = page.locator("#mapToolbar").evaluate(
                             "node => node.getBoundingClientRect().height"
                         )
                         self.assertAlmostEqual(unit_pending_panel_height, area_panel_height, delta=1)
@@ -2861,7 +3019,7 @@ COPY (
                             '() => document.querySelector("#mapGroupMeta")?.textContent.includes("units plotted")',
                             timeout=20_000,
                         )
-                        unit_panel_height = page.locator("#mapFloatingControl").evaluate(
+                        unit_panel_height = page.locator("#mapToolbar").evaluate(
                             "node => node.getBoundingClientRect().height"
                         )
                         self.assertAlmostEqual(unit_panel_height, area_panel_height, delta=1)
@@ -2870,8 +3028,8 @@ COPY (
                         self.assertTrue(page.locator("#mapSmoothingControl").is_hidden())
                         unit_statuses = page.locator("#mapGroupMeta .map-unit-status")
                         self.assertEqual(unit_statuses.all_inner_texts(), [
-                            "No units missing KPI value",
-                            "No units missing coordinates",
+                            "no units missing KPI value",
+                            "no units missing coordinates",
                         ])
                         self.assertTrue(all(
                             not status.evaluate(
@@ -2887,7 +3045,7 @@ COPY (
                             [page.locator("#mapRowMeta").evaluate("node => getComputedStyle(node).color")] * 2,
                         )
                         self.assertIn(
-                            "No units missing coordinates",
+                            "no units missing coordinates",
                             page.locator("#mapMatchLiveStatus").inner_text(),
                         )
 
@@ -2930,7 +3088,7 @@ COPY (
                             any("Computing map..." in mutation for mutation in fast_area_meta_mutations),
                             fast_area_meta_mutations,
                         )
-                        restored_area_panel_height = page.locator("#mapFloatingControl").evaluate(
+                        restored_area_panel_height = page.locator("#mapToolbar").evaluate(
                             "node => node.getBoundingClientRect().height"
                         )
                         self.assertAlmostEqual(restored_area_panel_height, area_panel_height, delta=1)
@@ -2965,14 +3123,14 @@ COPY (
                               return meta.includes("0 /")
                                 && meta.includes("sectors matched")
                                 && meta.includes("1 row unmatched (100.0%)")
-                                && meta.includes("No rows missing sector")
+                                && meta.includes("no rows missing sector")
                                 && document.querySelector("#mapLegend")?.classList.contains("hidden");
                             }
                             """,
                             timeout=20_000,
                         )
                         zero_missing_status = page.locator("#mapGroupMeta .map-shapefile-missing-status")
-                        self.assertEqual(zero_missing_status.inner_text(), "No rows missing sector")
+                        self.assertEqual(zero_missing_status.inner_text(), "no rows missing sector")
                         self.assertFalse(
                             zero_missing_status.evaluate(
                                 "node => node.classList.contains('map-shapefile-match-status--warning')"
@@ -3331,14 +3489,7 @@ COPY (
                         lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200,
                         timeout=10_000,
                     ):
-                        page.locator("#mapSmoothing").evaluate(
-                            """
-                            (input) => {
-                              input.value = "2";
-                              input.dispatchEvent(new Event("input", { bubbles: true }));
-                            }
-                            """
-                        )
+                        page.locator("#mapSmoothing2").click()
                     page.wait_for_function(
                         '() => document.querySelector("#mapGroupMeta .map-group-meta-count")?.textContent.trim() === "N2 sector smoothing"',
                         timeout=10_000,
@@ -4495,18 +4646,18 @@ COPY (
                                 self.assertTrue(profile_mobile_layout["toolbarHasNoOverflow"])
                                 self.assertEqual(profile_mobile_layout["toolbarHeight"], 90)
                             if tool_button == "#ukMapTool":
-                                page.locator("#mapFloatingControl:not(.hidden)").wait_for(timeout=10_000)
+                                page.locator("#mapToolbar:not(.hidden)").wait_for(timeout=10_000)
                                 page.wait_for_function(
                                     """
                                     () => {
-                                      const control = document.querySelector("#mapFloatingControl");
+                                      const control = document.querySelector("#mapToolbar");
                                       const controlButton = document.querySelector("#mapControlReset");
                                       const legend = document.querySelector("#mapLegend");
                                       const legendButton = document.querySelector("#mapLegendToggle");
                                       const legendBody = document.querySelector("#mapLegendBody");
                                       if (!control || !controlButton || !legend || !legendButton || !legendBody) return false;
-                                      return control.classList.contains("collapsed")
-                                        && controlButton.getAttribute("aria-expanded") === "false"
+                                      return !control.classList.contains("hidden")
+                                        && controlButton.getAttribute("aria-expanded") === "true"
                                         && !legend.classList.contains("hidden")
                                         && legend.classList.contains("collapsed")
                                         && legendButton.getAttribute("aria-expanded") === "false"
@@ -4515,26 +4666,35 @@ COPY (
                                     """,
                                     timeout=20_000,
                                 )
-                                page.locator("#mapControlReset").click()
-                                page.wait_for_function('() => !document.querySelector("#mapFloatingControl")?.classList.contains("collapsed")', timeout=10_000)
                                 mobile_map_panel = page.evaluate(
                                     """
                                     () => {
-                                      const columnCount = (selector) => {
-                                        const columns = getComputedStyle(document.querySelector(selector)).gridTemplateColumns;
-                                        return columns.split(" ").filter(Boolean).length;
-                                      };
-                                      const visibleControls = [...document.querySelectorAll(".map-slider-control")]
+                                      const toolbar = document.querySelector("#mapToolbar");
+                                      const scroll = document.querySelector("#mapToolbarScroll");
+                                      const infoStrip = document.querySelector("#mapInfoStrip");
+                                      const visibleControls = [...document.querySelectorAll(".map-strip-slider-control")]
                                         .filter((control) => control.offsetParent !== null);
                                       const endpointLabels = visibleControls.flatMap((control) => [
-                                        control.querySelector(".slider-scale b:first-child"),
-                                        control.querySelector(".slider-scale b:last-child"),
+                                        control.querySelector(".map-strip-slider-row b:first-child"),
+                                        control.querySelector(".map-strip-slider-row b:last-child"),
                                       ]).filter(Boolean);
+                                      const firstOption = document.querySelector(".map-strip-option > span");
+                                      const firstImage = firstOption?.querySelector("img");
+                                      const firstLabel = firstOption?.querySelector("span");
                                       return {
-                                        width: document.querySelector("#mapFloatingControl").getBoundingClientRect().width,
-                                        baseColumns: columnCount("#mapBaseLayerTiles"),
-                                        levelColumns: columnCount("#mapLevelTiles"),
-                                        paletteColumns: columnCount(".map-palette-buttons"),
+                                        height: toolbar.getBoundingClientRect().height,
+                                        baseOptions: document.querySelectorAll('#mapBaseLayerTiles input[name="baseMap"]').length,
+                                        levelOptions: document.querySelectorAll('#mapLevelTiles input[name="mapLevel"]').length,
+                                        paletteOptions: document.querySelectorAll(".map-palette-button").length,
+                                        scrollable: scroll.scrollWidth > scroll.clientWidth,
+                                        infoHeight: infoStrip.getBoundingClientRect().height,
+                                        infoFullWidth: Math.abs(
+                                          infoStrip.getBoundingClientRect().right - toolbar.getBoundingClientRect().right
+                                        ) <= 0.5 && Math.abs(
+                                          infoStrip.getBoundingClientRect().left - toolbar.getBoundingClientRect().left
+                                        ) <= 0.5,
+                                        optionHeight: firstOption.getBoundingClientRect().height,
+                                        imageAboveLabel: firstImage.getBoundingClientRect().bottom <= firstLabel.getBoundingClientRect().top + 1,
                                         sliderEndpointsVisible: endpointLabels.length > 0 && endpointLabels.every((label) => {
                                           const rect = label.getBoundingClientRect();
                                           return getComputedStyle(label).display !== "none" && rect.width > 0 && rect.height > 0;
@@ -4543,13 +4703,22 @@ COPY (
                                     }
                                     """
                                 )
-                                self.assertAlmostEqual(mobile_map_panel["width"], 244, delta=2)
-                                self.assertEqual(mobile_map_panel["baseColumns"], 3)
-                                self.assertEqual(mobile_map_panel["levelColumns"], 3)
-                                self.assertEqual(mobile_map_panel["paletteColumns"], 3)
+                                self.assertAlmostEqual(mobile_map_panel["height"], 50, delta=0.5)
+                                self.assertEqual(mobile_map_panel["baseOptions"], 6)
+                                self.assertEqual(mobile_map_panel["levelOptions"], 3)
+                                self.assertEqual(mobile_map_panel["paletteOptions"], 3)
+                                self.assertTrue(mobile_map_panel["scrollable"], mobile_map_panel)
+                                self.assertAlmostEqual(mobile_map_panel["infoHeight"], 16, delta=0.5)
+                                self.assertTrue(mobile_map_panel["infoFullWidth"], mobile_map_panel)
+                                self.assertAlmostEqual(mobile_map_panel["optionHeight"], 49, delta=0.5)
+                                self.assertTrue(mobile_map_panel["imageAboveLabel"], mobile_map_panel)
                                 self.assertTrue(mobile_map_panel["sliderEndpointsVisible"], mobile_map_panel)
                                 page.locator("#mapControlReset").click()
-                                page.wait_for_function('() => document.querySelector("#mapFloatingControl")?.classList.contains("collapsed")', timeout=10_000)
+                                page.wait_for_function(
+                                    '() => document.querySelector("#mapToolbar")?.classList.contains("hidden")'
+                                    ' && document.querySelector("#mapInfoStrip")?.classList.contains("hidden")',
+                                    timeout=10_000,
+                                )
                                 assert_mobile_sidebar_fronts_map(page)
                     finally:
                         page.close()
@@ -15910,6 +16079,9 @@ COPY (
                                 analysisOutline: level === "unit"
                                   ? null
                                   : layers.indexOf(analysis?.lineLayerId),
+                                analysisFillAntialias: level === "unit"
+                                  ? null
+                                  : raw?.getPaintProperty(analysis?.fillLayerId, "fill-antialias"),
                                 label: layers.indexOf("ofm-label"),
                                 labelPaint: {
                                   color: raw?.getPaintProperty("ofm-label", "text-color"),
@@ -15951,6 +16123,7 @@ COPY (
                             },
                         )
                         if level != "unit":
+                            self.assertFalse(layer_state["analysisFillAntialias"])
                             self.assertEqual(layer_state["eventHandlerCount"], 3)
 
                     try:
@@ -15960,14 +16133,10 @@ COPY (
                             '() => document.querySelector("#mapGroupMeta")?.textContent.includes("areas matched")',
                             timeout=10_000,
                         )
-                        page.locator("#mapControlReset").click()
-                        page.wait_for_function(
-                            '() => !document.querySelector("#mapFloatingControl")?.classList.contains("collapsed")',
-                            timeout=10_000,
-                        )
+                        page.locator("#mapToolbar:not(.hidden)").wait_for(timeout=10_000)
                         self.assertEqual(
                             page.locator('#mapBaseLayerTiles input[name="baseMap"]').count(),
-                            8,
+                            6,
                         )
 
                         if page.locator("body").get_attribute("class") and "dark" in (page.locator("body").get_attribute("class") or "").split():
@@ -16026,20 +16195,6 @@ COPY (
                             self.assertAlmostEqual(camera_after["zoom"], camera_before["zoom"], delta=0.01)
                             select_base("openFreeMapDark")
                             assert_vector_layer_order(level)
-                            select_base("grey")
-                            page.wait_for_function(
-                                """
-                                () => {
-                                  const container = document.querySelector("#ukMap");
-                                  const raw = container?._lucidumMapLibre;
-                                  return Boolean(container?._lucidumBaseTileLayer
-                                    && container?._lucidumBaseLabelLayer
-                                    && raw?.getLayer(container._lucidumBaseTileLayer.layerId)
-                                    && raw?.getLayer(container._lucidumBaseLabelLayer.layerId));
-                                }
-                                """,
-                                timeout=10_000,
-                            )
                             self.assertEqual(len(summary_requests), request_count)
 
                         request_count = len(summary_requests)
@@ -16092,7 +16247,7 @@ COPY (
                                 '#mapBaseLayerTiles input[name="baseMap"][value="openFreeMapPositron"]'
                               )?.checked
                               && (document.querySelector("#clipboardToast")?.textContent || "")
-                                .includes("Could not load OFM Dark")
+                                .includes("Could not load Dark")
                             """,
                             timeout=10_000,
                         )
@@ -17343,34 +17498,30 @@ COPY (
                         page.goto(base_url, wait_until="domcontentloaded")
                         page.locator("#ukMapTool").click()
                         page.locator("#ukMap:not(.hidden)").wait_for(timeout=20_000)
-                        page.locator("#mapFloatingControl:not(.hidden)").wait_for(timeout=10_000)
+                        page.locator("#mapToolbar:not(.hidden)").wait_for(timeout=10_000)
                         page.wait_for_function('() => document.querySelector("#mapGroupMeta")?.textContent.includes("areas matched")')
-                        page.locator("#mapControlReset").click()
-                        page.wait_for_function(
-                            '() => !document.querySelector("#mapFloatingControl")?.classList.contains("collapsed")',
-                            timeout=10_000,
-                        )
 
                         with page.expect_response(lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200, timeout=10_000):
                             page.locator('#mapLevelTiles input[name="mapLevel"][value="sector"]').check()
                         page.wait_for_function('() => document.querySelector("#mapGroupMeta")?.textContent.includes("sectors matched")')
-                        page.locator('#mapBaseLayerTiles input[name="baseMap"][value="grey"]').check()
+                        page.locator('#mapBaseLayerTiles input[name="baseMap"][value="openFreeMapPositron"]').check()
                         page.locator('.map-palette-button[data-palette="viridis"]').click()
                         page.wait_for_function(
-                            """() => document.querySelector("#mapHotspotsMinLabel")?.textContent.trim() === "Low"
+                            """() => document.querySelector('.map-palette-button[data-palette="viridis"]')?.classList.contains("active")
+                              && document.querySelector("#mapHotspotsMinLabel")?.textContent.trim() === "Low"
                               && document.querySelector("#mapHotspotsMaxLabel")?.textContent.trim() === "High"
-                              && document.querySelector("#mapHotspotsMinLabel")?.style.getPropertyValue("--map-extreme-color") === "#fde725"
-                              && document.querySelector("#mapHotspotsMaxLabel")?.style.getPropertyValue("--map-extreme-color") === "#440154" """,
+                              && !document.querySelector("#mapHotspotsMinLabel")?.style.getPropertyValue("--map-extreme-color")
+                              && !document.querySelector("#mapHotspotsMaxLabel")?.style.getPropertyValue("--map-extreme-color") """,
                             timeout=10_000,
                         )
-                        page.eval_on_selector("#mapLineWeight", "(input) => { input.value = '3'; input.dispatchEvent(new Event('input', { bubbles: true })); }")
-                        page.eval_on_selector("#mapOpacity", "(input) => { input.value = '4'; input.dispatchEvent(new Event('input', { bubbles: true })); }")
+                        page.locator("#mapBorderBold").click()
+                        page.locator("#mapStrengthMedium").click()
                         with page.expect_response(lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200, timeout=10_000):
-                            page.eval_on_selector("#mapSmoothing", "(input) => { input.value = '2'; input.dispatchEvent(new Event('input', { bubbles: true })); }")
+                            page.locator("#mapSmoothing2").click()
                         page.wait_for_function(
-                            """() => document.querySelector("#mapLineWeight")?.value === "3"
-                              && document.querySelector("#mapOpacity")?.value === "4"
-                              && document.querySelector("#mapSmoothing")?.value === "2"
+                            """() => document.querySelector("#mapBorderBold")?.classList.contains("active")
+                              && document.querySelector("#mapStrengthMedium")?.getAttribute("aria-pressed") === "true"
+                              && document.querySelector("#mapSmoothing2")?.classList.contains("active")
                               && document.querySelector("#mapGroupMeta .map-group-meta-count")?.textContent.trim() === "N2 sector smoothing" """,
                             timeout=10_000,
                         )
@@ -17425,28 +17576,17 @@ COPY (
                         self.assertAlmostEqual(saved_map["zoom"], 9, delta=0.01)
                         self.assertEqual(saved_map["dotSizeMode"], "adaptive")
                         self.assertEqual(saved_map["areaLabels"], "off")
+                        self.assertEqual(saved_map["baseMap"], "openFreeMapPositron")
+                        self.assertEqual(saved_map["lineWeight"], 3)
+                        self.assertEqual(saved_map["opacity"], 0.6)
                         self.assertNotIn("dotSize", saved_map)
                         self.assertNotIn("labelSize", saved_map)
                         self.assertNotIn("view", saved_map)
 
-                        def base_tile_id() -> str | None:
-                            return page.evaluate(
-                                """
-                                () => {
-                                  const layer = document.querySelector("#ukMap")?._lucidumBaseTileLayer;
-                                  if (!layer) return null;
-                                  if (!layer._lucidumTestId) layer._lucidumTestId = `tile-${Math.random()}`;
-                                  return layer._lucidumTestId;
-                                }
-                                """
-                            )
-
-                        grey_tile_id = base_tile_id()
-                        self.assertTrue(grey_tile_id)
                         with page.expect_response(lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200, timeout=10_000):
-                            page.eval_on_selector("#mapSmoothing", "(input) => { input.value = '0'; input.dispatchEvent(new Event('input', { bubbles: true })); }")
+                            page.locator("#mapSmoothing0").click()
                         page.wait_for_function(
-                            """() => document.querySelector("#mapSmoothing")?.value === "0"
+                            """() => document.querySelector("#mapSmoothing0")?.classList.contains("active")
                               && (document.querySelector("#mapGroupMeta")?.textContent || "").includes("sectors matched") """,
                             timeout=10_000,
                         )
@@ -17471,7 +17611,7 @@ COPY (
                         page.locator(f'.saved-favourite-option[data-favourite-id="{map_favourite_id}"]').click()
                         page.wait_for_function(
                             """([id]) => document.querySelector(`.saved-favourite-option[data-favourite-id="${id}"]`)?.classList.contains("active")
-                              && document.querySelector("#mapSmoothing")?.value === "2" """,
+                              && document.querySelector("#mapSmoothing2")?.classList.contains("active") """,
                             arg=[map_favourite_id],
                             timeout=10_000,
                         )
@@ -17481,7 +17621,7 @@ COPY (
                         release_path("/api/uk-map/summary")
                         page.wait_for_function(
                             """([id]) => document.querySelector(`.saved-favourite-option[data-favourite-id="${id}"]`)?.classList.contains("active")
-                              && document.querySelector("#mapSmoothing")?.value === "2"
+                              && document.querySelector("#mapSmoothing2")?.classList.contains("active")
                               && document.querySelector("#mapGroupMeta .map-group-meta-count")?.textContent.trim() === "N2 sector smoothing" """,
                             arg=[map_favourite_id],
                             timeout=10_000,
@@ -17511,13 +17651,13 @@ COPY (
                         )
                         page.wait_for_timeout(250)
                         self.assertEqual(len(summary_requests), summary_count_before_cached_restore)
-                        self.assertEqual(base_tile_id(), grey_tile_id)
+                        self.assertEqual(
+                            page.locator("#ukMap").evaluate("node => node._lucidumBaseMap"),
+                            "openFreeMapPositron",
+                        )
 
                         page.locator('#mapBaseLayerTiles input[name="baseMap"][value="osm"]').check()
                         page.wait_for_function("""() => document.querySelector('#mapBaseLayerTiles input[name="baseMap"][value="osm"]')?.checked""", timeout=10_000)
-                        osm_tile_id = base_tile_id()
-                        self.assertTrue(osm_tile_id)
-                        self.assertNotEqual(osm_tile_id, grey_tile_id)
                         self.click_sidebar_favourite_action(page, "#sidebarFavouriteAddBtn")
                         page.locator("#sidebarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
                         page.locator("#sidebarFavouriteNameInput").fill("Sector map OSM")
@@ -17532,13 +17672,13 @@ COPY (
                         page.locator(f'.saved-favourite-option[data-favourite-id="{map_favourite_id}"]').click()
                         page.wait_for_function(
                             """([id]) => document.querySelector(`.saved-favourite-option[data-favourite-id="${id}"]`)?.classList.contains("active")
-                              && document.querySelector('#mapBaseLayerTiles input[name="baseMap"][value="grey"]')?.checked """,
+                              && document.querySelector('#mapBaseLayerTiles input[name="baseMap"][value="openFreeMapPositron"]')?.checked
+                              && document.querySelector("#ukMap")?._lucidumBaseMap === "openFreeMapPositron" """,
                             arg=[map_favourite_id],
                             timeout=10_000,
                         )
                         page.wait_for_timeout(250)
                         self.assertEqual(len(summary_requests), summary_count_before_base_restore)
-                        self.assertNotEqual(base_tile_id(), osm_tile_id)
 
                         page.evaluate(
                             """
@@ -17583,11 +17723,11 @@ COPY (
                               && document.querySelector("#mapGroupMeta .map-group-meta-count")?.textContent.trim() === "N2 sector smoothing"
                               && document.querySelector(`.saved-favourite-option[data-favourite-id="${id}"]`)?.classList.contains("active")
                               && document.querySelector('#mapLevelTiles input[name="mapLevel"][value="sector"]')?.checked
-                              && document.querySelector('#mapBaseLayerTiles input[name="baseMap"][value="grey"]')?.checked
+                              && document.querySelector('#mapBaseLayerTiles input[name="baseMap"][value="openFreeMapPositron"]')?.checked
                               && document.querySelector('.map-palette-button[data-palette="viridis"]')?.classList.contains("active")
-                              && document.querySelector("#mapLineWeight")?.value === "3"
-                              && document.querySelector("#mapOpacity")?.value === "4"
-                              && document.querySelector("#mapSmoothing")?.value === "2"
+                              && document.querySelector("#mapBorderBold")?.classList.contains("active")
+                              && document.querySelector("#mapStrengthMedium")?.getAttribute("aria-pressed") === "true"
+                              && document.querySelector("#mapSmoothing2")?.classList.contains("active")
                               && document.querySelector("#actualNumerator")?.value === "price"
                               && document.querySelector("#denominator")?.value === "value" """,
                             arg=[map_favourite_id],
@@ -17609,8 +17749,9 @@ COPY (
                         page.locator('.map-palette-button[data-palette="spectral"]').click()
                         page.wait_for_function(
                             """() => !document.querySelector(".saved-favourite-option.active")
-                              && document.querySelector("#mapHotspotsMinLabel")?.style.getPropertyValue("--map-extreme-color") === "#2c7bb6"
-                              && document.querySelector("#mapHotspotsMaxLabel")?.style.getPropertyValue("--map-extreme-color") === "#a50026" """,
+                              && document.querySelector('.map-palette-button[data-palette="spectral"]')?.classList.contains("active")
+                              && !document.querySelector("#mapHotspotsMinLabel")?.style.getPropertyValue("--map-extreme-color")
+                              && !document.querySelector("#mapHotspotsMaxLabel")?.style.getPropertyValue("--map-extreme-color") """,
                             timeout=10_000,
                         )
 
@@ -19066,49 +19207,6 @@ COPY (
                         self.assertTrue(canvas_source_state["sourceUsesCanvas"])
                         self.assertEqual(canvas_source_state["sourceCanvasOpacity"], "0")
                         self.assertEqual(len(canvas_source_state["coordinates"]), 4)
-                        page.evaluate(
-                            """
-                            () => {
-                              const input = document.querySelector(
-                                '#mapBaseLayerTiles input[name="baseMap"][value="darkGrey"]'
-                              );
-                              input.checked = true;
-                              input.dispatchEvent(new Event("change", { bubbles: true }));
-                            }
-                            """
-                        )
-                        page.wait_for_function(
-                            """
-                            () => {
-                              const container = document.querySelector("#ukMap");
-                              const raw = container?._lucidumMapLibre;
-                              const labelLayer = container?._lucidumBaseLabelLayer;
-                              return Boolean(labelLayer && raw?.getLayer(labelLayer.layerId));
-                            }
-                            """,
-                            timeout=10_000,
-                        )
-                        label_order = page.evaluate(
-                            """
-                            () => {
-                              const container = document.querySelector("#ukMap");
-                              const map = container?._lucidumMap;
-                              const raw = container?._lucidumMapLibre;
-                              const unitLayer = Object.values(map?._layers || {})
-                                .find((candidate) => candidate?.data?.level === "unit");
-                              const layerIds = raw?.getStyle()?.layers?.map((layer) => layer.id) || [];
-                              return {
-                                base: layerIds.indexOf(container?._lucidumBaseTileLayer?.layerId),
-                                unit: layerIds.indexOf(unitLayer?.canvasMapLayer?.layerId),
-                                labels: layerIds.indexOf(container?._lucidumBaseLabelLayer?.layerId),
-                              };
-                            }
-                            """
-                        )
-                        self.assertGreaterEqual(label_order["base"], 0)
-                        self.assertGreater(label_order["unit"], label_order["base"])
-                        self.assertGreater(label_order["labels"], label_order["unit"])
-
                         summary_request_count_before_camera_moves = len(summary_requests)
                         self.assertEqual(page.locator("#mapDotSizeAdaptive").get_attribute("aria-pressed"), "true")
                         self.assertEqual(page.locator("#mapDotSizeMin").get_attribute("aria-pressed"), "false")
@@ -26032,6 +26130,22 @@ COPY (
                     """
                 )
 
+            def unit_point_alpha_total() -> int:
+                return page.evaluate(
+                    """
+                    () => {
+                        const canvas = document.querySelector("#ukMap .maplibre-unit-point-layer");
+                        if (!canvas || canvas.width <= 0 || canvas.height <= 0) return 0;
+                        const context = canvas.getContext("2d");
+                        if (!context) return 0;
+                        const imageData = context.getImageData(0, 0, canvas.width, canvas.height).data;
+                        let total = 0;
+                        for (let index = 3; index < imageData.length; index += 4) total += imageData[index];
+                        return total;
+                    }
+                    """
+                )
+
             def assert_dataset_viewer_hidden() -> None:
                 page.wait_for_function(
                     """
@@ -27068,12 +27182,8 @@ COPY (
                     """,
                     timeout=10_000,
                 )
-                self.assertEqual(page.locator("#mapControlReset").get_attribute("aria-expanded"), "false")
-                page.locator("#mapControlReset").click()
-                page.wait_for_function(
-                    '() => !document.querySelector("#mapFloatingControl")?.classList.contains("collapsed")',
-                    timeout=10_000,
-                )
+                page.locator("#mapToolbar:not(.hidden)").wait_for(timeout=10_000)
+                self.assertEqual(page.locator("#mapControlReset").get_attribute("aria-expanded"), "true")
                 assert_dataset_viewer_hidden()
                 page.wait_for_function(
                     """
@@ -27084,23 +27194,19 @@ COPY (
                 map_panel_layout = page.evaluate(
                     """
                     () => {
-                      const columnCount = (selector) => {
-                        const columns = getComputedStyle(document.querySelector(selector)).gridTemplateColumns;
-                        return columns.split(" ").filter(Boolean).length;
-                      };
-                      const visibleControls = [...document.querySelectorAll(".map-slider-control")]
+                      const visibleControls = [...document.querySelectorAll(".map-strip-slider-control")]
                         .filter((control) => control.offsetParent !== null);
                       const endpointLabels = visibleControls.flatMap((control) => [
-                        control.querySelector(".slider-scale b:first-child"),
-                        control.querySelector(".slider-scale b:last-child"),
+                        control.querySelector(".map-strip-slider-row b:first-child"),
+                        control.querySelector(".map-strip-slider-row b:last-child"),
                       ]).filter(Boolean);
                       return {
-                        width: document.querySelector("#mapFloatingControl").getBoundingClientRect().width,
+                        height: document.querySelector("#mapToolbar").getBoundingClientRect().height,
                         groupMeta: document.querySelector("#mapGroupMeta")?.textContent.trim() || "",
                         rowMeta: document.querySelector("#mapRowMeta")?.textContent.trim() || "",
-                        baseColumns: columnCount("#mapBaseLayerTiles"),
-                        levelColumns: columnCount("#mapLevelTiles"),
-                        paletteColumns: columnCount(".map-palette-buttons"),
+                        baseOptions: document.querySelectorAll('#mapBaseLayerTiles input[name="baseMap"]').length,
+                        levelOptions: document.querySelectorAll('#mapLevelTiles input[name="mapLevel"]').length,
+                        paletteOptions: document.querySelectorAll(".map-palette-button").length,
                         sliderEndpointsVisible: endpointLabels.length > 0 && endpointLabels.every((label) => {
                           const rect = label.getBoundingClientRect();
                           return getComputedStyle(label).display !== "none" && rect.width > 0 && rect.height > 0;
@@ -27109,12 +27215,12 @@ COPY (
                     }
                     """
                 )
-                self.assertAlmostEqual(map_panel_layout["width"], 244, delta=2)
+                self.assertAlmostEqual(map_panel_layout["height"], 50, delta=0.5)
                 self.assertEqual(map_panel_layout["rowMeta"], "3 / 4 rows")
                 self.assertNotIn(map_panel_layout["rowMeta"], map_panel_layout["groupMeta"])
-                self.assertEqual(map_panel_layout["baseColumns"], 3)
-                self.assertEqual(map_panel_layout["levelColumns"], 3)
-                self.assertEqual(map_panel_layout["paletteColumns"], 3)
+                self.assertEqual(map_panel_layout["baseOptions"], 6)
+                self.assertEqual(map_panel_layout["levelOptions"], 3)
+                self.assertEqual(map_panel_layout["paletteOptions"], 3)
                 self.assertTrue(map_panel_layout["sliderEndpointsVisible"], map_panel_layout)
                 assert_filter_label_badge("#mapControlFilter", "map-filter--applied", True)
                 assert_filter_badge_clear("#mapControlFilterClearBtn", "#mapControlFilterText", True)
@@ -27122,7 +27228,7 @@ COPY (
                     """
                     () => {
                       const filter = document.querySelector("#mapControlFilter");
-                      const header = document.querySelector(".map-floating-header");
+                      const header = document.querySelector("#mapToolbarStatus");
                       if (!filter || !header) return false;
                       const filterWidth = filter.getBoundingClientRect().width;
                       const headerWidth = header.getBoundingClientRect().width;
@@ -29002,85 +29108,26 @@ COPY (
 
                 page.locator("#ukMapTool").click()
                 page.locator("#ukMap:not(.hidden)").wait_for(timeout=20_000)
-                page.locator("#mapFloatingControl:not(.hidden)").wait_for(timeout=10_000)
+                page.locator("#mapToolbar:not(.hidden)").wait_for(timeout=10_000)
                 page.wait_for_function("() => document.querySelector('#ukMap .maplibregl-canvas')")
                 page.wait_for_function("() => document.querySelector('#ukMap')?.classList.contains('map-bg-light')")
                 page.wait_for_function('() => document.querySelector("#mapGroupMeta")?.textContent.includes("areas matched")')
                 map_toggle = page.locator("#mapControlReset")
                 self.assertEqual(map_toggle.get_attribute("aria-expanded"), "true")
                 self.assertEqual(
-                    page.evaluate('() => getComputedStyle(document.querySelector("#mapControlReset")).transform'),
-                    "matrix(1, 0, 0, 1, 9, -9)",
-                )
-                self.assertEqual(
                     page.evaluate('() => getComputedStyle(document.querySelector("#mapControlReset svg")).transform'),
-                    "matrix(1, 0, 0, 1, 3, 0)",
+                    "none",
                 )
-                expanded_button_box = map_toggle.bounding_box()
-                self.assertIsNotNone(expanded_button_box)
 
-                def expected_top_right_button_box() -> dict[str, float]:
-                    return page.evaluate(
-                        """
-                        () => {
-                            const panel = document.querySelector("#mapFloatingControl");
-                            const button = document.querySelector("#mapControlReset");
-                            const container = panel.offsetParent || panel.closest(".workspace");
-                            const wasCollapsed = panel.classList.contains("collapsed");
-                            const previous = { left: panel.style.left, top: panel.style.top, right: panel.style.right };
-                            if (wasCollapsed) panel.classList.remove("collapsed");
-                            const rect = container.getBoundingClientRect();
-                            const frame = {
-                                left: rect.left + container.clientLeft,
-                                top: rect.top + container.clientTop,
-                                width: container.clientWidth,
-                            };
-                            const panelLeft = Math.max(8, frame.width - panel.offsetWidth - 8);
-                            panel.style.left = `${panelLeft}px`;
-                            panel.style.top = "4px";
-                            panel.style.right = "auto";
-                            const buttonRect = button.getBoundingClientRect();
-                            const result = { x: buttonRect.x, y: buttonRect.y };
-                            panel.style.left = previous.left;
-                            panel.style.top = previous.top;
-                            panel.style.right = previous.right;
-                            if (wasCollapsed) panel.classList.add("collapsed");
-                            return result;
-                        }
-                        """
-                    )
-
-                def wait_for_map_toggle_top_right() -> dict[str, float]:
+                def wait_for_map_toggle_stack() -> dict[str, float]:
                     page.wait_for_function(
                         """
                         () => {
-                            const panel = document.querySelector("#mapFloatingControl");
                             const button = document.querySelector("#mapControlReset");
-                            if (!panel || !button) return false;
-                            const container = panel.offsetParent || panel.closest(".workspace");
-                            if (!container) return false;
-                            const wasCollapsed = panel.classList.contains("collapsed");
-                            const previous = { left: panel.style.left, top: panel.style.top, right: panel.style.right };
-                            if (wasCollapsed) panel.classList.remove("collapsed");
-                            const rect = container.getBoundingClientRect();
-                            const frameLeft = rect.left + container.clientLeft;
-                            const frameTop = rect.top + container.clientTop;
-                            const panelLeft = Math.max(8, container.clientWidth - panel.offsetWidth - 8);
-                            panel.style.left = `${panelLeft}px`;
-                            panel.style.top = "4px";
-                            panel.style.right = "auto";
-                            const expectedRect = button.getBoundingClientRect();
-                            const expectedX = expectedRect.x;
-                            const expectedY = expectedRect.y;
-                            panel.style.left = previous.left;
-                            panel.style.top = previous.top;
-                            panel.style.right = previous.right;
-                            if (wasCollapsed) panel.classList.add("collapsed");
-                            const buttonRect = button.getBoundingClientRect();
-                            return Math.abs(buttonRect.x - expectedX) <= 1
-                                && Math.abs(buttonRect.y - expectedY) <= 1
-                                && expectedX >= frameLeft
-                                && expectedY >= frameTop;
+                            const zoomIn = document.querySelector("#mapZoomIn");
+                            return Boolean(button && zoomIn
+                              && button.parentElement?.firstElementChild === button
+                              && button.getBoundingClientRect().bottom <= zoomIn.getBoundingClientRect().top + 1);
                         }
                         """,
                         timeout=10_000,
@@ -29089,42 +29136,43 @@ COPY (
                     self.assertIsNotNone(box)
                     return box
 
-                wait_for_map_toggle_top_right()
+                wait_for_map_toggle_stack()
+                expanded_map_height = page.locator("#ukMap").evaluate("node => node.getBoundingClientRect().height")
+                expanded_map_view = map_view()
                 map_toggle.click()
-                page.wait_for_function('() => document.querySelector("#mapFloatingControl")?.classList.contains("collapsed")')
+                page.wait_for_function(
+                    '() => document.querySelector("#mapToolbar")?.classList.contains("hidden")'
+                    ' && document.querySelector("#mapInfoStrip")?.classList.contains("hidden")'
+                )
                 self.assertEqual(map_toggle.get_attribute("aria-expanded"), "false")
-                self.assertEqual(
-                    page.evaluate('() => getComputedStyle(document.querySelector("#mapControlReset")).transform'),
+                self.assertNotEqual(
+                    page.evaluate('() => getComputedStyle(document.querySelector("#mapControlReset svg")).transform'),
                     "none",
                 )
-                self.assertFalse(page.locator("#mapLineWeight").is_visible())
-                collapsed_button_box = wait_for_map_toggle_top_right()
+                self.assertTrue(all(
+                    not page.locator(selector).is_visible()
+                    for selector in ("#mapBorderOff", "#mapBorderThin", "#mapBorderBold")
+                ))
+                wait_for_map_toggle_stack()
+                collapsed_map_height = page.locator("#ukMap").evaluate("node => node.getBoundingClientRect().height")
+                self.assertAlmostEqual(collapsed_map_height - expanded_map_height, 66, delta=1)
+                wait_for_map_view(expanded_map_view)
                 map_toggle.click()
-                page.wait_for_function('() => !document.querySelector("#mapFloatingControl")?.classList.contains("collapsed")')
+                page.wait_for_function(
+                    '() => !document.querySelector("#mapToolbar")?.classList.contains("hidden")'
+                    ' && !document.querySelector("#mapInfoStrip")?.classList.contains("hidden")'
+                )
                 self.assertEqual(map_toggle.get_attribute("aria-expanded"), "true")
-                expanded_again_button_box = wait_for_map_toggle_top_right()
+                wait_for_map_toggle_stack()
                 page.locator("#sidebarToggleBtn").click()
                 page.wait_for_function('() => document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") === "true"')
-                wait_for_map_toggle_top_right()
+                wait_for_map_toggle_stack()
                 page.locator("#sidebarToggleBtn").click()
                 page.wait_for_function('() => document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") === "false"')
-                wait_for_map_toggle_top_right()
-                header_box = page.locator(".map-floating-header").bounding_box()
-                self.assertIsNotNone(header_box)
-                page.mouse.move(header_box["x"] + 12, header_box["y"] + 10)
-                page.mouse.down()
-                page.mouse.move(header_box["x"] + 12, header_box["y"] + 58, steps=8)
-                page.mouse.up()
-                page.wait_for_timeout(50)
-                dragged_button_box = map_toggle.bounding_box()
-                self.assertIsNotNone(dragged_button_box)
-                self.assertGreater(dragged_button_box["y"], expected_top_right_button_box()["y"])
-                map_toggle.click()
-                page.wait_for_function('() => document.querySelector("#mapFloatingControl")?.classList.contains("collapsed")')
-                wait_for_map_toggle_top_right()
+                wait_for_map_toggle_stack()
                 page.locator("#sidebarToggleBtn").click()
                 page.wait_for_function('() => document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") === "true"')
-                wait_for_map_toggle_top_right()
+                wait_for_map_toggle_stack()
                 sidebar_resizer_box = page.locator("#sidebarResizer").bounding_box()
                 self.assertIsNotNone(sidebar_resizer_box)
                 sidebar_resizer_x = sidebar_resizer_box["x"] + sidebar_resizer_box["width"] / 2
@@ -29161,20 +29209,26 @@ COPY (
                 self.assertEqual(sidebar_resizer_drag_state["boxShadow"], sidebar_resizer_hover_state["boxShadow"])
                 page.mouse.move(sidebar_resizer_x + 80, sidebar_resizer_box["y"] + 100, steps=8)
                 page.mouse.up()
-                wait_for_map_toggle_top_right()
+                wait_for_map_toggle_stack()
                 page.locator("#sidebarToggleBtn").click()
                 page.wait_for_function('() => document.querySelector("#sidebarToggleBtn")?.getAttribute("aria-expanded") === "false"')
-                wait_for_map_toggle_top_right()
-                map_toggle.click()
-                page.wait_for_function('() => !document.querySelector("#mapFloatingControl")?.classList.contains("collapsed")')
-                wait_for_map_toggle_top_right()
+                wait_for_map_toggle_stack()
+                page.locator("#mapToolbar:not(.hidden)").wait_for(timeout=10_000)
                 self.assertTrue(page.locator('#mapLevelTiles input[name="mapLevel"][value="area"]').is_checked())
                 self.assertFalse(page.locator("#mapLineWeightControl").is_hidden())
-                self.assertFalse(page.locator("#mapLineWeight").is_disabled())
+                self.assertTrue(all(
+                    not page.locator(selector).is_disabled()
+                    for selector in ("#mapBorderOff", "#mapBorderThin", "#mapBorderBold")
+                ))
                 self.assertTrue(page.locator("#mapDotSizeControl").is_hidden())
                 self.assertTrue(page.locator("#mapDotSizeMin").is_disabled())
                 self.assertTrue(page.locator("#mapDotSizeAdaptive").is_disabled())
-                self.assertEqual(page.locator("#mapLineWeightControl > span:first-child").text_content().strip(), "Width")
+                self.assertEqual(
+                    page.locator("#mapLineWeightControl > h3").evaluate(
+                        "node => node.childNodes[0].textContent.trim()"
+                    ),
+                    "Border",
+                )
                 self.assertEqual(page.locator("#mapHotspots").get_attribute("min"), "-9")
                 self.assertEqual(page.locator("#mapHotspots").get_attribute("max"), "9")
                 self.assertEqual(page.locator("#mapHotspots").get_attribute("step"), "1")
@@ -29620,11 +29674,19 @@ COPY (
                 page.wait_for_function('() => document.querySelector("#mapGroupMeta")?.textContent.includes("sectors matched")')
                 self.assertTrue(page.locator('#mapLevelTiles input[name="mapLevel"][value="sector"]').is_checked())
                 self.assertFalse(page.locator("#mapLineWeightControl").is_hidden())
-                self.assertFalse(page.locator("#mapLineWeight").is_disabled())
+                self.assertTrue(all(
+                    not page.locator(selector).is_disabled()
+                    for selector in ("#mapBorderOff", "#mapBorderThin", "#mapBorderBold")
+                ))
                 self.assertTrue(page.locator("#mapDotSizeControl").is_hidden())
                 self.assertTrue(page.locator("#mapDotSizeMin").is_disabled())
                 self.assertTrue(page.locator("#mapDotSizeAdaptive").is_disabled())
-                self.assertEqual(page.locator("#mapLineWeightControl > span:first-child").text_content().strip(), "Width")
+                self.assertEqual(
+                    page.locator("#mapLineWeightControl > h3").evaluate(
+                        "node => node.childNodes[0].textContent.trim()"
+                    ),
+                    "Border",
+                )
                 self.assertEqual(page.locator("#mapHotspotsMinLabel").text_content().strip(), "Low")
                 self.assertEqual(page.locator("#mapHotspotsMaxLabel").text_content().strip(), "High")
                 wait_for_map_view(stable_map_view)
@@ -29633,19 +29695,15 @@ COPY (
                 self.assertTrue(page.locator("#mapAreaLabelsOff").is_disabled())
                 self.assertTrue(page.locator("#mapAreaLabelsOn").is_disabled())
                 self.assertFalse(page.locator("#mapSmoothingControl").is_hidden())
-                self.assertFalse(page.locator("#mapSmoothing").is_disabled())
+                self.assertTrue(all(
+                    not page.locator(f"#mapSmoothing{level}").is_disabled()
+                    for level in range(6)
+                ))
                 with page.expect_response(lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200, timeout=10_000):
-                    page.evaluate(
-                        """
-                        () => {
-                            const input = document.querySelector("#mapSmoothing");
-                            input.value = "2";
-                            input.dispatchEvent(new Event("input", { bubbles: true }));
-                        }
-                        """
-                    )
+                    page.locator("#mapSmoothing2").click()
                 page.wait_for_function(
-                    '() => document.querySelector("#mapSmoothingValue")?.textContent === "N2"'
+                    '() => document.querySelector("#mapSmoothing2")?.classList.contains("active")'
+                    ' && document.querySelector("#mapSmoothing2")?.getAttribute("aria-pressed") === "true"'
                     ' && document.querySelector("#mapGroupMeta .map-group-meta-count")?.textContent.trim() === "N2 sector smoothing"'
                 )
                 wait_for_map_view(stable_map_view)
@@ -29655,23 +29713,30 @@ COPY (
                 page.wait_for_function('() => document.querySelector("#mapGroupMeta")?.textContent.includes("units plotted")')
                 self.assertTrue(page.locator('#mapLevelTiles input[name="mapLevel"][value="unit"]').is_checked())
                 self.assertTrue(page.locator("#mapLineWeightControl").is_hidden())
-                self.assertTrue(page.locator("#mapLineWeight").is_disabled())
+                self.assertTrue(all(
+                    page.locator(selector).is_disabled()
+                    for selector in ("#mapBorderOff", "#mapBorderThin", "#mapBorderBold")
+                ))
                 self.assertFalse(page.locator("#mapDotSizeControl").is_hidden())
                 self.assertFalse(page.locator("#mapDotSizeMin").is_disabled())
                 self.assertFalse(page.locator("#mapDotSizeAdaptive").is_disabled())
-                self.assertEqual(page.locator("#mapDotSizeControl > span:first-child").text_content().strip(), "Dot size")
+                self.assertEqual(page.locator("#mapDotSizeControl > h3").text_content().strip(), "Dot size")
                 self.assertEqual(page.locator("#mapDotSizeAdaptive").get_attribute("aria-pressed"), "true")
                 self.assertEqual(page.locator("#mapDotSizeMin").get_attribute("aria-pressed"), "false")
                 self.assertEqual(page.locator("#mapHotspotsMinLabel").text_content().strip(), "Low")
                 self.assertEqual(page.locator("#mapHotspotsMaxLabel").text_content().strip(), "High")
-                self.assertIn("unit-mode", page.locator("#mapSliderGrid").get_attribute("class") or "")
+                self.assertTrue(page.locator("#mapLineWeightControl").is_hidden())
+                self.assertFalse(page.locator("#mapDotSizeControl").is_hidden())
                 wait_for_map_view(stable_map_view)
 
                 self.assertTrue(page.locator("#mapLabelControl").is_hidden())
                 self.assertTrue(page.locator("#mapAreaLabelsOff").is_disabled())
                 self.assertTrue(page.locator("#mapAreaLabelsOn").is_disabled())
                 self.assertTrue(page.locator("#mapSmoothingControl").is_hidden())
-                self.assertTrue(page.locator("#mapSmoothing").is_disabled())
+                self.assertTrue(all(
+                    page.locator(f"#mapSmoothing{level}").is_disabled()
+                    for level in range(6)
+                ))
                 page.locator("#ukMap .maplibre-unit-point-layer").wait_for(timeout=10_000)
                 page.evaluate(
                     """
@@ -29711,29 +29776,22 @@ COPY (
                 )
                 adaptive_dot_pixels = unit_point_alpha_pixels()
                 self.assertGreater(adaptive_dot_pixels, 0)
-                page.evaluate(
-                    """
-                    () => {
-                        const input = document.querySelector("#mapOpacity");
-                        input.value = "0";
-                        input.dispatchEvent(new Event("input", { bubbles: true }));
-                    }
-                    """
+                solid_dot_alpha = unit_point_alpha_total()
+                self.assertGreater(solid_dot_alpha, 0)
+                page.locator("#mapStrengthFaint").click()
+                page.wait_for_function(
+                    '() => document.querySelector("#mapStrengthFaint")?.getAttribute("aria-pressed") === "true"'
                 )
-                page.wait_for_function('() => document.querySelector("#mapOpacityValue")?.textContent === "0"')
-                self.assertEqual(unit_point_alpha_pixels(), 0)
-                page.evaluate(
-                    """
-                    () => {
-                        const input = document.querySelector("#mapOpacity");
-                        input.value = "10";
-                        input.dispatchEvent(new Event("input", { bubbles: true }));
-                    }
-                    """
+                faint_dot_alpha = unit_point_alpha_total()
+                self.assertGreater(faint_dot_alpha, 0)
+                self.assertLess(faint_dot_alpha, solid_dot_alpha)
+                page.locator("#mapStrengthSolid").click()
+                page.wait_for_function(
+                    '() => document.querySelector("#mapStrengthSolid")?.getAttribute("aria-pressed") === "true"'
                 )
-                page.wait_for_function('() => document.querySelector("#mapOpacityValue")?.textContent === "10"')
                 restored_dot_pixels = unit_point_alpha_pixels()
                 self.assertGreater(restored_dot_pixels, 0)
+                self.assertGreater(unit_point_alpha_total(), faint_dot_alpha)
                 page.locator("#mapDotSizeMin").click()
                 page.wait_for_function(
                     '() => document.querySelector("#mapDotSizeMin")?.getAttribute("aria-pressed") === "true"'
@@ -38040,12 +38098,10 @@ COPY (
 
                 page.locator("#ukMapTool").click()
                 page.locator("#ukMap:not(.hidden)").wait_for(timeout=20_000)
-                page.locator("#mapFloatingControl:not(.hidden)").wait_for(timeout=10_000)
+                page.locator("#mapToolbar:not(.hidden)").wait_for(timeout=10_000)
                 self.assertTrue(page.locator(".sidebar-metric-section").is_visible())
-                page.locator("#mapControlReset").click()
                 page.wait_for_function(
-                    """() => !document.querySelector("#mapFloatingControl")?.classList.contains("collapsed")
-                      && document.querySelector("#mapControlMetric")?.textContent.trim() === "Rate"
+                    """() => document.querySelector("#mapControlMetric")?.textContent.trim() === "Rate"
                       && !document.querySelector("#mapControlMetric")?.hidden""",
                     timeout=10_000,
                 )
@@ -38070,20 +38126,29 @@ COPY (
                 long_kpi_layout = page.evaluate(
                     """
                     () => {
-                      const panel = document.querySelector("#mapFloatingControl");
+                      const panel = document.querySelector("#mapToolbarStatus");
+                      const infoStrip = document.querySelector("#mapInfoStrip");
                       const metric = document.querySelector("#mapControlMetric");
                       const groupMeta = document.querySelector("#mapGroupMeta");
+                      const rowMeta = document.querySelector("#mapRowMeta");
                       const metricStyle = getComputedStyle(metric);
                       const panelRect = panel.getBoundingClientRect();
                       const metricRect = metric.getBoundingClientRect();
                       return {
                         text: metric.textContent.trim(),
+                        title: metric.title,
                         hidden: metric.hidden,
-                        contained: metric.scrollWidth <= metric.clientWidth + 1,
+                        truncated: metric.scrollWidth > metric.clientWidth,
+                        textOverflow: metricStyle.textOverflow,
+                        whiteSpace: metricStyle.whiteSpace,
                         lineHeight: parseFloat(metricStyle.lineHeight),
                         metricHeight: metricRect.height,
-                        groupOffset: groupMeta.getBoundingClientRect().top - panelRect.top,
-                        panelHeight: panelRect.height,
+                        metricLeft: metricRect.left,
+                        groupLeft: groupMeta.getBoundingClientRect().left,
+                        metricTop: metricRect.top,
+                        groupTop: groupMeta.getBoundingClientRect().top,
+                        rowTop: rowMeta.getBoundingClientRect().top,
+                        panelHeight: infoStrip.getBoundingClientRect().height,
                       };
                     }
                     """
@@ -38093,11 +38158,14 @@ COPY (
                     "Burning cost with an unusually long KPI name",
                 )
                 self.assertFalse(long_kpi_layout["hidden"])
-                self.assertTrue(long_kpi_layout["contained"])
-                self.assertGreater(
-                    long_kpi_layout["metricHeight"],
-                    long_kpi_layout["lineHeight"] * 1.5,
-                )
+                self.assertEqual(long_kpi_layout["title"], long_kpi_layout["text"])
+                self.assertTrue(long_kpi_layout["truncated"])
+                self.assertEqual(long_kpi_layout["textOverflow"], "ellipsis")
+                self.assertEqual(long_kpi_layout["whiteSpace"], "nowrap")
+                self.assertLessEqual(long_kpi_layout["metricHeight"], long_kpi_layout["lineHeight"] * 1.2)
+                self.assertAlmostEqual(long_kpi_layout["metricTop"], long_kpi_layout["groupTop"], delta=0.5)
+                self.assertAlmostEqual(long_kpi_layout["groupTop"], long_kpi_layout["rowTop"], delta=0.5)
+                self.assertAlmostEqual(long_kpi_layout["panelHeight"], 16, delta=0.5)
 
                 page.locator("#actualNumerator").select_option("vehicle_age")
                 page.wait_for_function(
@@ -38109,28 +38177,30 @@ COPY (
                 unmatched_layout = page.evaluate(
                     """
                     () => {
-                      const panel = document.querySelector("#mapFloatingControl");
+                      const panel = document.querySelector("#mapToolbarStatus");
+                      const infoStrip = document.querySelector("#mapInfoStrip");
                       const metric = document.querySelector("#mapControlMetric");
                       const groupMeta = document.querySelector("#mapGroupMeta");
-                      const panelRect = panel.getBoundingClientRect();
+                      const rowMeta = document.querySelector("#mapRowMeta");
                       return {
                         hidden: metric.hidden,
                         metricRects: metric.getClientRects().length,
-                        groupOffset: groupMeta.getBoundingClientRect().top - panelRect.top,
-                        panelHeight: panelRect.height,
+                        groupLeft: groupMeta.getBoundingClientRect().left,
+                        groupTop: groupMeta.getBoundingClientRect().top,
+                        rowTop: rowMeta.getBoundingClientRect().top,
+                        panelHeight: infoStrip.getBoundingClientRect().height,
                       };
                     }
                     """
                 )
                 self.assertTrue(unmatched_layout["hidden"])
                 self.assertEqual(unmatched_layout["metricRects"], 0)
-                self.assertLess(
-                    unmatched_layout["groupOffset"],
-                    long_kpi_layout["groupOffset"] - long_kpi_layout["lineHeight"],
-                )
-                self.assertLess(
+                self.assertAlmostEqual(unmatched_layout["groupTop"], unmatched_layout["rowTop"], delta=0.5)
+                self.assertLess(unmatched_layout["groupLeft"], long_kpi_layout["groupLeft"])
+                self.assertAlmostEqual(
                     unmatched_layout["panelHeight"],
-                    long_kpi_layout["panelHeight"] - long_kpi_layout["lineHeight"],
+                    long_kpi_layout["panelHeight"],
+                    delta=0.5,
                 )
                 page.locator("#lineBarTool").click()
                 page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)

@@ -1004,6 +1004,7 @@ export function createMapLibreAdapter(maplibregl) {
         type: "fill",
         source: this.sourceId,
         paint: {
+          "fill-antialias": this.options.fillAntialias !== false,
           "fill-color": [
             "coalesce",
             ["feature-state", "fillColor"],

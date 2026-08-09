@@ -144,12 +144,6 @@
         user-select: none !important;
       }
 
-      body.dragging-map-control,
-      body.dragging-map-control * {
-        cursor: move !important;
-        user-select: none !important;
-      }
-
       body.app-stopped .app {
         filter: grayscale(1);
         opacity: 0.28;

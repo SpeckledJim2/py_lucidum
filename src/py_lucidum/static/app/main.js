@@ -224,10 +224,7 @@
         mapViewportSyncFrame: null,
         restoringMapView: false,
         pendingMapZoom: null,
-        mapControlPosition: null,
-        mapControlMoved: false,
-        mapControlCollapsed: true,
-        mapControlCollapsedPosition: null,
+        mapToolbarCollapsed: false,
         mapLegendCollapsed: true,
         tablePage: 1,
         bandFeature: null,
@@ -922,9 +919,11 @@
         const target = el(id);
         if (options.html) {
           target.innerHTML = message || "";
+          if (tool === "uk_map") target.title = target.textContent.replace(/\s+/g, " ").trim();
           return;
         }
         target.textContent = message || "";
+        if (tool === "uk_map") target.title = target.textContent.trim();
       }
 
       function activeFilterLabel() {
@@ -952,6 +951,7 @@
         el("histogramFilterText").textContent = label;
         el("modelToolFilter").textContent = label;
         el("mapControlFilterText").textContent = label;
+        el("mapControlFilter").title = label;
       }
 
       function filterIsApplied() {
@@ -1842,7 +1842,8 @@
         el("histogramFilter").classList.toggle("hidden", tool !== "histogram");
         el("modelToolGroupMeta").classList.toggle("hidden", !isModelTool(tool) || tool === "gbm");
         el("modelToolFilter").classList.add("hidden");
-        el("mapFloatingControl").classList.toggle("hidden", tool !== "uk_map");
+        el("mapToolbar").classList.toggle("hidden", tool !== "uk_map" || state.mapToolbarCollapsed);
+        el("mapInfoStrip").classList.toggle("hidden", tool !== "uk_map" || state.mapToolbarCollapsed);
         el("mapLegend").classList.toggle("hidden", tool !== "uk_map" || !el("mapLegendBody").textContent);
         el("datasetViewerWrap").classList.toggle("hidden", tool !== "dataset_viewer");
         el("profileWrap").classList.toggle("hidden", tool !== "column_profile");

@@ -385,6 +385,126 @@
               </div>
             </div>
           </div>
+          <div id="mapToolbar" class="map-settings-strip app-control-strip hidden">
+            <div id="mapToolbarScroll" class="map-settings-scroll toolbar app-settings-strip">
+              <div class="control map-strip-choice-control map-strip-base-control">
+                <div id="mapBaseLayerTiles" class="map-strip-options map-base-layer-options" role="radiogroup" aria-label="Base map layer">
+                  <label class="map-strip-option" title="Blank">
+                    <input type="radio" name="baseMap" value="blank" checked />
+                    <span><img src="/tools/uk-map/static/icons/map-controls/base-blank.png" alt="" /><span>Blank</span></span>
+                  </label>
+                  <label class="map-strip-option" title="Esri">
+                    <input type="radio" name="baseMap" value="esri" />
+                    <span><img src="/tools/uk-map/static/icons/map-controls/base-esri.png" alt="" /><span>Esri</span></span>
+                  </label>
+                  <label class="map-strip-option" title="OSM">
+                    <input type="radio" name="baseMap" value="osm" />
+                    <span><img src="/tools/uk-map/static/icons/map-controls/base-osm.png" alt="" /><span>OSM</span></span>
+                  </label>
+                  <label class="map-strip-option" title="Aerial">
+                    <input type="radio" name="baseMap" value="satellite" />
+                    <span><img src="/tools/uk-map/static/icons/map-controls/base-aerial.png" alt="" /><span>Aerial</span></span>
+                  </label>
+                  <label class="map-strip-option" title="Light">
+                    <input type="radio" name="baseMap" value="openFreeMapPositron" />
+                    <span><img src="/tools/uk-map/static/icons/map-controls/base-openfreemap-positron.png" alt="" /><span>Light</span></span>
+                  </label>
+                  <label class="map-strip-option" title="Dark">
+                    <input type="radio" name="baseMap" value="openFreeMapDark" />
+                    <span><img src="/tools/uk-map/static/icons/map-controls/base-openfreemap-dark.png" alt="" /><span>Dark</span></span>
+                  </label>
+                </div>
+              </div>
+              <div class="control map-strip-choice-control">
+                <div id="mapLevelTiles" class="map-strip-options map-resolution-options" role="radiogroup" aria-label="Map resolution">
+                  <label class="map-strip-option" title="Area">
+                    <input type="radio" name="mapLevel" value="area" checked />
+                    <span><img src="/tools/uk-map/static/icons/map-controls/level-area.png" alt="" /><span>Area</span></span>
+                  </label>
+                  <label class="map-strip-option" title="Sector">
+                    <input type="radio" name="mapLevel" value="sector" />
+                    <span><img src="/tools/uk-map/static/icons/map-controls/level-sector.png" alt="" /><span>Sector</span></span>
+                  </label>
+                  <label class="map-strip-option" title="Units">
+                    <input type="radio" name="mapLevel" value="unit" />
+                    <span><img src="/tools/uk-map/static/icons/map-controls/level-unit.png" alt="" /><span>Units</span></span>
+                  </label>
+                </div>
+              </div>
+              <div class="control map-strip-choice-control">
+                <div class="map-strip-options map-palette-buttons" role="group" aria-label="Choropleth colour scheme">
+                  <button class="map-palette-button active" type="button" data-palette="divergent" title="Split"><span class="palette-swatch palette-divergent"></span><span>Split</span></button>
+                  <button class="map-palette-button" type="button" data-palette="spectral" title="Macaw"><span class="palette-swatch palette-spectral"></span><span>Macaw</span></button>
+                  <button class="map-palette-button" type="button" data-palette="viridis" title="Viridis"><span class="palette-swatch palette-viridis"></span><span>Viridis</span></button>
+                </div>
+              </div>
+              <div id="mapLabelControl" class="control map-strip-mode-control">
+                <h3>Labels</h3>
+                <div id="mapAreaLabels" class="segmented map-area-label-mode" role="group" aria-label="Area labels">
+                  <button id="mapAreaLabelsOff" class="active" type="button" data-map-area-labels="off" data-stable-label="Off" aria-pressed="true">Off</button>
+                  <button id="mapAreaLabelsOn" type="button" data-map-area-labels="on" data-stable-label="On" aria-pressed="false">On</button>
+                </div>
+              </div>
+              <div id="mapSmoothingControl" class="control map-strip-mode-control" hidden>
+                <h3>Smooth</h3>
+                <div id="mapSmoothing" class="segmented map-smoothing-mode" role="group" aria-label="Sector smoothing">
+                  <button id="mapSmoothing0" class="active" type="button" data-map-smoothing="0" data-stable-label="-" aria-pressed="true">-</button>
+                  <button id="mapSmoothing1" type="button" data-map-smoothing="1" data-stable-label="N1" aria-pressed="false">N1</button>
+                  <button id="mapSmoothing2" type="button" data-map-smoothing="2" data-stable-label="N2" aria-pressed="false">N2</button>
+                  <button id="mapSmoothing3" type="button" data-map-smoothing="3" data-stable-label="N3" aria-pressed="false">N3</button>
+                  <button id="mapSmoothing4" type="button" data-map-smoothing="4" data-stable-label="N4" aria-pressed="false">N4</button>
+                  <button id="mapSmoothing5" type="button" data-map-smoothing="5" data-stable-label="N5" aria-pressed="false">N5</button>
+                </div>
+              </div>
+              <div id="mapDotSizeControl" class="control map-strip-mode-control" hidden>
+                <h3>Dot size</h3>
+                <div id="mapDotSizeMode" class="segmented map-dot-size-mode" role="group" aria-label="Dot size">
+                  <button id="mapDotSizeMin" type="button" data-map-dot-size-mode="min" data-stable-label="Min" aria-pressed="false">Min</button>
+                  <button id="mapDotSizeAdaptive" class="active" type="button" data-map-dot-size-mode="adaptive" data-stable-label="Adaptive" aria-pressed="true">Adaptive</button>
+                </div>
+              </div>
+              <div id="mapLineWeightControl" class="control map-strip-mode-control">
+                <h3>Border</h3>
+                <div id="mapLineWeight" class="segmented map-border-mode" role="group" aria-label="Map border">
+                  <button id="mapBorderOff" type="button" data-map-line-weight="0" data-stable-label="Off" aria-pressed="false">Off</button>
+                  <button id="mapBorderThin" class="active" type="button" data-map-line-weight="1" data-stable-label="Thin" aria-pressed="true">Thin</button>
+                  <button id="mapBorderBold" type="button" data-map-line-weight="3" data-stable-label="Bold" aria-pressed="false">Bold</button>
+                </div>
+              </div>
+              <div id="mapOpacityControl" class="control map-strip-mode-control">
+                <h3>Strength</h3>
+                <div id="mapOpacity" class="segmented map-strength-mode" role="group" aria-label="Map overlay strength">
+                  <button id="mapStrengthFaint" type="button" data-map-opacity="0.2" data-stable-label="Faint" aria-pressed="false">Faint</button>
+                  <button id="mapStrengthMedium" type="button" data-map-opacity="0.6" data-stable-label="Medium" aria-pressed="false">Medium</button>
+                  <button id="mapStrengthSolid" class="active" type="button" data-map-opacity="1" data-stable-label="Solid" aria-pressed="true">Solid</button>
+                </div>
+              </div>
+              <label id="mapHotspotsControl" class="control map-strip-slider-control">
+                <h3>Extremes <span id="mapHotspotsValue">All</span></h3>
+                <span class="map-strip-slider-row"><b id="mapHotspotsMinLabel">Low</b><input id="mapHotspots" type="range" min="-9" max="9" step="1" value="0" /><b id="mapHotspotsMaxLabel">High</b></span>
+              </label>
+              <div class="control map-strip-postcode-control">
+                <h3>Search</h3>
+                <div class="postcode-search">
+                  <input id="mapPostcodeInput" placeholder="postcode..." aria-label="Postcode" />
+                  <button id="mapPostcodeClear" type="button" title="Clear postcode" aria-label="Clear postcode">&times;</button>
+                  <button id="mapPostcodeSearch" type="button" title="Search postcode" aria-label="Search postcode">
+                    <svg viewBox="0 0 24 24" focusable="false"><circle cx="11" cy="11" r="7"></circle><path d="m16.5 16.5 4 4"></path></svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div id="mapInfoStrip" class="map-info-strip hidden">
+            <div id="mapToolbarStatus" class="map-toolbar-status" aria-label="Map status">
+              <strong id="mapControlMetric" hidden></strong>
+              <span id="mapMetricSeparator" class="map-info-separator" aria-hidden="true" hidden>·</span>
+              <div id="mapGroupMeta" class="workspace-meta"></div>
+              <div id="mapRowMeta" class="workspace-meta"></div>
+              <span class="map-info-separator" aria-hidden="true">·</span>
+              <span id="mapControlFilter"><button id="mapControlFilterClearBtn" class="filter-row-clear" type="button" title="Clear filter" aria-label="Clear filter" hidden></button><span id="mapControlFilterText" class="filter-badge-text">no filter</span></span>
+            </div>
+          </div>
           <div id="status" class="status main-status hidden"></div>
 
           <div id="visualArea" class="visual-area startup-mode">
@@ -504,170 +624,6 @@
               <div id="specificationsWrap" class="specifications-wrap hidden"></div>
               <div id="ukMap" class="uk-map hidden"></div>
               <div id="mapMatchLiveStatus" class="map-match-live-status" role="status" aria-live="polite"></div>
-              <div id="mapFloatingControl" class="map-floating-control hidden collapsed">
-                <div class="map-floating-header">
-                  <strong id="mapControlMetric" hidden></strong>
-                  <div id="mapGroupMeta" class="workspace-meta"></div>
-                  <div id="mapRowMeta" class="workspace-meta"></div>
-                  <span id="mapControlFilter"><button id="mapControlFilterClearBtn" class="filter-row-clear" type="button" title="Clear filter" aria-label="Clear filter" hidden></button><span id="mapControlFilterText" class="filter-badge-text">no filter</span></span>
-                  <button id="mapControlReset" class="map-control-reset" type="button" title="Expand map controls" aria-label="Expand map controls" aria-controls="mapFloatingControl" aria-expanded="false">
-                    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M17 7 7 17"></path><path d="M14 17H7v-7"></path></svg>
-                  </button>
-                </div>
-                <div class="map-control-panel-body">
-                  <div class="map-tile-section">
-                    <span class="map-tile-section-title">Base</span>
-                    <div id="mapBaseLayerTiles" class="map-tile-grid map-base-layer-tiles" aria-label="Base map layer">
-                      <label class="map-control-tile" title="Blank">
-                        <input type="radio" name="baseMap" value="blank" checked />
-                        <span class="map-control-tile-card">
-                          <img src="/tools/uk-map/static/icons/map-controls/base-blank.png" alt="" />
-                          <span class="map-control-tile-text">Blank</span>
-                        </span>
-                      </label>
-                      <label class="map-control-tile" title="Esri">
-                        <input type="radio" name="baseMap" value="esri" />
-                        <span class="map-control-tile-card">
-                          <img src="/tools/uk-map/static/icons/map-controls/base-esri.png" alt="" />
-                          <span class="map-control-tile-text">Esri</span>
-                        </span>
-                      </label>
-                      <label class="map-control-tile" title="OSM">
-                        <input type="radio" name="baseMap" value="osm" />
-                        <span class="map-control-tile-card">
-                          <img src="/tools/uk-map/static/icons/map-controls/base-osm.png" alt="" />
-                          <span class="map-control-tile-text">OSM</span>
-                        </span>
-                      </label>
-                      <label class="map-control-tile" title="Aerial">
-                        <input type="radio" name="baseMap" value="satellite" />
-                        <span class="map-control-tile-card">
-                          <img src="/tools/uk-map/static/icons/map-controls/base-aerial.png" alt="" />
-                          <span class="map-control-tile-text">Aerial</span>
-                        </span>
-                      </label>
-                      <label class="map-control-tile" title="Light">
-                        <input type="radio" name="baseMap" value="grey" />
-                        <span class="map-control-tile-card">
-                          <img src="/tools/uk-map/static/icons/map-controls/base-light.png" alt="" />
-                          <span class="map-control-tile-text">Light</span>
-                        </span>
-                      </label>
-                      <label class="map-control-tile" title="Dark">
-                        <input type="radio" name="baseMap" value="darkGrey" />
-                        <span class="map-control-tile-card">
-                          <img src="/tools/uk-map/static/icons/map-controls/base-dark.png" alt="" />
-                          <span class="map-control-tile-text">Dark</span>
-                        </span>
-                      </label>
-                      <label class="map-control-tile" title="OpenFreeMap Positron">
-                        <input type="radio" name="baseMap" value="openFreeMapPositron" />
-                        <span class="map-control-tile-card">
-                          <img src="/tools/uk-map/static/icons/map-controls/base-openfreemap-positron.png" alt="" />
-                          <span class="map-control-tile-text">Positron</span>
-                        </span>
-                      </label>
-                      <label class="map-control-tile" title="OpenFreeMap Dark">
-                        <input type="radio" name="baseMap" value="openFreeMapDark" />
-                        <span class="map-control-tile-card">
-                          <img src="/tools/uk-map/static/icons/map-controls/base-openfreemap-dark.png" alt="" />
-                          <span class="map-control-tile-text">OFM Dark</span>
-                        </span>
-                      </label>
-                    </div>
-                  </div>
-                  <div class="map-level-palette-row">
-                    <div class="map-tile-section">
-                      <span class="map-tile-section-title">Level</span>
-                      <div id="mapLevelTiles" class="map-tile-grid map-level-tiles" aria-label="Map level">
-                        <label class="map-control-tile" title="Area">
-                          <input type="radio" name="mapLevel" value="area" checked />
-                          <span class="map-control-tile-card">
-                            <img src="/tools/uk-map/static/icons/map-controls/level-area.png" alt="" />
-                            <span class="map-control-tile-text">Area</span>
-                          </span>
-                        </label>
-                        <label class="map-control-tile" title="Sector">
-                          <input type="radio" name="mapLevel" value="sector" />
-                          <span class="map-control-tile-card">
-                            <img src="/tools/uk-map/static/icons/map-controls/level-sector.png" alt="" />
-                            <span class="map-control-tile-text">Sector</span>
-                          </span>
-                        </label>
-                        <label class="map-control-tile" title="Units">
-                          <input type="radio" name="mapLevel" value="unit" />
-                          <span class="map-control-tile-card">
-                            <img src="/tools/uk-map/static/icons/map-controls/level-unit.png" alt="" />
-                            <span class="map-control-tile-text">Units</span>
-                          </span>
-                        </label>
-                      </div>
-                    </div>
-                    <div class="map-tile-section">
-                      <span class="map-tile-section-title">Palette</span>
-                      <div class="map-palette-buttons map-palette-tiles" aria-label="Choropleth colour scheme">
-                        <button class="map-palette-button active" type="button" data-palette="divergent" title="Split">
-                          <span class="palette-swatch palette-divergent"></span>
-                          <span class="map-control-tile-text">Split</span>
-                        </button>
-                        <button class="map-palette-button" type="button" data-palette="spectral" title="Spectral">
-                          <span class="palette-swatch palette-spectral"></span>
-                          <span class="map-control-tile-text">Spectral</span>
-                        </button>
-                        <button class="map-palette-button" type="button" data-palette="viridis" title="Viridis">
-                          <span class="palette-swatch palette-viridis"></span>
-                          <span class="map-control-tile-text">Viridis</span>
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                  <div class="map-floating-row">
-                    <div class="postcode-search">
-                      <input id="mapPostcodeInput" placeholder="postcode..." />
-                      <button id="mapPostcodeClear" type="button" title="Clear postcode" aria-label="Clear postcode">&times;</button>
-                      <button id="mapPostcodeSearch" type="button" title="Search postcode" aria-label="Search postcode">
-                        <svg viewBox="0 0 24 24" focusable="false"><circle cx="11" cy="11" r="7"></circle><path d="m16.5 16.5 4 4"></path></svg>
-                      </button>
-                    </div>
-                  </div>
-                  <div id="mapSliderGrid" class="map-slider-grid">
-                    <label id="mapLineWeightControl" class="map-slider-control">
-                      <span>Width</span>
-                      <span class="slider-scale"><b>0</b><b id="mapLineWeightValue">1</b><b>10</b></span>
-                      <input id="mapLineWeight" type="range" min="0" max="10" step="1" value="1" />
-                    </label>
-                    <div id="mapDotSizeControl" class="map-dot-size-control" hidden>
-                      <span>Dot size</span>
-                      <div id="mapDotSizeMode" class="map-dot-size-mode" role="group" aria-label="Dot size">
-                        <button id="mapDotSizeMin" type="button" data-map-dot-size-mode="min" aria-pressed="false">Min</button>
-                        <button id="mapDotSizeAdaptive" class="active" type="button" data-map-dot-size-mode="adaptive" aria-pressed="true">Adaptive</button>
-                      </div>
-                    </div>
-                    <label class="map-slider-control">
-                      <span>Opacity</span>
-                      <span class="slider-scale"><b>0</b><b id="mapOpacityValue">10</b><b>10</b></span>
-                      <input id="mapOpacity" type="range" min="0" max="10" step="1" value="10" />
-                    </label>
-                    <label id="mapHotspotsControl" class="map-slider-control">
-                      <span>Extremes</span>
-                      <span class="slider-scale"><b id="mapHotspotsMinLabel" class="map-extreme-label">Low</b><b id="mapHotspotsValue">All</b><b id="mapHotspotsMaxLabel" class="map-extreme-label">High</b></span>
-                      <input id="mapHotspots" type="range" min="-9" max="9" step="1" value="0" />
-                    </label>
-                    <div id="mapLabelControl" class="map-area-label-control">
-                      <span>Labels</span>
-                      <div id="mapAreaLabels" class="map-area-label-mode" role="group" aria-label="Area labels">
-                        <button id="mapAreaLabelsOff" class="active" type="button" data-map-area-labels="off" aria-pressed="true">Off</button>
-                        <button id="mapAreaLabelsOn" type="button" data-map-area-labels="on" aria-pressed="false">On</button>
-                      </div>
-                    </div>
-                    <label id="mapSmoothingControl" class="map-slider-control" hidden>
-                      <span>Smooth</span>
-                      <span class="slider-scale"><b>N0</b><b id="mapSmoothingValue">None</b><b>N5</b></span>
-                      <input id="mapSmoothing" type="range" min="0" max="5" step="1" value="0" />
-                    </label>
-                  </div>
-                </div>
-              </div>
               <div id="mapLegend" class="map-legend hidden collapsed">
                 <div class="map-legend-header">
                   <h3>Legend</h3>

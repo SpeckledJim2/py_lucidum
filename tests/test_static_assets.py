@@ -1199,7 +1199,7 @@ if (allMatched.matchedRowCount !== 3
     || allMatched.unmatchedPercentageText !== "0.0"
     || allMatched.missingPercentageText !== "0.0"
     || allMatched.matchText !== "All areas matched"
-    || allMatched.missingText !== "No rows missing area"
+    || allMatched.missingText !== "no rows missing area"
     || allMatched.matchState !== "complete"
     || allMatched.matchedRows.length !== 2
     || allMatched.unmatchedRows.length !== 0) {{
@@ -1250,7 +1250,7 @@ const noEligibleRows = ukMapShapefileMatchSummary({{
   filteredRowCount: 2,
   shapeKeys: new Set(["AB"]),
 }});
-if (noEligibleRows.matchText !== "No areas to match"
+if (noEligibleRows.matchText !== "no areas to match"
     || noEligibleRows.missingPercentageText !== "100.0"
     || noEligibleRows.missingText !== "2 rows missing area (100.0%)"
     || noEligibleRows.unmatchedPercentageText !== "0.0") {{
@@ -1273,7 +1273,7 @@ if (smoothedSector.matchedRowCount !== 1
     || smoothedSector.missingRowCount !== 0
     || smoothedSector.unmatchedPercentageText !== "75.0"
     || smoothedSector.missingPercentageText !== "0.0"
-    || smoothedSector.missingText !== "No rows missing sector"
+    || smoothedSector.missingText !== "no rows missing sector"
     || smoothedSector.matchedRows.length !== 2) {{
   throw new Error(`incorrect smoothed-sector summary: ${{JSON.stringify(smoothedSector)}}`);
 }}
@@ -2290,33 +2290,41 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('replaceStyle(style = null, { foregroundLayerPredicate = null', adapter)
         self.assertIn('bringStyleForegroundToFront()', adapter)
         self.assertIn('restoreStyleResources(map = this.map)', adapter)
+        self.assertIn('"fill-antialias": this.options.fillAntialias !== false', adapter)
         self.assertIn('getBoundsZoom(bounds, options = {})', adapter)
         self.assertIn('cameraForBounds(bounds.raw, nextOptions)', adapter)
-        self.assertIn('light_nolabels/', map_source)
-        self.assertIn('light_only_labels/', map_source)
-        self.assertIn('dark_nolabels/', map_source)
-        self.assertIn('dark_only_labels/', map_source)
+        self.assertNotIn('light_nolabels/', map_source)
+        self.assertNotIn('dark_nolabels/', map_source)
         self.assertIn('https://tiles.openfreemap.org/styles/positron', map_source)
         self.assertIn('https://tiles.openfreemap.org/styles/dark', map_source)
         self.assertIn('openFreeMapForegroundLayer', map_source)
         self.assertIn('bringBaseLabelsToFront()', map_source)
+        self.assertIn('fillAntialias: false', map_source)
         self.assertIn('value="openFreeMapPositron"', index)
         self.assertIn('value="openFreeMapDark"', index)
+        self.assertNotIn('value="grey"', index)
+        self.assertNotIn('value="darkGrey"', index)
+        self.assertIn('grey: "openFreeMapPositron"', map_source)
+        self.assertIn('darkGrey: "openFreeMapDark"', map_source)
         self.assertIn('base-openfreemap-positron.png', index)
         self.assertIn('base-openfreemap-dark.png', index)
         self.assertIn('id="mapDotSizeMode"', index)
         self.assertIn('role="group" aria-label="Dot size"', index)
         self.assertIn('id="mapDotSizeMin"', index)
-        self.assertIn('data-map-dot-size-mode="min" aria-pressed="false"', index)
+        self.assertIn('data-map-dot-size-mode="min"', index)
+        self.assertIn('aria-pressed="false">Min</button>', index)
         self.assertIn('id="mapDotSizeAdaptive"', index)
-        self.assertIn('data-map-dot-size-mode="adaptive" aria-pressed="true"', index)
+        self.assertIn('data-map-dot-size-mode="adaptive"', index)
+        self.assertIn('aria-pressed="true">Adaptive</button>', index)
         self.assertNotIn('id="mapDotSize" type="range"', index)
         self.assertIn('id="mapAreaLabels"', index)
         self.assertIn('role="group" aria-label="Area labels"', index)
         self.assertIn('id="mapAreaLabelsOff"', index)
-        self.assertIn('data-map-area-labels="off" aria-pressed="true"', index)
+        self.assertIn('data-map-area-labels="off"', index)
+        self.assertIn('aria-pressed="true">Off</button>', index)
         self.assertIn('id="mapAreaLabelsOn"', index)
-        self.assertIn('data-map-area-labels="on" aria-pressed="false"', index)
+        self.assertIn('data-map-area-labels="on"', index)
+        self.assertIn('aria-pressed="false">On</button>', index)
         self.assertNotIn('id="mapLabelSize" type="range"', index)
         self.assertIn('mapDotSizeMode: "adaptive"', main_source)
         self.assertIn('mapAreaLabels: "off"', main_source)
@@ -2333,11 +2341,11 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('function scheduleMapAreaLabelSizeUpdate(', map_source)
         self.assertIn('window.visualViewport?.addEventListener("resize"', map_source)
         self.assertIn('context.fillRect(Math.round(pointX * ratio), Math.round(pointY * ratio), 1, 1);', map_source)
-        self.assertIn('.map-dot-size-mode button,', map_styles)
-        self.assertIn('.map-dot-size-mode button:focus-visible,', map_styles)
-        self.assertIn('.map-dot-size-mode button.active,', map_styles)
-        self.assertIn('.map-area-label-mode button:focus-visible', map_styles)
-        self.assertIn('.map-area-label-mode button.active', map_styles)
+        self.assertIn('.map-strip-mode-control .segmented button:disabled', map_styles)
+        self.assertIn('.map-strip-option input:focus-visible + span,', map_styles)
+        self.assertIn('.map-palette-button:focus-visible', map_styles)
+        self.assertIn('.map-strip-option input:checked + span,', map_styles)
+        self.assertIn('.map-palette-button.active', map_styles)
         self.assertIn('var(--map-area-label-base-size, 9px)', map_styles)
         self.assertIn('border: 0;', map_styles)
         self.assertNotIn("leaflet", index.lower())
@@ -3138,21 +3146,93 @@ if (hidden.xAxis.axisLabel.show !== false) throw new Error("density limit failed
         )
         self.assertNotIn("grid-template-columns: var(--sidebar-width, 280px) 3px 1fr;", gbm)
 
-    def test_uk_map_overlay_markup_starts_collapsed(self) -> None:
-        index = (
-            Path(__file__).resolve().parents[1] / "src/py_lucidum/static/index.html"
-        ).read_text(encoding="utf-8")
+    def test_uk_map_control_strip_markup_starts_expanded(self) -> None:
+        static_root = Path(__file__).resolve().parents[1] / "src/py_lucidum/static"
+        index = (static_root / "index.html").read_text(encoding="utf-8")
+        main_source = (static_root / "app/main.js").read_text(encoding="utf-8")
+        map_source = (static_root / "app/uk-map-tool.js").read_text(encoding="utf-8")
+        map_styles = (static_root / "styles/uk-map.css").read_text(encoding="utf-8")
 
         self.assertIn(
-            'id="mapFloatingControl" class="map-floating-control hidden collapsed"',
+            'id="mapToolbar" class="map-settings-strip app-control-strip hidden"',
             index,
         )
-        self.assertIn('<strong id="mapControlMetric" hidden></strong>', index)
         self.assertIn(
-            'id="mapControlReset" class="map-control-reset" type="button" title="Expand map controls" '
-            'aria-label="Expand map controls" aria-controls="mapFloatingControl" aria-expanded="false"',
+            'id="mapToolbarScroll" class="map-settings-scroll toolbar app-settings-strip"',
             index,
         )
+        self.assertIn('role="radiogroup" aria-label="Base map layer"', index)
+        self.assertIn('role="radiogroup" aria-label="Map resolution"', index)
+        self.assertIn('role="group" aria-label="Choropleth colour scheme"', index)
+        self.assertNotIn('<h3>Base</h3>', index)
+        self.assertNotIn('<h3>Resolution</h3>', index)
+        self.assertNotIn('<h3>Palette</h3>', index)
+        self.assertEqual(index.count('name="baseMap"'), 6)
+        self.assertEqual(index.count('name="mapLevel"'), 3)
+        self.assertEqual(index.count('class="map-palette-button'), 3)
+        self.assertEqual(index.count('data-map-smoothing="'), 6)
+        self.assertEqual(index.count('data-map-line-weight="'), 3)
+        self.assertIn('id="mapSmoothing" class="segmented map-smoothing-mode"', index)
+        self.assertNotIn('id="mapSmoothingValue"', index)
+        self.assertIn('id="mapLineWeight" class="segmented map-border-mode"', index)
+        self.assertNotIn('id="mapLineWeightValue"', index)
+        self.assertIn('<h3>Strength</h3>', index)
+        self.assertIn('id="mapOpacity" class="segmented map-strength-mode"', index)
+        self.assertEqual(index.count('data-map-opacity="'), 3)
+        self.assertIn('data-map-opacity="0.2" data-stable-label="Faint"', index)
+        self.assertIn('data-map-opacity="0.6" data-stable-label="Medium"', index)
+        self.assertIn('data-map-opacity="1" data-stable-label="Solid"', index)
+        self.assertNotIn('id="mapOpacity" type="range"', index)
+        self.assertNotIn('id="mapOpacityValue"', index)
+        self.assertIn('data-map-line-weight="0" data-stable-label="Off"', index)
+        self.assertIn('data-map-line-weight="1" data-stable-label="Thin"', index)
+        self.assertIn('data-map-line-weight="3" data-stable-label="Bold"', index)
+        self.assertIn('.map-smoothing-mode {', map_styles)
+        self.assertIn('.map-strength-mode button {', map_styles)
+        self.assertIn('--map-slider-width: 108px;', map_styles)
+        self.assertIn('padding-inline-start: var(--app-control-button-padding-inline);', map_styles)
+        self.assertIn('<h3>Search</h3>', index)
+        self.assertNotIn('<h3>Postcode</h3>', index)
+        self.assertIn('padding: 0 5px 0 0;', map_styles)
+        self.assertIn('.uk-map .maplibregl-popup-tip {\n        background: transparent;', map_styles)
+        self.assertIn('.uk-map .maplibre-tooltip .maplibregl-popup-content {\n        padding: 6px 10px;', map_styles)
+        self.assertIn('.uk-map .maplibre-tooltip .maplibregl-popup-tip {\n        border-width: 7px;', map_styles)
+        self.assertIn('border-bottom-color: var(--panel);', map_styles)
+        self.assertIn('border-top-color: var(--panel);', map_styles)
+        self.assertIn('border-right-color: var(--panel);', map_styles)
+        self.assertIn('border-left-color: var(--panel);', map_styles)
+        self.assertNotIn('--map-extreme-color', map_styles)
+        self.assertNotIn('class="map-extreme-label"', index)
+        self.assertIn('padding-inline: 6px;', map_styles)
+        self.assertIn('--map-info-separator-spacing: 0.35em;', map_styles)
+        self.assertGreaterEqual(map_styles.count('margin-left: var(--map-info-separator-spacing);'), 2)
+        self.assertGreaterEqual(map_styles.count('margin-right: var(--map-info-separator-spacing);'), 2)
+        self.assertIn('data-palette="spectral" title="Macaw"', index)
+        self.assertIn('<strong id="mapControlMetric" hidden></strong>', index)
+        self.assertIn('id="mapMetricSeparator" class="map-info-separator" aria-hidden="true" hidden>·</span>', index)
+        self.assertEqual(index.count('class="map-info-separator"'), 2)
+        self.assertIn('el("mapMetricSeparator").hidden = !kpiName;', map_source)
+        self.assertIn('id="mapInfoStrip" class="map-info-strip hidden"', index)
+        self.assertIn(
+            'id="mapToolbarStatus" class="map-toolbar-status" aria-label="Map status"', index,
+        )
+        self.assertNotIn('id="mapFloatingControl"', index)
+        self.assertIn('mapToolbarCollapsed: false', main_source)
+        self.assertIn('aria-controls="mapToolbar mapInfoStrip" aria-expanded="true"', map_source)
+        self.assertLess(map_source.index('id="mapControlReset"'), map_source.index('id="mapZoomIn"'))
+        self.assertIn('bindSettingsStripOverflowCue(el("mapToolbarScroll"));', map_source)
+        self.assertIn('scheduleMapViewportSync({ mode: "preserve" });', map_source)
+        self.assertNotIn('setupMapFloatingControlDrag', map_source)
+        self.assertIn('height: var(--app-control-strip-height);', map_styles)
+        self.assertIn('flex: 0 0 16px;', map_styles)
+        self.assertIn('height: 16px;', map_styles)
+        self.assertIn('[toolbar, infoStrip].forEach', map_source)
+        self.assertIn('grid-template-rows: 32px 17px;', map_styles)
+        self.assertIn('justify-content: flex-start;', map_styles)
+        self.assertIn('padding: 0 2px;', map_styles)
+        self.assertIn('gap: 2px;', map_styles)
+        self.assertNotIn('box-shadow: inset 0 -2px 0 var(--accent);', map_styles)
+        self.assertIn('border-radius: 0;', map_styles)
         self.assertIn('id="mapLegend" class="map-legend hidden collapsed"', index)
         self.assertIn(
             'id="mapLegendToggle" class="map-legend-toggle" type="button" title="Expand legend" '
