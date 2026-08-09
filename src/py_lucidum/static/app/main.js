@@ -159,7 +159,7 @@
         baseMap: "blank",
         mapPalette: "divergent",
         mapLineWeight: 1,
-        mapDotSize: 1,
+        mapDotSizeMode: "adaptive",
         mapOpacity: 1,
         mapHotspots: 0,
         mapLabelSize: 0,
@@ -3342,6 +3342,21 @@
         state.mapFavouriteRestoreInProgress = false;
       }
 
+      function mapFavouriteRequestKey(request) {
+        const comparable = { ...(request || {}) };
+        delete comparable.reuseUnitGeometry;
+        return stableRequestKey(comparable);
+      }
+
+      function cachedMapRequestMatches(cacheRequestKey, request) {
+        if (!cacheRequestKey || !request) return false;
+        try {
+          return mapFavouriteRequestKey(JSON.parse(cacheRequestKey)) === mapFavouriteRequestKey(request);
+        } catch (_) {
+          return false;
+        }
+      }
+
       async function refreshMapFavouriteViewData() {
         const request = ukMapTool.buildRequest();
         const cache = toolCache("uk_map");
@@ -3349,10 +3364,11 @@
         const canUseCachedMap = Boolean(
           request
           && cache.data
-          && cache.requestKey === requestKey
+          && cachedMapRequestMatches(cache.requestKey, request)
           && ukMapTool.canUseCached(cache)
         );
         if (canUseCachedMap) {
+          cache.requestKey = requestKey;
           return refreshUkMap({ renderIfCached: true });
         }
         if (request && ukMapTool.canRefreshInPlace(request)) {

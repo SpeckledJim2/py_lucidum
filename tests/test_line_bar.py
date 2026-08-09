@@ -919,7 +919,7 @@ COPY (
                     "baseMap": "grey",
                     "palette": "viridis",
                     "lineWeight": 2,
-                    "dotSize": 3,
+                    "dotSizeMode": "min",
                     "opacity": 0.8,
                     "hotspots": 4,
                     "labelSize": 5,
@@ -932,6 +932,7 @@ COPY (
         self.assertEqual(map_view["view"]["scope"], "map_view")
         self.assertTrue(map_view["validation"]["valid"])
         self.assertEqual(map_view["view"]["map"]["level"], "sector")
+        self.assertEqual(map_view["view"]["map"]["dotSizeMode"], "min")
         self.assertEqual(map_view["view"]["map"]["center"], {"lat": 51.5, "lng": -0.1})
         self.assertEqual(map_view["view"]["map"]["zoom"], 8)
 

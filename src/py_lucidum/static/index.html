@@ -636,11 +636,13 @@
                       <span class="slider-scale"><b>0</b><b id="mapLineWeightValue">1</b><b>10</b></span>
                       <input id="mapLineWeight" type="range" min="0" max="10" step="1" value="1" />
                     </label>
-                    <label id="mapDotSizeControl" class="map-slider-control" hidden>
+                    <div id="mapDotSizeControl" class="map-dot-size-control" hidden>
                       <span>Dot size</span>
-                      <span class="slider-scale"><b>1</b><b id="mapDotSizeValue">1</b><b>10</b></span>
-                      <input id="mapDotSize" type="range" min="1" max="10" step="1" value="1" />
-                    </label>
+                      <div id="mapDotSizeMode" class="map-dot-size-mode" role="group" aria-label="Dot size">
+                        <button id="mapDotSizeMin" type="button" data-map-dot-size-mode="min" aria-pressed="false">Min</button>
+                        <button id="mapDotSizeAdaptive" class="active" type="button" data-map-dot-size-mode="adaptive" aria-pressed="true">Adaptive</button>
+                      </div>
+                    </div>
                     <label class="map-slider-control">
                       <span>Opacity</span>
                       <span class="slider-scale"><b>0</b><b id="mapOpacityValue">10</b><b>10</b></span>

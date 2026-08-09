@@ -517,6 +517,23 @@ export function createMapLibreAdapter(maplibregl) {
       return new Bounds(this.raw.getBounds());
     }
 
+    getBoundsZoom(bounds, options = {}) {
+      if (!(bounds instanceof Bounds) || !bounds.isValid()) return null;
+      const nextOptions = {
+        ...options,
+        padding: normalizePadding(options.padding),
+      };
+      delete nextOptions.animate;
+      delete nextOptions.duration;
+      if (Number.isFinite(Number(nextOptions.maxZoom))) nextOptions.maxZoom = Number(nextOptions.maxZoom) - 1;
+      try {
+        const camera = this.raw.cameraForBounds(bounds.raw, nextOptions);
+        return Number.isFinite(Number(camera?.zoom)) ? Number(camera.zoom) + 1 : null;
+      } catch (_) {
+        return null;
+      }
+    }
+
     fitBounds(bounds, options = {}) {
       if (!(bounds instanceof Bounds) || !bounds.isValid()) return this;
       const nextOptions = {

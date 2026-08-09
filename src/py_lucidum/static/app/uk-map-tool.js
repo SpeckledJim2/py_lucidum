@@ -421,17 +421,15 @@ export function createUkMapTool({
   const MAP_FIT_PADDING = [8, 8];
   const MAP_UNIT_FIT_PADDING = [18, 18];
   const MAP_POPUP_MAX_WIDTH = 440;
-  const MAP_UNIT_POINT_RADIUS_MULTIPLIER = 0.85;
-  const MAP_UNIT_POINT_MIN_RADIUS_MULTIPLIER = 0.5;
-  const MAP_UNIT_POINT_MAX_RADIUS_MULTIPLIER = MAP_UNIT_POINT_RADIUS_MULTIPLIER * 4;
-  const MAP_UNIT_POINT_ZOOM_RADIUS_STOPS = [
-    [5, 1],
-    [6, 1.25],
-    [7, 1.75],
-    [8, 2.5],
-    [10, 3.25],
-    [11, 4],
-  ];
+  const MAP_UNIT_ADAPTIVE_DENSE_COUNT = 500_000;
+  const MAP_UNIT_ADAPTIVE_SPARSE_COUNT = 100;
+  const MAP_UNIT_ADAPTIVE_DENSE_BASE_DIAMETER = 1;
+  const MAP_UNIT_ADAPTIVE_DENSE_MAX_DIAMETER = 10;
+  const MAP_UNIT_ADAPTIVE_ULTRA_DENSE_COUNT = 1_500_000;
+  const MAP_UNIT_ADAPTIVE_ULTRA_DENSE_MAX_DIAMETER = 8;
+  const MAP_UNIT_ADAPTIVE_SPARSE_DIAMETER = 6;
+  const MAP_UNIT_ADAPTIVE_ZOOM_RANGE = 6;
+  const MAP_UNIT_DOT_SIZE_MODES = new Set(["min", "adaptive"]);
   const MAP_DEFAULT_VIEW = { center: { lat: 54.5, lng: -3.2 }, zoom: 6 };
   const MAP_LABEL_MIN_FONT_SIZE = 6;
   const MAP_LABEL_MAX_FONT_SIZE = 20;
@@ -1435,6 +1433,11 @@ export function createUkMapTool({
     return Object.keys(MAP_LEVELS).find((candidate) => mapLevelSelectable(candidate)) || "area";
   }
 
+  function normaliseMapDotSizeMode(value) {
+    const mode = String(value || "").toLowerCase();
+    return MAP_UNIT_DOT_SIZE_MODES.has(mode) ? mode : "adaptive";
+  }
+
   function normaliseFavouriteMapState(map = {}) {
     const payload = map && typeof map === "object" ? map : {};
     const level = normaliseFavouriteMapLevel(payload.level);
@@ -1445,7 +1448,7 @@ export function createUkMapTool({
       baseMap,
       palette,
       lineWeight: clampMapNumber(payload.lineWeight, 1, 0, 10, { integer: true }),
-      dotSize: clampMapNumber(payload.dotSize, 1, 1, 10, { integer: true }),
+      dotSizeMode: normaliseMapDotSizeMode(payload.dotSizeMode),
       opacity: clampMapNumber(payload.opacity, 1, 0, 1),
       hotspots: clampMapNumber(payload.hotspots, 0, -9, 9, { integer: true }),
       labelSize: clampMapNumber(payload.labelSize, 0, 0, 10, { integer: true }),
@@ -1462,7 +1465,7 @@ export function createUkMapTool({
       baseMap: state.baseMap,
       palette: state.mapPalette,
       lineWeight: Number(state.mapLineWeight),
-      dotSize: Number(state.mapDotSize),
+      dotSizeMode: normaliseMapDotSizeMode(state.mapDotSizeMode),
       opacity: Number(state.mapOpacity),
       hotspots: Number(state.mapHotspots),
       labelSize: Number(state.mapLabelSize),
@@ -1477,7 +1480,7 @@ export function createUkMapTool({
     state.mapLevel = next.level;
     state.mapPalette = next.palette;
     state.mapLineWeight = next.lineWeight;
-    state.mapDotSize = next.dotSize;
+    state.mapDotSizeMode = next.dotSizeMode;
     state.mapOpacity = next.opacity;
     state.mapHotspots = next.hotspots;
     state.mapLabelSize = next.labelSize;
@@ -1878,29 +1881,53 @@ export function createUkMapTool({
     applyMapPolygonStyles();
   }
 
-  function unitPointRadiusForZoom(zoom) {
-    const value = Number(zoom);
-    const firstStop = MAP_UNIT_POINT_ZOOM_RADIUS_STOPS[0];
-    if (!Number.isFinite(value) || value <= firstStop[0]) return firstStop[1];
-    for (let index = 1; index < MAP_UNIT_POINT_ZOOM_RADIUS_STOPS.length; index += 1) {
-      const lower = MAP_UNIT_POINT_ZOOM_RADIUS_STOPS[index - 1];
-      const upper = MAP_UNIT_POINT_ZOOM_RADIUS_STOPS[index];
-      if (value > upper[0]) continue;
-      const progress = (value - lower[0]) / (upper[0] - lower[0]);
-      return lower[1] + ((upper[1] - lower[1]) * progress);
-    }
-    return MAP_UNIT_POINT_ZOOM_RADIUS_STOPS.at(-1)[1];
+  function mapUnitAdaptiveScarcity(pointCount) {
+    const count = Math.max(1, Number(pointCount) || 1);
+    const denseLog = Math.log10(MAP_UNIT_ADAPTIVE_DENSE_COUNT);
+    const sparseLog = Math.log10(MAP_UNIT_ADAPTIVE_SPARSE_COUNT);
+    return Math.max(0, Math.min(1, (denseLog - Math.log10(count)) / (denseLog - sparseLog)));
   }
 
-  function unitPointRadiusForCurrentStyle(zoom) {
-    const rawSliderValue = Number(state.mapDotSize);
-    const sliderValue = Number.isFinite(rawSliderValue)
-      ? Math.max(1, Math.min(10, rawSliderValue))
+  function mapUnitUltraDenseProgress(pointCount) {
+    const count = Math.max(1, Number(pointCount) || 1);
+    if (count <= MAP_UNIT_ADAPTIVE_DENSE_COUNT) return 0;
+    const progress = Math.log(count / MAP_UNIT_ADAPTIVE_DENSE_COUNT)
+      / Math.log(MAP_UNIT_ADAPTIVE_ULTRA_DENSE_COUNT / MAP_UNIT_ADAPTIVE_DENSE_COUNT);
+    return Math.max(0, Math.min(1, progress));
+  }
+
+  function unitPointAdaptiveDiameter(zoom, fittedZoom, pointCount) {
+    const scarcity = mapUnitAdaptiveScarcity(pointCount);
+    const ultraDenseProgress = mapUnitUltraDenseProgress(pointCount);
+    const denseMaximumDiameter = MAP_UNIT_ADAPTIVE_DENSE_MAX_DIAMETER
+      + ((MAP_UNIT_ADAPTIVE_ULTRA_DENSE_MAX_DIAMETER - MAP_UNIT_ADAPTIVE_DENSE_MAX_DIAMETER)
+        * ultraDenseProgress);
+    const baselineDiameter = MAP_UNIT_ADAPTIVE_DENSE_BASE_DIAMETER
+      + ((MAP_UNIT_ADAPTIVE_SPARSE_DIAMETER - MAP_UNIT_ADAPTIVE_DENSE_BASE_DIAMETER) * scarcity);
+    const maximumDiameter = denseMaximumDiameter
+      + ((MAP_UNIT_ADAPTIVE_SPARSE_DIAMETER - denseMaximumDiameter) * scarcity);
+    const currentZoom = Number(zoom);
+    const baselineZoom = Number(fittedZoom);
+    const rawProgress = Number.isFinite(currentZoom) && Number.isFinite(baselineZoom)
+      ? (currentZoom - baselineZoom) / MAP_UNIT_ADAPTIVE_ZOOM_RANGE
+      : 0;
+    const progress = Math.max(0, Math.min(1, rawProgress));
+    const smoothProgress = progress * progress * (3 - (2 * progress));
+    return baselineDiameter + ((maximumDiameter - baselineDiameter) * smoothProgress);
+  }
+
+  function unitPointRenderStyle({ zoom, fittedZoom, pointCount, pixelRatio }) {
+    const ratio = Number.isFinite(Number(pixelRatio)) && Number(pixelRatio) > 0
+      ? Number(pixelRatio)
       : 1;
-    const progress = (sliderValue - 1) / 9;
-    const sizeMultiplier = MAP_UNIT_POINT_MIN_RADIUS_MULTIPLIER
-      + ((MAP_UNIT_POINT_MAX_RADIUS_MULTIPLIER - MAP_UNIT_POINT_MIN_RADIUS_MULTIPLIER) * progress);
-    return unitPointRadiusForZoom(zoom) * sizeMultiplier;
+    if (normaliseMapDotSizeMode(state.mapDotSizeMode) === "min") {
+      return { diameter: 1 / ratio, radius: 0.5 / ratio, singleDevicePixel: true };
+    }
+    const diameter = unitPointAdaptiveDiameter(zoom, fittedZoom, pointCount);
+    if (diameter <= MAP_UNIT_ADAPTIVE_DENSE_BASE_DIAMETER) {
+      return { diameter: 1 / ratio, radius: 0.5 / ratio, singleDevicePixel: true };
+    }
+    return { diameter, radius: diameter / 2, singleDevicePixel: false };
   }
 
   function unitPointHitRadius(radius) {
@@ -1996,6 +2023,8 @@ export function createUkMapTool({
         this.zooming = false;
         this.zoomRefreshPending = false;
         this.zoomFallbackFrame = null;
+        this.displayResizeFrame = null;
+        this.handleDisplayResizeBound = () => this.handleDisplayResize();
         this.setGeometry(normaliseUnitPointColumns(mapData));
         this.setData(mapData, initialScale, initialHotspotIndexes);
         this.tooltip = null;
@@ -2104,6 +2133,10 @@ export function createUkMapTool({
         };
         this.scale = nextScale;
         this.hotspotIndexes = nextHotspotIndexes;
+        const responseCount = Number(mapData?.point_summary?.plotted_count);
+        this.plottedPointCount = Number.isFinite(responseCount) && responseCount >= 0
+          ? responseCount
+          : unitPointCount(mapData);
         this.prepareColorBuckets();
         this.reset();
         return true;
@@ -2123,6 +2156,8 @@ export function createUkMapTool({
         map.on("mousemove", this.handleMouseMove, this);
         map.on("mouseout", this.closeTooltip, this);
         map.on("click", this.handleClick, this);
+        window.addEventListener("resize", this.handleDisplayResizeBound);
+        window.visualViewport?.addEventListener("resize", this.handleDisplayResizeBound);
         this.reset();
         this.canvasMapLayer = L.canvasLayer(this.canvas, this.canvasCoordinates());
         if (this.zooming) this.canvasMapLayer.setVisible(false);
@@ -2134,6 +2169,8 @@ export function createUkMapTool({
         this.zoomGeneration += 1;
         if (this.zoomFallbackFrame !== null) cancelAnimationFrame(this.zoomFallbackFrame);
         this.zoomFallbackFrame = null;
+        if (this.displayResizeFrame !== null) cancelAnimationFrame(this.displayResizeFrame);
+        this.displayResizeFrame = null;
         map.off("zoomstart", this.handleZoomStart, this);
         map.off("zoomend", this.handleZoomEnd, this);
         map.off("moveend", this.handleMoveEnd, this);
@@ -2141,11 +2178,22 @@ export function createUkMapTool({
         map.off("mousemove", this.handleMouseMove, this);
         map.off("mouseout", this.closeTooltip, this);
         map.off("click", this.handleClick, this);
+        window.removeEventListener("resize", this.handleDisplayResizeBound);
+        window.visualViewport?.removeEventListener("resize", this.handleDisplayResizeBound);
         this.canvasMapLayer?.remove();
         this.canvasMapLayer = null;
         this.canvas?.remove();
         this.canvas = null;
         this.map = null;
+      },
+      handleDisplayResize() {
+        if (!this.map || this.displayResizeFrame !== null) return;
+        this.displayResizeFrame = requestAnimationFrame(() => {
+          this.displayResizeFrame = null;
+          if (!this.map || this.zooming) return;
+          this.map.invalidateSize();
+          this.reset();
+        });
       },
       handleZoomStart() {
         this.zoomGeneration += 1;
@@ -2293,11 +2341,22 @@ export function createUkMapTool({
         this.canvas.style.width = `${size.x}px`;
         this.canvas.style.height = `${size.y}px`;
         const context = this.canvas.getContext("2d");
-        context.setTransform(ratio, 0, 0, ratio, 0, 0);
-        context.clearRect(0, 0, size.x, size.y);
+        context.setTransform(1, 0, 0, 1, 0, 0);
+        context.clearRect(0, 0, this.canvas.width, this.canvas.height);
         this.hitGrid = new Map();
-        const pointRadius = unitPointRadiusForCurrentStyle(this.map.getZoom());
+        const fittedZoom = this.map.getBoundsZoom(this.bounds, mapFitOptions("unit"));
+        const renderStyle = unitPointRenderStyle({
+          zoom: this.map.getZoom(),
+          fittedZoom,
+          pointCount: this.plottedPointCount,
+          pixelRatio: ratio,
+        });
+        const pointRadius = renderStyle.radius;
+        this.fittedZoom = fittedZoom;
+        this.pointDiameter = renderStyle.diameter;
         this.pointRadius = pointRadius;
+        this.singleDevicePixel = renderStyle.singleDevicePixel;
+        if (!renderStyle.singleDevicePixel) context.setTransform(ratio, 0, 0, ratio, 0, 0);
         const hitRadius = unitPointHitRadius(pointRadius);
         this.hitRadius = hitRadius;
         const cellRange = this.visibleCellRange(hitRadius, size);
@@ -2350,9 +2409,10 @@ export function createUkMapTool({
                 context.fillStyle = fillColor;
                 activeFillColor = fillColor;
               }
-              if (pointRadius <= 1) {
-                const sizePx = pointRadius * 2;
-                context.fillRect(pointX - pointRadius, pointY - pointRadius, sizePx, sizePx);
+              if (renderStyle.singleDevicePixel) {
+                context.fillRect(Math.round(pointX * ratio), Math.round(pointY * ratio), 1, 1);
+              } else if (pointRadius <= 1) {
+                context.fillRect(pointX - pointRadius, pointY - pointRadius, renderStyle.diameter, renderStyle.diameter);
               } else {
                 context.beginPath();
                 context.arc(pointX, pointY, pointRadius, 0, Math.PI * 2);
@@ -2392,7 +2452,7 @@ export function createUkMapTool({
       },
       findNearest(containerPoint) {
         if (!this.map || !this.hitGrid) return null;
-        const hitRadius = this.hitRadius || unitPointHitRadius(unitPointRadiusForCurrentStyle(this.map.getZoom()));
+        const hitRadius = this.hitRadius || 6;
         const radiusSquared = hitRadius * hitRadius;
         let nearest = null;
         let nearestDistance = radiusSquared;
@@ -2748,7 +2808,7 @@ export function createUkMapTool({
   }
 
   function syncMapSliderProgressStyles() {
-    ["mapLineWeight", "mapDotSize", "mapOpacity", "mapHotspots", "mapLabelSize", "mapSmoothing"]
+    ["mapLineWeight", "mapOpacity", "mapHotspots", "mapLabelSize", "mapSmoothing"]
       .forEach((id) => updateMapSliderProgress(el(id)));
   }
 
@@ -2773,13 +2833,11 @@ export function createUkMapTool({
     });
     const unitMode = state.mapLevel === "unit";
     el("mapLineWeight").value = String(state.mapLineWeight);
-    el("mapDotSize").value = String(state.mapDotSize);
     el("mapOpacity").value = String(opacitySliderValue(state.mapOpacity));
     el("mapHotspots").value = String(state.mapHotspots);
     el("mapLabelSize").value = String(state.mapLabelSize);
     el("mapSmoothing").value = String(state.mapSmoothingLevel);
     el("mapLineWeightValue").textContent = String(state.mapLineWeight);
-    el("mapDotSizeValue").textContent = String(state.mapDotSize);
     el("mapOpacityValue").textContent = formatOpacitySliderValue(state.mapOpacity);
     el("mapHotspotsValue").textContent = formatHotspotSliderValue(state.mapHotspots);
     syncMapExtremeLabels();
@@ -2790,10 +2848,14 @@ export function createUkMapTool({
     if (lineWeightControl) lineWeightControl.hidden = unitMode;
     el("mapLineWeight").disabled = unitMode;
     lineWeightControl?.classList.toggle("disabled", unitMode);
-    const dotSizeControl = el("mapDotSizeControl") || el("mapDotSize").closest(".map-slider-control");
+    const dotSizeControl = el("mapDotSizeControl");
     if (dotSizeControl) dotSizeControl.hidden = !unitMode;
-    el("mapDotSize").disabled = !unitMode;
-    dotSizeControl?.classList.toggle("disabled", !unitMode);
+    document.querySelectorAll("[data-map-dot-size-mode]").forEach((button) => {
+      const active = button.dataset.mapDotSizeMode === normaliseMapDotSizeMode(state.mapDotSizeMode);
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", String(active));
+      button.disabled = !unitMode;
+    });
     const labelHidden = state.mapLevel !== "area";
     const labelControl = el("mapLabelControl") || el("mapLabelSize").closest(".map-slider-control");
     if (labelControl) labelControl.hidden = labelHidden;
@@ -3239,9 +3301,18 @@ export function createUkMapTool({
         redrawMapInPlace();
       });
     });
+    document.querySelectorAll("[data-map-dot-size-mode]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const mode = normaliseMapDotSizeMode(button.dataset.mapDotSizeMode);
+        if (mode === state.mapDotSizeMode) return;
+        state.mapDotSizeMode = mode;
+        clearActiveMapFavourite({ force: true });
+        syncFloatingMapControl();
+        if (state.mapLevel === "unit") redrawMapInPlace();
+      });
+    });
     [
       ["mapLineWeight", "mapLineWeight"],
-      ["mapDotSize", "mapDotSize"],
       ["mapOpacity", "mapOpacity"],
       ["mapHotspots", "mapHotspots"],
       ["mapLabelSize", "mapLabelSize"],
@@ -3252,7 +3323,6 @@ export function createUkMapTool({
         clearActiveMapFavourite({ force: true });
         if (
           (id === "mapLineWeight" && state.mapLevel === "unit")
-          || (id === "mapDotSize" && state.mapLevel !== "unit")
           || (id === "mapLabelSize" && state.mapLevel !== "area")
         ) {
           syncFloatingMapControl();

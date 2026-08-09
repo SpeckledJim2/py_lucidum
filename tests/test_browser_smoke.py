@@ -17248,6 +17248,8 @@ COPY (
                           && (document.querySelector("#mapGroupMeta")?.textContent || "").includes("sectors matched")""",
                         timeout=10_000,
                     )
+                    self.assertEqual(page.locator("#mapDotSizeAdaptive").get_attribute("aria-pressed"), "true")
+                    self.assertEqual(page.locator("#mapDotSizeMin").get_attribute("aria-pressed"), "false")
 
                     self.assertEqual(page_errors, [])
                     browser.close()
@@ -17419,6 +17421,8 @@ COPY (
                         self.assertAlmostEqual(saved_map["center"]["lat"], 51.5, delta=0.01)
                         self.assertAlmostEqual(saved_map["center"]["lng"], -0.12, delta=0.01)
                         self.assertAlmostEqual(saved_map["zoom"], 9, delta=0.01)
+                        self.assertEqual(saved_map["dotSizeMode"], "adaptive")
+                        self.assertNotIn("dotSize", saved_map)
                         self.assertNotIn("view", saved_map)
 
                         def base_tile_id() -> str | None:
@@ -19102,28 +19106,32 @@ COPY (
                         self.assertGreater(label_order["labels"], label_order["unit"])
 
                         summary_request_count_before_camera_moves = len(summary_requests)
-                        page.evaluate(
+                        self.assertEqual(page.locator("#mapDotSizeAdaptive").get_attribute("aria-pressed"), "true")
+                        self.assertEqual(page.locator("#mapDotSizeMin").get_attribute("aria-pressed"), "false")
+                        fitted_zoom = float(page.evaluate(
                             """
-                            () => {
-                              const input = document.querySelector("#mapDotSize");
-                              input.value = "1";
-                              input.dispatchEvent(new Event("input", { bubbles: true }));
-                            }
+                            () => Object.values(
+                              document.querySelector("#ukMap")?._lucidumMap?._layers || {}
+                            ).find((candidate) => candidate?.data?.level === "unit")?.fittedZoom
                             """
-                        )
+                        ))
 
-                        def unit_radius_at_zoom(zoom: float) -> float:
+                        def unit_style_at_zoom(zoom: float, point_count: int) -> dict[str, Any]:
                             page.evaluate(
                                 """
-                                (zoom) => {
-                                  document.querySelector("#ukMap")?._lucidumMap?.setZoom(zoom);
+                                ({ zoom, pointCount }) => {
+                                  const map = document.querySelector("#ukMap")?._lucidumMap;
+                                  const unitLayer = Object.values(map?._layers || {})
+                                    .find((candidate) => candidate?.data?.level === "unit");
+                                  unitLayer.plottedPointCount = pointCount;
+                                  map?.setZoom(zoom);
                                 }
                                 """,
-                                zoom,
+                                {"zoom": zoom, "pointCount": point_count},
                             )
                             page.wait_for_function(
                                 """
-                                (zoom) => {
+                                ({ zoom, pointCount }) => {
                                   const container = document.querySelector("#ukMap");
                                   const map = container?._lucidumMap;
                                   const raw = container?._lucidumMapLibre;
@@ -19132,73 +19140,75 @@ COPY (
                                   return Math.abs((map?.getZoom() || 0) - zoom) < 0.01
                                     && !raw?.isMoving()
                                     && unitLayer?.canvasMapLayer?.visible === true
-                                    && Number.isFinite(unitLayer?.pointRadius);
+                                    && unitLayer?.plottedPointCount === pointCount
+                                    && Number.isFinite(unitLayer?.pointDiameter);
                                 }
                                 """,
-                                arg=zoom,
+                                arg={"zoom": zoom, "pointCount": point_count},
                                 timeout=10_000,
                             )
-                            return float(page.evaluate(
+                            return page.evaluate(
                                 """
-                                () => Object.values(
-                                  document.querySelector("#ukMap")?._lucidumMap?._layers || {}
-                                ).find((candidate) => candidate?.data?.level === "unit")?.pointRadius
+                                () => {
+                                  const unitLayer = Object.values(
+                                    document.querySelector("#ukMap")?._lucidumMap?._layers || {}
+                                  ).find((candidate) => candidate?.data?.level === "unit");
+                                  return {
+                                    diameter: unitLayer?.pointDiameter,
+                                    fittedZoom: unitLayer?.fittedZoom,
+                                    singleDevicePixel: unitLayer?.singleDevicePixel,
+                                    pixelRatio: window.devicePixelRatio || 1,
+                                  };
+                                }
                                 """
-                            ))
+                            )
 
-                        low_zoom_radius = unit_radius_at_zoom(5)
-                        middle_zoom_radius = unit_radius_at_zoom(7.5)
-                        high_zoom_radius = unit_radius_at_zoom(10)
-                        self.assertAlmostEqual(low_zoom_radius, 0.5)
-                        self.assertAlmostEqual(middle_zoom_radius, 1.0625)
-                        self.assertAlmostEqual(high_zoom_radius, 1.625)
-                        self.assertLess(low_zoom_radius, middle_zoom_radius)
-                        self.assertLess(middle_zoom_radius, high_zoom_radius)
+                        sparse_low = unit_style_at_zoom(fitted_zoom, 100)
+                        sparse_high = unit_style_at_zoom(fitted_zoom + 6, 100)
+                        dense_low = unit_style_at_zoom(fitted_zoom, 500_000)
+                        dense_middle = unit_style_at_zoom(fitted_zoom + 3, 500_000)
+                        dense_high = unit_style_at_zoom(fitted_zoom + 6, 500_000)
+                        ultra_dense_middle = unit_style_at_zoom(fitted_zoom + 3, 1_500_000)
+                        ultra_dense_high = unit_style_at_zoom(fitted_zoom + 6, 1_500_000)
+                        intermediate_low = unit_style_at_zoom(fitted_zoom, 7_071)
+                        self.assertAlmostEqual(sparse_low["diameter"], 6)
+                        self.assertAlmostEqual(sparse_high["diameter"], 6)
+                        self.assertTrue(dense_low["singleDevicePixel"])
+                        self.assertAlmostEqual(dense_low["diameter"] * dense_low["pixelRatio"], 1)
+                        self.assertAlmostEqual(dense_middle["diameter"], 5.5)
+                        self.assertAlmostEqual(dense_high["diameter"], 10)
+                        self.assertAlmostEqual(ultra_dense_middle["diameter"], 4.5)
+                        self.assertAlmostEqual(ultra_dense_high["diameter"], 8)
+                        self.assertGreater(intermediate_low["diameter"], dense_low["diameter"])
+                        self.assertLess(intermediate_low["diameter"], sparse_low["diameter"])
+                        self.assertAlmostEqual(dense_high["fittedZoom"], fitted_zoom)
+
+                        page.evaluate('() => document.querySelector("#mapDotSizeMin")?.click()')
+                        page.wait_for_function(
+                            """
+                            () => {
+                              const map = document.querySelector("#ukMap")?._lucidumMap;
+                              const unitLayer = Object.values(map?._layers || {})
+                                .find((candidate) => candidate?.data?.level === "unit");
+                              return document.querySelector("#mapDotSizeMin")?.getAttribute("aria-pressed") === "true"
+                                && unitLayer?.singleDevicePixel
+                                && Math.abs((unitLayer.pointDiameter * window.devicePixelRatio) - 1) < 0.0001;
+                            }
+                            """,
+                            timeout=10_000,
+                        )
                         self.assertEqual(len(summary_requests), summary_request_count_before_camera_moves)
-
+                        page.evaluate('() => document.querySelector("#mapDotSizeAdaptive")?.click()')
                         page.evaluate(
                             """
                             () => {
-                              const input = document.querySelector("#mapDotSize");
-                              input.value = "10";
-                              input.dispatchEvent(new Event("input", { bubbles: true }));
+                              const map = document.querySelector("#ukMap")?._lucidumMap;
+                              const unitLayer = Object.values(map?._layers || {})
+                                .find((candidate) => candidate?.data?.level === "unit");
+                              unitLayer.plottedPointCount = 4;
+                              unitLayer.reset();
                             }
                             """
-                        )
-                        page.wait_for_function(
-                            """
-                            () => Object.values(
-                              document.querySelector("#ukMap")?._lucidumMap?._layers || {}
-                            ).some((candidate) => candidate?.data?.level === "unit"
-                              && candidate.pointRadius > 10)
-                            """,
-                            timeout=10_000,
-                        )
-                        large_control_radius = page.evaluate(
-                            """
-                            () => Object.values(
-                              document.querySelector("#ukMap")?._lucidumMap?._layers || {}
-                            ).find((candidate) => candidate?.data?.level === "unit")?.pointRadius
-                            """
-                        )
-                        self.assertGreater(large_control_radius, high_zoom_radius)
-                        page.evaluate(
-                            """
-                            () => {
-                              const input = document.querySelector("#mapDotSize");
-                              input.value = "1";
-                              input.dispatchEvent(new Event("input", { bubbles: true }));
-                            }
-                            """
-                        )
-                        page.wait_for_function(
-                            """
-                            () => Object.values(
-                              document.querySelector("#ukMap")?._lucidumMap?._layers || {}
-                            ).some((candidate) => candidate?.data?.level === "unit"
-                              && Math.abs(candidate.pointRadius - 1.625) < 0.0001)
-                            """,
-                            timeout=10_000,
                         )
                         page.evaluate(
                             """
@@ -19576,6 +19586,228 @@ COPY (
                         self.assertEqual(page_errors, [])
                     finally:
                         browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_uk_map_min_dot_mode_paints_one_backing_pixel_at_each_device_scale(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            data_path = root / "unit_physical_pixels.csv"
+            favourites_path = root / "favourites.json"
+            data_path.write_text(
+                "PostcodeArea,PostcodeSector,PostcodeUnit,lat,long,price\n"
+                "E,E1 1,E1 1AA,51.5074,-0.1278,100\n"
+                "EH,EH1 1,EH1 1AA,55.9533,-3.1883,200\n",
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                defaults={"actual": "price", "denominator": "__none__"},
+                tools=["uk_map"],
+                token="",
+                line_bar_favourites_path=favourites_path,
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser_cases = (
+                        ("chromium", playwright.chromium, 1),
+                        ("webkit", playwright.webkit, 2),
+                    )
+                    for browser_name, browser_type, device_scale_factor in browser_cases:
+                        with self.subTest(browser=browser_name, device_scale_factor=device_scale_factor):
+                            browser = browser_type.launch()
+                            context = browser.new_context(
+                                viewport={"width": 1100, "height": 720},
+                                device_scale_factor=device_scale_factor,
+                            )
+                            page = context.new_page()
+                            page_errors: list[str] = []
+                            summary_requests: list[str] = []
+                            page.on("pageerror", lambda error: page_errors.append(str(error)))
+                            page.on(
+                                "request",
+                                lambda request: summary_requests.append(request.url)
+                                if request.url.endswith("/api/uk-map/summary")
+                                else None,
+                            )
+                            try:
+                                page.goto(base_url, wait_until="domcontentloaded")
+                                self.wait_for_app_ready(page)
+                                page.wait_for_function('() => Boolean(document.querySelector("#ukMap")?._lucidumMap)')
+                                unit_input = page.locator(
+                                    '#mapLevelTiles input[name="mapLevel"][value="unit"]'
+                                )
+                                if not unit_input.is_checked():
+                                    with page.expect_response(
+                                        lambda response: response.url.endswith("/api/uk-map/summary")
+                                        and response.status == 200,
+                                        timeout=10_000,
+                                    ):
+                                        page.evaluate(
+                                            """
+                                            () => {
+                                              const input = document.querySelector(
+                                                '#mapLevelTiles input[name="mapLevel"][value="unit"]'
+                                              );
+                                              input.checked = true;
+                                              input.dispatchEvent(new Event("change", { bubbles: true }));
+                                            }
+                                            """
+                                        )
+                                page.wait_for_function(
+                                    """
+                                    () => {
+                                      const container = document.querySelector("#ukMap");
+                                      const map = container?._lucidumMap;
+                                      const raw = container?._lucidumMapLibre;
+                                      const layer = Object.values(map?._layers || {})
+                                        .find((candidate) => candidate?.data?.level === "unit");
+                                      return !raw?.isMoving()
+                                        && layer?.pointCount === 2
+                                        && layer?.canvasMapLayer?.visible === true;
+                                    }
+                                    """,
+                                    timeout=10_000,
+                                )
+                                request_count = len(summary_requests)
+                                page.evaluate('() => document.querySelector("#mapDotSizeMin")?.click()')
+                                page.wait_for_function(
+                                    """
+                                    () => {
+                                      const map = document.querySelector("#ukMap")?._lucidumMap;
+                                      const layer = Object.values(map?._layers || {})
+                                        .find((candidate) => candidate?.data?.level === "unit");
+                                      return document.querySelector("#mapDotSizeMin")
+                                          ?.getAttribute("aria-pressed") === "true"
+                                        && layer?.singleDevicePixel
+                                        && Math.abs((layer.pointDiameter * window.devicePixelRatio) - 1) < 0.0001;
+                                    }
+                                    """,
+                                    timeout=10_000,
+                                )
+
+                                def canvas_state() -> dict[str, Any]:
+                                    return page.evaluate(
+                                        """
+                                        () => {
+                                          const map = document.querySelector("#ukMap")?._lucidumMap;
+                                          const layer = Object.values(map?._layers || {})
+                                            .find((candidate) => candidate?.data?.level === "unit");
+                                          const canvas = layer.canvas;
+                                          const pixels = canvas.getContext("2d")
+                                            .getImageData(0, 0, canvas.width, canvas.height).data;
+                                          let paintedPixels = 0;
+                                          for (let index = 3; index < pixels.length; index += 4) {
+                                            if (pixels[index] > 0) paintedPixels += 1;
+                                          }
+                                          return {
+                                            paintedPixels,
+                                            canvasWidth: canvas.width,
+                                            canvasHeight: canvas.height,
+                                            cssWidth: map.getSize().x,
+                                            cssHeight: map.getSize().y,
+                                            devicePixelRatio: window.devicePixelRatio,
+                                            physicalDiameter: layer.pointDiameter * window.devicePixelRatio,
+                                            hitRadius: layer.hitRadius,
+                                            fittedZoom: layer.fittedZoom,
+                                          };
+                                        }
+                                        """
+                                    )
+
+                                initial = canvas_state()
+                                self.assertEqual(initial["devicePixelRatio"], device_scale_factor)
+                                self.assertEqual(initial["paintedPixels"], 2)
+                                self.assertEqual(initial["canvasWidth"], round(initial["cssWidth"] * device_scale_factor))
+                                self.assertEqual(initial["canvasHeight"], round(initial["cssHeight"] * device_scale_factor))
+                                self.assertAlmostEqual(initial["physicalDiameter"], 1)
+                                self.assertEqual(initial["hitRadius"], 6)
+                                self.assertEqual(len(summary_requests), request_count)
+
+                                if browser_name == "chromium":
+                                    if page.locator("#favouritesCollapseBtn").get_attribute("aria-expanded") == "false":
+                                        page.locator("#favouritesCollapseBtn").click()
+                                    self.click_sidebar_favourite_action(page, "#sidebarFavouriteAddBtn")
+                                    page.locator("#sidebarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
+                                    page.locator("#sidebarFavouriteNameInput").fill("Minimum unit dots")
+                                    page.locator('[data-favourite-action="save-add"]').click()
+                                    page.wait_for_function(
+                                        """
+                                        () => [...document.querySelectorAll(".saved-favourite-option")]
+                                          .some((button) => button.querySelector(".saved-filter-name")
+                                            ?.textContent.trim() === "Minimum unit dots")
+                                        """,
+                                        timeout=10_000,
+                                    )
+                                    saved_payload = json.loads(favourites_path.read_text(encoding="utf-8"))
+                                    saved_map = next(
+                                        item["view"]["map"]
+                                        for item in saved_payload["favourites"]
+                                        if item["name"] == "Minimum unit dots"
+                                    )
+                                    self.assertEqual(saved_map["dotSizeMode"], "min")
+                                    self.assertNotIn("dotSize", saved_map)
+                                    page.evaluate('() => document.querySelector("#mapDotSizeAdaptive")?.click()')
+                                    page.wait_for_function(
+                                        '() => document.querySelector("#mapDotSizeAdaptive")'
+                                        '?.getAttribute("aria-pressed") === "true"',
+                                        timeout=10_000,
+                                    )
+                                    favourite_request_count = len(summary_requests)
+                                    page.evaluate(
+                                        """
+                                        () => [...document.querySelectorAll(".saved-favourite-option")]
+                                          .find((button) => button.querySelector(".saved-filter-name")
+                                            ?.textContent.trim() === "Minimum unit dots")?.click()
+                                        """
+                                    )
+                                    page.wait_for_function(
+                                        """
+                                        () => {
+                                          const map = document.querySelector("#ukMap")?._lucidumMap;
+                                          const layer = Object.values(map?._layers || {})
+                                            .find((candidate) => candidate?.data?.level === "unit");
+                                          return document.querySelector("#mapDotSizeMin")
+                                              ?.getAttribute("aria-pressed") === "true"
+                                            && layer?.singleDevicePixel;
+                                        }
+                                        """,
+                                        timeout=10_000,
+                                    )
+                                    self.assertEqual(len(summary_requests), favourite_request_count)
+                                    request_count = len(summary_requests)
+
+                                page.set_viewport_size({"width": 1100, "height": 500})
+                                page.wait_for_function(
+                                    """
+                                    (previousHeight) => {
+                                      const map = document.querySelector("#ukMap")?._lucidumMap;
+                                      const layer = Object.values(map?._layers || {})
+                                        .find((candidate) => candidate?.data?.level === "unit");
+                                      return layer?.canvas?.height !== previousHeight
+                                        && layer?.singleDevicePixel
+                                        && Math.abs((layer.pointDiameter * window.devicePixelRatio) - 1) < 0.0001;
+                                    }
+                                    """,
+                                    arg=initial["canvasHeight"],
+                                    timeout=10_000,
+                                )
+                                resized = canvas_state()
+                                self.assertEqual(resized["paintedPixels"], 2)
+                                self.assertEqual(resized["canvasWidth"], round(resized["cssWidth"] * device_scale_factor))
+                                self.assertEqual(resized["canvasHeight"], round(resized["cssHeight"] * device_scale_factor))
+                                self.assertAlmostEqual(resized["physicalDiameter"], 1)
+                                self.assertEqual(resized["hitRadius"], 6)
+                                self.assertNotAlmostEqual(resized["fittedZoom"], initial["fittedZoom"])
+                                self.assertEqual(len(summary_requests), request_count)
+                                self.assertEqual(page_errors, [])
+                            finally:
+                                context.close()
+                                browser.close()
             finally:
                 server.should_exit = True
                 thread.join(timeout=5)
@@ -28716,7 +28948,8 @@ COPY (
                 self.assertFalse(page.locator("#mapLineWeightControl").is_hidden())
                 self.assertFalse(page.locator("#mapLineWeight").is_disabled())
                 self.assertTrue(page.locator("#mapDotSizeControl").is_hidden())
-                self.assertTrue(page.locator("#mapDotSize").is_disabled())
+                self.assertTrue(page.locator("#mapDotSizeMin").is_disabled())
+                self.assertTrue(page.locator("#mapDotSizeAdaptive").is_disabled())
                 self.assertEqual(page.locator("#mapLineWeightControl > span:first-child").text_content().strip(), "Width")
                 self.assertEqual(page.locator("#mapHotspots").get_attribute("min"), "-9")
                 self.assertEqual(page.locator("#mapHotspots").get_attribute("max"), "9")
@@ -29198,7 +29431,8 @@ COPY (
                 self.assertFalse(page.locator("#mapLineWeightControl").is_hidden())
                 self.assertFalse(page.locator("#mapLineWeight").is_disabled())
                 self.assertTrue(page.locator("#mapDotSizeControl").is_hidden())
-                self.assertTrue(page.locator("#mapDotSize").is_disabled())
+                self.assertTrue(page.locator("#mapDotSizeMin").is_disabled())
+                self.assertTrue(page.locator("#mapDotSizeAdaptive").is_disabled())
                 self.assertEqual(page.locator("#mapLineWeightControl > span:first-child").text_content().strip(), "Width")
                 self.assertEqual(page.locator("#mapHotspotsMinLabel").text_content().strip(), "Low")
                 self.assertEqual(page.locator("#mapHotspotsMaxLabel").text_content().strip(), "High")
@@ -29231,8 +29465,11 @@ COPY (
                 self.assertTrue(page.locator("#mapLineWeightControl").is_hidden())
                 self.assertTrue(page.locator("#mapLineWeight").is_disabled())
                 self.assertFalse(page.locator("#mapDotSizeControl").is_hidden())
-                self.assertFalse(page.locator("#mapDotSize").is_disabled())
+                self.assertFalse(page.locator("#mapDotSizeMin").is_disabled())
+                self.assertFalse(page.locator("#mapDotSizeAdaptive").is_disabled())
                 self.assertEqual(page.locator("#mapDotSizeControl > span:first-child").text_content().strip(), "Dot size")
+                self.assertEqual(page.locator("#mapDotSizeAdaptive").get_attribute("aria-pressed"), "true")
+                self.assertEqual(page.locator("#mapDotSizeMin").get_attribute("aria-pressed"), "false")
                 self.assertEqual(page.locator("#mapHotspotsMinLabel").text_content().strip(), "Low")
                 self.assertEqual(page.locator("#mapHotspotsMaxLabel").text_content().strip(), "High")
                 self.assertIn("unit-mode", page.locator("#mapSliderGrid").get_attribute("class") or "")
@@ -29279,18 +29516,8 @@ COPY (
                         """
                     )
                 )
-                page.evaluate(
-                    """
-                    () => {
-                        const input = document.querySelector("#mapDotSize");
-                        input.value = "10";
-                        input.dispatchEvent(new Event("input", { bubbles: true }));
-                    }
-                    """
-                )
-                page.wait_for_function('() => document.querySelector("#mapDotSizeValue")?.textContent === "10"')
-                large_dot_pixels = unit_point_alpha_pixels()
-                self.assertGreater(large_dot_pixels, 0)
+                adaptive_dot_pixels = unit_point_alpha_pixels()
+                self.assertGreater(adaptive_dot_pixels, 0)
                 page.evaluate(
                     """
                     () => {
@@ -29314,19 +29541,13 @@ COPY (
                 page.wait_for_function('() => document.querySelector("#mapOpacityValue")?.textContent === "10"')
                 restored_dot_pixels = unit_point_alpha_pixels()
                 self.assertGreater(restored_dot_pixels, 0)
-                page.evaluate(
-                    """
-                    () => {
-                        const input = document.querySelector("#mapDotSize");
-                        input.value = "1";
-                        input.dispatchEvent(new Event("input", { bubbles: true }));
-                    }
-                    """
+                page.locator("#mapDotSizeMin").click()
+                page.wait_for_function(
+                    '() => document.querySelector("#mapDotSizeMin")?.getAttribute("aria-pressed") === "true"'
                 )
-                page.wait_for_function('() => document.querySelector("#mapDotSizeValue")?.textContent === "1"')
-                small_dot_pixels = unit_point_alpha_pixels()
-                self.assertGreater(small_dot_pixels, 0)
-                self.assertGreater(large_dot_pixels, small_dot_pixels)
+                min_dot_pixels = unit_point_alpha_pixels()
+                self.assertGreater(min_dot_pixels, 0)
+                self.assertGreater(adaptive_dot_pixels, min_dot_pixels)
                 wait_for_map_view(stable_map_view)
                 assert_filter_label_badge("#mapControlFilter", "map-filter--applied", True)
                 assert_filter_badge_clear("#mapControlFilterClearBtn", "#mapControlFilterText", True)

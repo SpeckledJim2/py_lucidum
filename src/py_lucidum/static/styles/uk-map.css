@@ -613,6 +613,66 @@
         display: none;
       }
 
+      .map-dot-size-control {
+        display: grid;
+        grid-template-columns: 58px minmax(0, 1fr);
+        align-items: center;
+        gap: 4px;
+        min-width: 0;
+        min-height: 26px;
+        font-size: 12px;
+      }
+
+      .map-dot-size-control[hidden] {
+        display: none;
+      }
+
+      .map-dot-size-control > span:first-child {
+        font-weight: 500;
+      }
+
+      .map-dot-size-mode {
+        display: flex;
+        align-items: center;
+        justify-content: flex-start;
+        gap: 4px;
+        min-width: 0;
+      }
+
+      .map-dot-size-mode button {
+        appearance: none;
+        min-height: 22px;
+        padding: 2px 6px;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        color: var(--muted);
+        font: inherit;
+        font-weight: 400;
+        cursor: pointer;
+      }
+
+      .map-dot-size-mode button:hover {
+        color: var(--accent);
+      }
+
+      .map-dot-size-mode button:focus-visible {
+        color: var(--accent);
+        outline: 2px solid color-mix(in srgb, var(--accent) 72%, white);
+        outline-offset: 1px;
+      }
+
+      .map-dot-size-mode button.active {
+        color: var(--accent);
+        font-weight: 700;
+      }
+
+      .map-dot-size-mode button:disabled {
+        color: color-mix(in srgb, currentColor 50%, transparent);
+        cursor: default;
+        opacity: 0.65;
+      }
+
       .map-slider-control > span:first-child {
         grid-column: 1;
         font-weight: 500;
