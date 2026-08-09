@@ -613,7 +613,8 @@
         display: none;
       }
 
-      .map-dot-size-control {
+      .map-dot-size-control,
+      .map-area-label-control {
         display: grid;
         grid-template-columns: 58px minmax(0, 1fr);
         align-items: center;
@@ -623,15 +624,18 @@
         font-size: 12px;
       }
 
-      .map-dot-size-control[hidden] {
+      .map-dot-size-control[hidden],
+      .map-area-label-control[hidden] {
         display: none;
       }
 
-      .map-dot-size-control > span:first-child {
+      .map-dot-size-control > span:first-child,
+      .map-area-label-control > span:first-child {
         font-weight: 500;
       }
 
-      .map-dot-size-mode {
+      .map-dot-size-mode,
+      .map-area-label-mode {
         display: flex;
         align-items: center;
         justify-content: flex-start;
@@ -639,7 +643,8 @@
         min-width: 0;
       }
 
-      .map-dot-size-mode button {
+      .map-dot-size-mode button,
+      .map-area-label-mode button {
         appearance: none;
         min-height: 22px;
         padding: 2px 6px;
@@ -652,22 +657,26 @@
         cursor: pointer;
       }
 
-      .map-dot-size-mode button:hover {
+      .map-dot-size-mode button:hover,
+      .map-area-label-mode button:hover {
         color: var(--accent);
       }
 
-      .map-dot-size-mode button:focus-visible {
+      .map-dot-size-mode button:focus-visible,
+      .map-area-label-mode button:focus-visible {
         color: var(--accent);
         outline: 2px solid color-mix(in srgb, var(--accent) 72%, white);
         outline-offset: 1px;
       }
 
-      .map-dot-size-mode button.active {
+      .map-dot-size-mode button.active,
+      .map-area-label-mode button.active {
         color: var(--accent);
         font-weight: 700;
       }
 
-      .map-dot-size-mode button:disabled {
+      .map-dot-size-mode button:disabled,
+      .map-area-label-mode button:disabled {
         color: color-mix(in srgb, currentColor 50%, transparent);
         cursor: default;
         opacity: 0.65;
@@ -802,10 +811,16 @@
       }
 
       .map-label {
+        --map-area-label-size-offset: 0px;
         color: #111827;
         display: inline-block;
         font-weight: 650;
         left: 0;
+        font-size: clamp(
+          var(--map-area-label-min-size, 6px),
+          calc(var(--map-area-label-base-size, 9px) + var(--map-area-label-size-offset)),
+          var(--map-area-label-max-size, 20px)
+        );
         line-height: 1.1;
         position: absolute;
         top: 0;

@@ -431,8 +431,13 @@ export function createUkMapTool({
   const MAP_UNIT_ADAPTIVE_ZOOM_RANGE = 6;
   const MAP_UNIT_DOT_SIZE_MODES = new Set(["min", "adaptive"]);
   const MAP_DEFAULT_VIEW = { center: { lat: 54.5, lng: -3.2 }, zoom: 6 };
-  const MAP_LABEL_MIN_FONT_SIZE = 6;
-  const MAP_LABEL_MAX_FONT_SIZE = 20;
+  const MAP_AREA_LABEL_MODES = new Set(["off", "on"]);
+  const MAP_AREA_LABEL_MIN_FONT_SIZE = 6;
+  const MAP_AREA_LABEL_BASE_FONT_SIZE = 9;
+  const MAP_AREA_LABEL_MAX_FONT_SIZE = 20;
+  const MAP_AREA_LABEL_GROWTH_PER_ZOOM = 2;
+  const MAP_AREA_LABEL_MIN_ZOOM_OFFSET = -3;
+  const MAP_AREA_LABEL_MAX_ZOOM_OFFSET = 1.5;
   const MAP_VECTOR_LABEL_COLOR = "#1f2937";
   const MAP_VECTOR_LABEL_HALO_COLOR = "rgba(255, 255, 255, 0.96)";
   const MAP_VECTOR_LABEL_HALO_WIDTH = 1.75;
@@ -502,6 +507,7 @@ export function createUkMapTool({
   let mapPendingMetaTimer = null;
   let mapPendingMetaRequestSeq = null;
   let mapInitPromise = null;
+  let mapAreaLabelSizeFrame = null;
 
   function clearActiveMapFavourite(options = {}) {
     if (state.mapFavouriteRestoreInProgress && !options.force) return;
@@ -699,6 +705,17 @@ export function createUkMapTool({
     if (!options.preservePendingRestore) state.mapViewRestorePending = null;
   }
 
+  function clearMapLabelLayer() {
+    if (mapAreaLabelSizeFrame !== null) cancelAnimationFrame(mapAreaLabelSizeFrame);
+    mapAreaLabelSizeFrame = null;
+    if (ukMapLabelLayer && ukMap) ukMap.removeLayer(ukMapLabelLayer);
+    ukMapLabelLayer = null;
+    const container = ukMap?.getContainer?.();
+    container?.style.removeProperty("--map-area-label-min-size");
+    container?.style.removeProperty("--map-area-label-base-size");
+    container?.style.removeProperty("--map-area-label-max-size");
+  }
+
   function clearRenderedMap() {
     state.lastMapData = null;
     state.renderedMapLevel = null;
@@ -711,10 +728,7 @@ export function createUkMapTool({
       ukMap.removeLayer(ukMapPointLayer);
       ukMapPointLayer = null;
     }
-    if (ukMapLabelLayer && ukMap) {
-      ukMap.removeLayer(ukMapLabelLayer);
-      ukMapLabelLayer = null;
-    }
+    clearMapLabelLayer();
     el("mapLegendBody").textContent = "";
     el("mapLegend").classList.add("hidden");
     setMapRowMeta("");
@@ -842,6 +856,7 @@ export function createUkMapTool({
       ukMap.on("zoomend", () => {
         if (state.lastMapData?.level === "sector") restyleActiveMapPolygonLayer();
       });
+      ukMap.on("zoomend resize", scheduleMapAreaLabelSizeUpdate);
       ukMap.on("popupclose", (event) => {
         if (!activeMapPopupSelection?.popup || activeMapPopupSelection.popup === event.popup) {
           activeMapPopupSelection = null;
@@ -1438,6 +1453,12 @@ export function createUkMapTool({
     return MAP_UNIT_DOT_SIZE_MODES.has(mode) ? mode : "adaptive";
   }
 
+  function normaliseMapAreaLabels(value, legacyLabelSize = 0) {
+    const mode = String(value || "").toLowerCase();
+    if (MAP_AREA_LABEL_MODES.has(mode)) return mode;
+    return Number(legacyLabelSize) > 0 ? "on" : "off";
+  }
+
   function normaliseFavouriteMapState(map = {}) {
     const payload = map && typeof map === "object" ? map : {};
     const level = normaliseFavouriteMapLevel(payload.level);
@@ -1451,7 +1472,7 @@ export function createUkMapTool({
       dotSizeMode: normaliseMapDotSizeMode(payload.dotSizeMode),
       opacity: clampMapNumber(payload.opacity, 1, 0, 1),
       hotspots: clampMapNumber(payload.hotspots, 0, -9, 9, { integer: true }),
-      labelSize: clampMapNumber(payload.labelSize, 0, 0, 10, { integer: true }),
+      areaLabels: normaliseMapAreaLabels(payload.areaLabels, payload.labelSize),
       smoothingLevel: clampMapNumber(payload.smoothingLevel, 0, 0, 5, { integer: true }),
       view: normaliseMapView({ center: payload.center, zoom: payload.zoom }),
     };
@@ -1468,7 +1489,7 @@ export function createUkMapTool({
       dotSizeMode: normaliseMapDotSizeMode(state.mapDotSizeMode),
       opacity: Number(state.mapOpacity),
       hotspots: Number(state.mapHotspots),
-      labelSize: Number(state.mapLabelSize),
+      areaLabels: normaliseMapAreaLabels(state.mapAreaLabels),
       smoothingLevel: Number(state.mapSmoothingLevel),
       center: view?.center || null,
       zoom: view?.zoom ?? null,
@@ -1483,7 +1504,7 @@ export function createUkMapTool({
     state.mapDotSizeMode = next.dotSizeMode;
     state.mapOpacity = next.opacity;
     state.mapHotspots = next.hotspots;
-    state.mapLabelSize = next.labelSize;
+    state.mapAreaLabels = next.areaLabels;
     state.mapSmoothingLevel = next.smoothingLevel;
     state.mapView = next.view;
     state.mapViewRestorePending = next.view;
@@ -2600,10 +2621,7 @@ export function createUkMapTool({
       ukMap.removeLayer(ukMapPointLayer);
       ukMapPointLayer = null;
     }
-    if (ukMapLabelLayer) {
-      ukMap.removeLayer(ukMapLabelLayer);
-      ukMapLabelLayer = null;
-    }
+    clearMapLabelLayer();
     ukMapLayer = cachedPolygonLayer.layer;
     applyMapPolygonStyles();
     if (!ukMap.hasLayer(ukMapLayer)) ukMapLayer.addTo(ukMap);
@@ -2661,10 +2679,7 @@ export function createUkMapTool({
       ukMapLayer = null;
     }
     state.mapPolygonRenderContext = null;
-    if (ukMapLabelLayer) {
-      ukMap.removeLayer(ukMapLabelLayer);
-      ukMapLabelLayer = null;
-    }
+    clearMapLabelLayer();
     const geometryKey = data._unitGeometryKey || "";
     const reuseLayer = Boolean(
       data._unitGeometryReused
@@ -2721,17 +2736,66 @@ export function createUkMapTool({
     await ukMap.whenRenderComplete?.();
   }
 
-  function mapLabelFontSize(value = state.mapLabelSize) {
-    const number = Number(value);
-    if (!Number.isFinite(number)) return 0;
-    const sliderValue = Math.max(0, Math.min(10, Math.round(number)));
-    if (sliderValue <= 0) return 0;
-    return MAP_LABEL_MIN_FONT_SIZE + (((sliderValue - 1) / 9) * (MAP_LABEL_MAX_FONT_SIZE - MAP_LABEL_MIN_FONT_SIZE));
+  function approximateMapAreaBoundsArea(bounds) {
+    if (!bounds?.isValid?.()) return null;
+    const south = Number(bounds.getSouth());
+    const west = Number(bounds.getWest());
+    const north = Number(bounds.getNorth());
+    const east = Number(bounds.getEast());
+    if (![south, west, north, east].every(Number.isFinite)) return null;
+    const latitude = ((south + north) / 2) * (Math.PI / 180);
+    const width = Math.abs(east - west) * Math.max(0, Math.cos(latitude));
+    const height = Math.abs(north - south);
+    const area = width * height;
+    return Number.isFinite(area) && area > 0 ? area : null;
+  }
+
+  function prepareMapAreaLabelZoomOffsets() {
+    if (!ukMapLayer || ukMapLayer._lucidumAreaLabelOffsetsPrepared) return;
+    const entries = [];
+    ukMapLayer.eachLayer((layer) => {
+      const area = approximateMapAreaBoundsArea(layer.getBounds?.());
+      if (area !== null) entries.push({ layer, area });
+    });
+    const sortedAreas = entries.map((entry) => entry.area).sort((left, right) => left - right);
+    const middle = Math.floor(sortedAreas.length / 2);
+    const medianArea = sortedAreas.length % 2
+      ? sortedAreas[middle]
+      : ((sortedAreas[middle - 1] || 0) + (sortedAreas[middle] || 0)) / 2;
+    entries.forEach(({ layer, area }) => {
+      const rawOffset = medianArea > 0 ? 0.5 * Math.log2(area / medianArea) : 0;
+      layer._lucidumAreaLabelZoomOffset = Math.max(
+        MAP_AREA_LABEL_MIN_ZOOM_OFFSET,
+        Math.min(MAP_AREA_LABEL_MAX_ZOOM_OFFSET, rawOffset),
+      );
+    });
+    ukMapLayer._lucidumAreaLabelOffsetsPrepared = true;
+  }
+
+  function updateMapAreaLabelSize() {
+    if (!ukMap || !ukMapLayer || !ukMapLabelLayer || state.mapAreaLabels !== "on") return;
+    const fittedZoom = ukMap.getBoundsZoom(ukMapLayer.getBounds(), mapFitOptions("area"));
+    const currentZoom = Number(ukMap.getZoom());
+    if (!Number.isFinite(fittedZoom) || !Number.isFinite(currentZoom)) return;
+    const baseFontSize = MAP_AREA_LABEL_BASE_FONT_SIZE
+      + (MAP_AREA_LABEL_GROWTH_PER_ZOOM * (currentZoom - fittedZoom));
+    const container = ukMap.getContainer();
+    container.style.setProperty("--map-area-label-min-size", `${MAP_AREA_LABEL_MIN_FONT_SIZE}px`);
+    container.style.setProperty("--map-area-label-base-size", `${baseFontSize}px`);
+    container.style.setProperty("--map-area-label-max-size", `${MAP_AREA_LABEL_MAX_FONT_SIZE}px`);
+  }
+
+  function scheduleMapAreaLabelSizeUpdate() {
+    if (mapAreaLabelSizeFrame !== null) return;
+    mapAreaLabelSizeFrame = requestAnimationFrame(() => {
+      mapAreaLabelSizeFrame = null;
+      updateMapAreaLabelSize();
+    });
   }
 
   function renderMapLabels(data, summaries, hotspotKeys) {
-    const fontSize = mapLabelFontSize(state.mapLabelSize);
-    if (data.level !== "area" || !Number.isFinite(fontSize) || fontSize <= 0 || !ukMapLayer) return;
+    if (data.level !== "area" || state.mapAreaLabels !== "on" || !ukMapLayer) return;
+    prepareMapAreaLabelZoomOffsets();
     ukMapLabelLayer = L.layerGroup().addTo(ukMap);
     ukMapLayer.eachLayer((layer) => {
       const key = mapPolygonLayerKey(layer);
@@ -2741,7 +2805,9 @@ export function createUkMapTool({
       if (hotspotKeys && !hotspotKeys.has(key)) return;
       const bounds = layer.getBounds?.();
       if (!bounds?.isValid()) return;
-      const html = `<div class="map-label" style="font-size:${fontSize}px">${escapeHtml(key)}<br>${escapeHtml(formatLineValue(value))}</div>`;
+      const zoomOffset = Number(layer._lucidumAreaLabelZoomOffset) || 0;
+      const sizeOffset = MAP_AREA_LABEL_GROWTH_PER_ZOOM * zoomOffset;
+      const html = `<div class="map-label" data-map-area-key="${escapeHtml(key)}" data-map-area-zoom-offset="${zoomOffset}" style="--map-area-label-size-offset:${sizeOffset}px">${escapeHtml(key)}<br>${escapeHtml(formatLineValue(value))}</div>`;
       L.marker(bounds.getCenter(), {
         interactive: false,
         icon: L.divIcon({
@@ -2752,6 +2818,15 @@ export function createUkMapTool({
         }),
       }).addTo(ukMapLabelLayer);
     });
+    updateMapAreaLabelSize();
+  }
+
+  function redrawMapLabelsInPlace() {
+    clearMapLabelLayer();
+    const context = state.mapPolygonRenderContext;
+    if (state.lastMapData?.level !== "area" || !context) return;
+    renderMapLabels(context.data, context.summaries, context.hotspotKeys);
+    bringBaseLabelsToFront();
   }
 
   function zoomToMapKey(level, key) {
@@ -2808,7 +2883,7 @@ export function createUkMapTool({
   }
 
   function syncMapSliderProgressStyles() {
-    ["mapLineWeight", "mapOpacity", "mapHotspots", "mapLabelSize", "mapSmoothing"]
+    ["mapLineWeight", "mapOpacity", "mapHotspots", "mapSmoothing"]
       .forEach((id) => updateMapSliderProgress(el(id)));
   }
 
@@ -2835,13 +2910,11 @@ export function createUkMapTool({
     el("mapLineWeight").value = String(state.mapLineWeight);
     el("mapOpacity").value = String(opacitySliderValue(state.mapOpacity));
     el("mapHotspots").value = String(state.mapHotspots);
-    el("mapLabelSize").value = String(state.mapLabelSize);
     el("mapSmoothing").value = String(state.mapSmoothingLevel);
     el("mapLineWeightValue").textContent = String(state.mapLineWeight);
     el("mapOpacityValue").textContent = formatOpacitySliderValue(state.mapOpacity);
     el("mapHotspotsValue").textContent = formatHotspotSliderValue(state.mapHotspots);
     syncMapExtremeLabels();
-    el("mapLabelSizeValue").textContent = String(state.mapLabelSize);
     el("mapSmoothingValue").textContent = formatSmoothingLevel(state.mapSmoothingLevel);
     el("mapSliderGrid").classList.toggle("unit-mode", unitMode);
     const lineWeightControl = el("mapLineWeightControl") || el("mapLineWeight").closest(".map-slider-control");
@@ -2857,10 +2930,14 @@ export function createUkMapTool({
       button.disabled = !unitMode;
     });
     const labelHidden = state.mapLevel !== "area";
-    const labelControl = el("mapLabelControl") || el("mapLabelSize").closest(".map-slider-control");
+    const labelControl = el("mapLabelControl");
     if (labelControl) labelControl.hidden = labelHidden;
-    el("mapLabelSize").disabled = labelHidden;
-    labelControl?.classList.toggle("disabled", labelHidden);
+    document.querySelectorAll("[data-map-area-labels]").forEach((button) => {
+      const active = button.dataset.mapAreaLabels === normaliseMapAreaLabels(state.mapAreaLabels);
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", String(active));
+      button.disabled = labelHidden;
+    });
     const smoothingHidden = state.mapLevel !== "sector";
     const smoothingControl = el("mapSmoothingControl") || el("mapSmoothing").closest(".map-slider-control");
     if (smoothingControl) smoothingControl.hidden = smoothingHidden;
@@ -3311,19 +3388,27 @@ export function createUkMapTool({
         if (state.mapLevel === "unit") redrawMapInPlace();
       });
     });
+    document.querySelectorAll("[data-map-area-labels]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const mode = normaliseMapAreaLabels(button.dataset.mapAreaLabels);
+        if (mode === state.mapAreaLabels) return;
+        state.mapAreaLabels = mode;
+        clearActiveMapFavourite({ force: true });
+        syncFloatingMapControl();
+        if (state.mapLevel === "area") redrawMapLabelsInPlace();
+      });
+    });
     [
       ["mapLineWeight", "mapLineWeight"],
       ["mapOpacity", "mapOpacity"],
       ["mapHotspots", "mapHotspots"],
-      ["mapLabelSize", "mapLabelSize"],
     ].forEach(([id, stateKey]) => {
       el(id).addEventListener("input", (event) => {
         state[stateKey] = id === "mapOpacity" ? opacityFromSliderValue(event.target.value) : Number(event.target.value);
         updateMapSliderProgress(event.target);
         clearActiveMapFavourite({ force: true });
         if (
-          (id === "mapLineWeight" && state.mapLevel === "unit")
-          || (id === "mapLabelSize" && state.mapLevel !== "area")
+          id === "mapLineWeight" && state.mapLevel === "unit"
         ) {
           syncFloatingMapControl();
           return;

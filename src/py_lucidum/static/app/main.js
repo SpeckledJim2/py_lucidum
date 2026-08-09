@@ -162,7 +162,7 @@
         mapDotSizeMode: "adaptive",
         mapOpacity: 1,
         mapHotspots: 0,
-        mapLabelSize: 0,
+        mapAreaLabels: "off",
         mapSmoothingLevel: 0,
         featureSort: "alpha",
         expectedSort: "alpha",

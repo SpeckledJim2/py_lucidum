@@ -653,11 +653,13 @@
                       <span class="slider-scale"><b id="mapHotspotsMinLabel" class="map-extreme-label">Low</b><b id="mapHotspotsValue">All</b><b id="mapHotspotsMaxLabel" class="map-extreme-label">High</b></span>
                       <input id="mapHotspots" type="range" min="-9" max="9" step="1" value="0" />
                     </label>
-                    <label id="mapLabelControl" class="map-slider-control">
+                    <div id="mapLabelControl" class="map-area-label-control">
                       <span>Labels</span>
-                      <span class="slider-scale"><b>0</b><b id="mapLabelSizeValue">0</b><b>10</b></span>
-                      <input id="mapLabelSize" type="range" min="0" max="10" step="1" value="0" />
-                    </label>
+                      <div id="mapAreaLabels" class="map-area-label-mode" role="group" aria-label="Area labels">
+                        <button id="mapAreaLabelsOff" class="active" type="button" data-map-area-labels="off" aria-pressed="true">Off</button>
+                        <button id="mapAreaLabelsOn" type="button" data-map-area-labels="on" aria-pressed="false">On</button>
+                      </div>
+                    </div>
                     <label id="mapSmoothingControl" class="map-slider-control" hidden>
                       <span>Smooth</span>
                       <span class="slider-scale"><b>N0</b><b id="mapSmoothingValue">None</b><b>N5</b></span>

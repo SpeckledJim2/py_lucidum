@@ -922,7 +922,7 @@ COPY (
                     "dotSizeMode": "min",
                     "opacity": 0.8,
                     "hotspots": 4,
-                    "labelSize": 5,
+                    "areaLabels": "on",
                     "smoothingLevel": 2,
                     "center": {"lat": 51.5, "lng": -0.1},
                     "zoom": 8,
@@ -933,6 +933,7 @@ COPY (
         self.assertTrue(map_view["validation"]["valid"])
         self.assertEqual(map_view["view"]["map"]["level"], "sector")
         self.assertEqual(map_view["view"]["map"]["dotSizeMode"], "min")
+        self.assertEqual(map_view["view"]["map"]["areaLabels"], "on")
         self.assertEqual(map_view["view"]["map"]["center"], {"lat": 51.5, "lng": -0.1})
         self.assertEqual(map_view["view"]["map"]["zoom"], 8)
 

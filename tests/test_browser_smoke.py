@@ -17035,7 +17035,7 @@ COPY (
                                         "dotSize": 1,
                                         "opacity": 1,
                                         "hotspots": 0,
-                                        "labelSize": 0,
+                                        "labelSize": 5,
                                         "smoothingLevel": 0,
                                     },
                                 },
@@ -17250,6 +17250,8 @@ COPY (
                     )
                     self.assertEqual(page.locator("#mapDotSizeAdaptive").get_attribute("aria-pressed"), "true")
                     self.assertEqual(page.locator("#mapDotSizeMin").get_attribute("aria-pressed"), "false")
+                    self.assertEqual(page.locator("#mapAreaLabelsOff").get_attribute("aria-pressed"), "false")
+                    self.assertEqual(page.locator("#mapAreaLabelsOn").get_attribute("aria-pressed"), "true")
 
                     self.assertEqual(page_errors, [])
                     browser.close()
@@ -17422,7 +17424,9 @@ COPY (
                         self.assertAlmostEqual(saved_map["center"]["lng"], -0.12, delta=0.01)
                         self.assertAlmostEqual(saved_map["zoom"], 9, delta=0.01)
                         self.assertEqual(saved_map["dotSizeMode"], "adaptive")
+                        self.assertEqual(saved_map["areaLabels"], "off")
                         self.assertNotIn("dotSize", saved_map)
+                        self.assertNotIn("labelSize", saved_map)
                         self.assertNotIn("view", saved_map)
 
                         def base_tile_id() -> str | None:
@@ -19804,6 +19808,226 @@ COPY (
                                 self.assertEqual(resized["hitRadius"], 6)
                                 self.assertNotAlmostEqual(resized["fittedZoom"], initial["fittedZoom"])
                                 self.assertEqual(len(summary_requests), request_count)
+                                self.assertEqual(page_errors, [])
+                            finally:
+                                context.close()
+                                browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_uk_map_area_labels_adapt_to_geometry_and_zoom_without_fetching(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            data_path = root / "adaptive_area_labels.csv"
+            favourites_path = root / "favourites.json"
+            data_path.write_text(
+                "PostcodeArea,price\n"
+                "WC,100\n"
+                "EC,200\n"
+                "CO,300\n"
+                "IV,400\n",
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                defaults={"actual": "price", "denominator": "__none__"},
+                tools=["uk_map"],
+                token="",
+                line_bar_favourites_path=favourites_path,
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    for browser_name, browser_type in (
+                        ("webkit", playwright.webkit),
+                        ("chromium", playwright.chromium),
+                    ):
+                        with self.subTest(browser=browser_name):
+                            browser = browser_type.launch()
+                            context = browser.new_context(viewport={"width": 1100, "height": 720})
+                            page = context.new_page()
+                            page_errors: list[str] = []
+                            summary_requests: list[str] = []
+                            page.on("pageerror", lambda error: page_errors.append(str(error)))
+                            page.on(
+                                "request",
+                                lambda request: summary_requests.append(request.url)
+                                if request.url.endswith("/api/uk-map/summary")
+                                else None,
+                            )
+                            try:
+                                page.goto(base_url, wait_until="domcontentloaded")
+                                self.wait_for_app_ready(page)
+                                page.wait_for_function(
+                                    """
+                                    () => {
+                                      const container = document.querySelector("#ukMap");
+                                      return (document.querySelector("#mapGroupMeta")?.textContent || "")
+                                          .includes("areas matched")
+                                        && !container?._lucidumMapLibre?.isMoving();
+                                    }
+                                    """,
+                                    timeout=10_000,
+                                )
+                                self.assertFalse(
+                                    page.locator("#mapLabelControl").evaluate("control => control.hidden")
+                                )
+                                self.assertEqual(
+                                    page.locator("#mapAreaLabelsOff").get_attribute("aria-pressed"),
+                                    "true",
+                                )
+                                self.assertEqual(
+                                    page.locator("#mapAreaLabelsOn").get_attribute("aria-pressed"),
+                                    "false",
+                                )
+                                self.assertEqual(page.locator("#ukMap .map-label").count(), 0)
+                                request_count = len(summary_requests)
+                                page.evaluate('() => document.querySelector("#mapAreaLabelsOn")?.click()')
+                                page.wait_for_function(
+                                    '() => document.querySelectorAll("#ukMap .map-label").length === 4',
+                                    timeout=10_000,
+                                )
+
+                                def label_state() -> dict[str, Any]:
+                                    return page.evaluate(
+                                        """
+                                        () => ({
+                                          baseSize: parseFloat(
+                                            getComputedStyle(document.querySelector("#ukMap"))
+                                              .getPropertyValue("--map-area-label-base-size")
+                                          ),
+                                          labels: Object.fromEntries(
+                                            [...document.querySelectorAll("#ukMap .map-label")].map((label) => [
+                                              label.dataset.mapAreaKey,
+                                              {
+                                                fontSize: parseFloat(getComputedStyle(label).fontSize),
+                                                zoomOffset: Number(label.dataset.mapAreaZoomOffset),
+                                              },
+                                            ])
+                                          ),
+                                        })
+                                        """
+                                    )
+
+                                fitted = label_state()
+                                self.assertEqual(set(fitted["labels"]), {"WC", "EC", "CO", "IV"})
+                                self.assertAlmostEqual(fitted["labels"]["WC"]["zoomOffset"], -3)
+                                self.assertAlmostEqual(fitted["labels"]["EC"]["zoomOffset"], -3)
+                                self.assertAlmostEqual(fitted["labels"]["IV"]["zoomOffset"], 1.5)
+                                self.assertAlmostEqual(fitted["labels"]["WC"]["fontSize"], 6)
+                                self.assertAlmostEqual(fitted["labels"]["EC"]["fontSize"], 6)
+                                self.assertLess(
+                                    fitted["labels"]["WC"]["fontSize"],
+                                    fitted["labels"]["CO"]["fontSize"],
+                                )
+                                self.assertLess(
+                                    fitted["labels"]["CO"]["fontSize"],
+                                    fitted["labels"]["IV"]["fontSize"],
+                                )
+                                self.assertEqual(len(summary_requests), request_count)
+
+                                page.evaluate(
+                                    """
+                                    () => {
+                                      const map = document.querySelector("#ukMap")?._lucidumMap;
+                                      map.setZoom(map.getZoom() + 3);
+                                    }
+                                    """
+                                )
+                                page.wait_for_function(
+                                    """
+                                    (previous) => {
+                                      const raw = document.querySelector("#ukMap")?._lucidumMapLibre;
+                                      const wc = document.querySelector('[data-map-area-key="WC"]');
+                                      return !raw?.isMoving()
+                                        && parseFloat(getComputedStyle(wc).fontSize) > previous;
+                                    }
+                                    """,
+                                    arg=fitted["labels"]["WC"]["fontSize"],
+                                    timeout=10_000,
+                                )
+                                closer = label_state()
+                                for key in fitted["labels"]:
+                                    self.assertGreater(
+                                        closer["labels"][key]["fontSize"],
+                                        fitted["labels"][key]["fontSize"],
+                                    )
+                                    self.assertGreaterEqual(closer["labels"][key]["fontSize"], 6)
+                                    self.assertLessEqual(closer["labels"][key]["fontSize"], 20)
+                                self.assertEqual(len(summary_requests), request_count)
+
+                                previous_base_size = closer["baseSize"]
+                                page.set_viewport_size({"width": 1100, "height": 500})
+                                page.wait_for_function(
+                                    """
+                                    (previous) => {
+                                      const container = document.querySelector("#ukMap");
+                                      const value = parseFloat(
+                                        getComputedStyle(container)
+                                          .getPropertyValue("--map-area-label-base-size")
+                                      );
+                                      return Number.isFinite(value)
+                                        && Math.abs(value - previous) > 0.01
+                                        && !container?._lucidumMapLibre?.isMoving();
+                                    }
+                                    """,
+                                    arg=previous_base_size,
+                                    timeout=10_000,
+                                )
+                                self.assertEqual(len(summary_requests), request_count)
+
+                                if browser_name == "chromium":
+                                    if page.locator("#favouritesCollapseBtn").get_attribute("aria-expanded") == "false":
+                                        page.locator("#favouritesCollapseBtn").click()
+                                    self.click_sidebar_favourite_action(page, "#sidebarFavouriteAddBtn")
+                                    page.locator("#sidebarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
+                                    page.locator("#sidebarFavouriteNameInput").fill("Adaptive area labels")
+                                    page.locator('[data-favourite-action="save-add"]').click()
+                                    page.wait_for_function(
+                                        """
+                                        () => [...document.querySelectorAll(".saved-favourite-option")]
+                                          .some((button) => button.querySelector(".saved-filter-name")
+                                            ?.textContent.trim() === "Adaptive area labels")
+                                        """,
+                                        timeout=10_000,
+                                    )
+                                    saved_payload = json.loads(favourites_path.read_text(encoding="utf-8"))
+                                    saved_map = next(
+                                        item["view"]["map"]
+                                        for item in saved_payload["favourites"]
+                                        if item["name"] == "Adaptive area labels"
+                                    )
+                                    self.assertEqual(saved_map["areaLabels"], "on")
+                                    self.assertNotIn("labelSize", saved_map)
+
+                                page.evaluate('() => document.querySelector("#mapAreaLabelsOff")?.click()')
+                                page.wait_for_function(
+                                    '() => document.querySelectorAll("#ukMap .map-label").length === 0'
+                                    ' && document.querySelector("#mapAreaLabelsOff")'
+                                    '?.getAttribute("aria-pressed") === "true"',
+                                    timeout=10_000,
+                                )
+                                self.assertEqual(len(summary_requests), request_count)
+
+                                if browser_name == "chromium":
+                                    favourite_request_count = len(summary_requests)
+                                    page.evaluate(
+                                        """
+                                        () => [...document.querySelectorAll(".saved-favourite-option")]
+                                          .find((button) => button.querySelector(".saved-filter-name")
+                                            ?.textContent.trim() === "Adaptive area labels")?.click()
+                                        """
+                                    )
+                                    page.wait_for_function(
+                                        '() => document.querySelector("#mapAreaLabelsOn")'
+                                        '?.getAttribute("aria-pressed") === "true"'
+                                        ' && document.querySelectorAll("#ukMap .map-label").length === 4',
+                                        timeout=10_000,
+                                    )
+                                    self.assertEqual(len(summary_requests), favourite_request_count)
                                 self.assertEqual(page_errors, [])
                             finally:
                                 context.close()
@@ -28993,50 +29217,17 @@ COPY (
                 page.wait_for_function('() => document.querySelector("#mapHotspotsValue")?.textContent === "All"')
                 self.assertTrue(page.locator("#mapHotspots").evaluate("input => input.classList.contains('map-slider-thumb-centered')"))
                 self.assertFalse(page.locator("#mapLabelControl").is_hidden())
-                self.assertFalse(page.locator("#mapLabelSize").is_disabled())
-                self.assertEqual(page.locator("#mapLabelSize").get_attribute("max"), "10")
-                label_states = page.evaluate(
-                    """
-                    () => {
-                        const input = document.querySelector("#mapLabelSize");
-                        let labelText = "";
-                        const states = [];
-                        for (let size = 1; size <= 10; size += 1) {
-                            input.value = String(size);
-                            input.dispatchEvent(new Event("input", { bubbles: true }));
-                            const labels = [...document.querySelectorAll("#ukMap .map-label")];
-                            const label = labelText
-                                ? labels.find((node) => node.textContent === labelText)
-                                : labels[0];
-                            if (!label) return null;
-                            labelText = label.textContent;
-                            const rect = label.getBoundingClientRect();
-                            states.push({
-                                size,
-                                fontSize: getComputedStyle(label).fontSize,
-                                centerX: rect.left + rect.width / 2,
-                                centerY: rect.top + rect.height / 2,
-                                width: rect.width,
-                                height: rect.height,
-                            });
-                        }
-                        input.value = "0";
-                        input.dispatchEvent(new Event("input", { bubbles: true }));
-                        return { states, hiddenCount: document.querySelectorAll("#ukMap .map-label").length };
-                    }
-                    """
-                )
-                self.assertIsNotNone(label_states)
-                self.assertEqual(len(label_states["states"]), 10)
-                self.assertEqual(label_states["states"][0]["fontSize"], "6px")
-                self.assertEqual(label_states["states"][-1]["fontSize"], "20px")
-                self.assertEqual(label_states["hiddenCount"], 0)
-                first_label_state = label_states["states"][0]
-                for label_state in label_states["states"][1:]:
-                    self.assertLessEqual(abs(label_state["centerX"] - first_label_state["centerX"]), 1)
-                    self.assertLessEqual(abs(label_state["centerY"] - first_label_state["centerY"]), 1)
-                self.assertGreater(label_states["states"][-1]["width"], first_label_state["width"])
-                self.assertGreater(label_states["states"][-1]["height"], first_label_state["height"])
+                self.assertFalse(page.locator("#mapAreaLabelsOff").is_disabled())
+                self.assertFalse(page.locator("#mapAreaLabelsOn").is_disabled())
+                self.assertEqual(page.locator("#mapAreaLabelsOff").get_attribute("aria-pressed"), "true")
+                self.assertEqual(page.locator("#mapAreaLabelsOn").get_attribute("aria-pressed"), "false")
+                self.assertEqual(page.locator("#ukMap .map-label").count(), 0)
+                page.locator("#mapAreaLabelsOn").click()
+                page.wait_for_function('() => document.querySelectorAll("#ukMap .map-label").length > 0')
+                self.assertEqual(page.locator("#mapAreaLabelsOn").get_attribute("aria-pressed"), "true")
+                page.locator("#mapAreaLabelsOff").click()
+                page.wait_for_function('() => document.querySelectorAll("#ukMap .map-label").length === 0')
+                self.assertEqual(page.locator("#mapAreaLabelsOff").get_attribute("aria-pressed"), "true")
                 page.locator("#profileTool").click()
                 page.locator("#profileTool.active").wait_for(timeout=10_000)
                 page.locator("#profileWrap:not(.hidden)").wait_for(timeout=10_000)
@@ -29439,7 +29630,8 @@ COPY (
                 wait_for_map_view(stable_map_view)
 
                 self.assertTrue(page.locator("#mapLabelControl").is_hidden())
-                self.assertTrue(page.locator("#mapLabelSize").is_disabled())
+                self.assertTrue(page.locator("#mapAreaLabelsOff").is_disabled())
+                self.assertTrue(page.locator("#mapAreaLabelsOn").is_disabled())
                 self.assertFalse(page.locator("#mapSmoothingControl").is_hidden())
                 self.assertFalse(page.locator("#mapSmoothing").is_disabled())
                 with page.expect_response(lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200, timeout=10_000):
@@ -29476,7 +29668,8 @@ COPY (
                 wait_for_map_view(stable_map_view)
 
                 self.assertTrue(page.locator("#mapLabelControl").is_hidden())
-                self.assertTrue(page.locator("#mapLabelSize").is_disabled())
+                self.assertTrue(page.locator("#mapAreaLabelsOff").is_disabled())
+                self.assertTrue(page.locator("#mapAreaLabelsOn").is_disabled())
                 self.assertTrue(page.locator("#mapSmoothingControl").is_hidden())
                 self.assertTrue(page.locator("#mapSmoothing").is_disabled())
                 page.locator("#ukMap .maplibre-unit-point-layer").wait_for(timeout=10_000)
