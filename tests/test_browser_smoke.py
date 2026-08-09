@@ -19195,6 +19195,9 @@ COPY (
                             }
                             """
                         )
+                        # Raster opacity is transitionable in MapLibre and can report a
+                        # stale value mid-zoom. Layout visibility is the immediate,
+                        # authoritative control used to prevent stale points flashing.
                         page.wait_for_function(
                             """
                             () => {
@@ -19206,10 +19209,10 @@ COPY (
                               return raw?.isZooming()
                                 && unitLayer?.zooming
                                 && unitLayer?.canvasMapLayer?.visible === false
-                                && raw?.getPaintProperty(
+                                && raw?.getLayoutProperty(
                                   unitLayer.canvasMapLayer.layerId,
-                                  "raster-opacity"
-                                ) === 0;
+                                  "visibility"
+                                ) === "none";
                             }
                             """,
                             timeout=10_000,
@@ -19231,14 +19234,17 @@ COPY (
                                   const raw = container?._lucidumMapLibre;
                                   const unitLayer = Object.values(map?._layers || {})
                                     .find((candidate) => candidate?.data?.level === "unit");
-                                  return raw?.getPaintProperty(
-                                    unitLayer?.canvasMapLayer?.layerId,
-                                    "raster-opacity"
-                                  );
+                                  return {
+                                    visible: unitLayer?.canvasMapLayer?.visible,
+                                    visibility: raw?.getLayoutProperty(
+                                      unitLayer?.canvasMapLayer?.layerId,
+                                      "visibility"
+                                    ),
+                                  };
                                 }
                                 """
                             ),
-                            0,
+                            {"visible": False, "visibility": "none"},
                         )
                         page.evaluate(
                             """
@@ -19271,10 +19277,10 @@ COPY (
                                     .find((candidate) => candidate?.data?.level === "unit");
                                   return raw?.isZooming()
                                     && unitLayer?.canvasMapLayer?.visible === false
-                                    && raw?.getPaintProperty(
+                                    && raw?.getLayoutProperty(
                                       unitLayer.canvasMapLayer.layerId,
-                                      "raster-opacity"
-                                    ) === 0;
+                                      "visibility"
+                                    ) === "none";
                                 }
                                 """
                             )
@@ -19290,10 +19296,10 @@ COPY (
                               return !raw?.isMoving()
                                 && !raw?.isZooming()
                                 && unitLayer?.canvasMapLayer?.visible === true
-                                && raw?.getPaintProperty(
+                                && raw?.getLayoutProperty(
                                   unitLayer.canvasMapLayer.layerId,
-                                  "raster-opacity"
-                                ) === 1;
+                                  "visibility"
+                                ) === "visible";
                             }
                             """,
                             timeout=10_000,
@@ -19330,15 +19336,15 @@ COPY (
                                 .find((candidate) => candidate?.data?.level === "unit");
                               return {
                                 visible: unitLayer?.canvasMapLayer?.visible,
-                                opacity: raw?.getPaintProperty(
+                                visibility: raw?.getLayoutProperty(
                                   unitLayer?.canvasMapLayer?.layerId,
-                                  "raster-opacity"
+                                  "visibility"
                                 ),
                               };
                             }
                             """
                         )
-                        self.assertEqual(pan_layer_state, {"visible": True, "opacity": 1})
+                        self.assertEqual(pan_layer_state, {"visible": True, "visibility": "visible"})
                         page.wait_for_function(
                             '() => !document.querySelector("#ukMap")?._lucidumMapLibre?.isMoving()',
                             timeout=10_000,
