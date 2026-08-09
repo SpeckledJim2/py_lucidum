@@ -472,6 +472,16 @@ export function createUkMapTool({
       attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
       themePair: { light: "grey", dark: "darkGrey" },
     },
+    openFreeMapPositron: {
+      label: "Positron",
+      styleUrl: "https://tiles.openfreemap.org/styles/positron",
+      themePair: { light: "openFreeMapPositron", dark: "openFreeMapDark" },
+    },
+    openFreeMapDark: {
+      label: "OFM Dark",
+      styleUrl: "https://tiles.openfreemap.org/styles/dark",
+      themePair: { light: "openFreeMapPositron", dark: "openFreeMapDark" },
+    },
   };
 
   let ukMap = null;
@@ -480,6 +490,8 @@ export function createUkMapTool({
   let ukMapLabelLayer = null;
   let baseTileLayer = null;
   let baseLabelLayer = null;
+  let renderedBaseMap = "blank";
+  let baseMapChangeGeneration = 0;
   let mapViewportControl = null;
   let mapResizeObserver = null;
   let activeMapPopupSelection = null;
@@ -928,7 +940,7 @@ export function createUkMapTool({
           activeMapPopupSelection = null;
         }
       });
-      setBaseMap(state.baseMap);
+      await setBaseMap(state.baseMap);
       addMapViewportControl();
       observeMapResize();
       return ukMap;
@@ -1239,23 +1251,11 @@ export function createUkMapTool({
     mapResizeObserver.observe(target);
   }
 
-  function setBaseMap(baseMap) {
-    const nextBaseMap = MAP_BASE_LAYERS[baseMap] ? baseMap : "blank";
-    const sameBaseMap = nextBaseMap === state.baseMap;
-    state.baseMap = nextBaseMap;
-    if (!ukMap) return;
-    const config = MAP_BASE_LAYERS[nextBaseMap];
-    const tileLayerMatches = config.url
-      ? Boolean(baseTileLayer && ukMap.hasLayer(baseTileLayer))
-      : !baseTileLayer;
-    const labelLayerMatches = config.labelUrl
-      ? Boolean(baseLabelLayer && ukMap.hasLayer(baseLabelLayer))
-      : !baseLabelLayer;
-    if (sameBaseMap && tileLayerMatches && labelLayerMatches) {
-      syncBaseMapVisualState();
-      syncMapControls();
-      return;
-    }
+  function openFreeMapForegroundLayer(layer) {
+    return layer?.type === "symbol" && layer?.layout?.["text-field"] !== undefined;
+  }
+
+  function removeRasterBaseLayers() {
     if (baseLabelLayer) {
       ukMap.removeLayer(baseLabelLayer);
       baseLabelLayer = null;
@@ -1264,6 +1264,31 @@ export function createUkMapTool({
       ukMap.removeLayer(baseTileLayer);
       baseTileLayer = null;
     }
+  }
+
+  function renderedBaseMatches(baseMap) {
+    if (!ukMap || renderedBaseMap !== baseMap) return false;
+    const config = MAP_BASE_LAYERS[baseMap];
+    if (Boolean(config.styleUrl) !== Boolean(ukMap.usesExternalStyle?.())) return false;
+    const tileLayerMatches = config.url
+      ? Boolean(baseTileLayer && ukMap.hasLayer(baseTileLayer))
+      : !baseTileLayer;
+    const labelLayerMatches = config.labelUrl
+      ? Boolean(baseLabelLayer && ukMap.hasLayer(baseLabelLayer))
+      : !baseLabelLayer;
+    return tileLayerMatches && labelLayerMatches;
+  }
+
+  async function installBaseMap(baseMap, generation) {
+    const config = MAP_BASE_LAYERS[baseMap];
+    removeRasterBaseLayers();
+    if (config.styleUrl || ukMap.usesExternalStyle?.()) {
+      const replaced = await ukMap.replaceStyle(config.styleUrl || null, {
+        foregroundLayerPredicate: config.styleUrl ? openFreeMapForegroundLayer : null,
+      });
+      if (!replaced || generation !== baseMapChangeGeneration) return false;
+    }
+    if (generation !== baseMapChangeGeneration) return false;
     if (config.url) {
       baseTileLayer = L.tileLayer(config.url, {
         maxZoom: 19,
@@ -1277,21 +1302,67 @@ export function createUkMapTool({
       }).addTo(ukMap);
       baseLabelLayer.bringToFront();
     }
+    renderedBaseMap = baseMap;
+    bringBaseLabelsToFront();
     syncBaseMapVisualState();
     syncMapControls();
+    return true;
+  }
+
+  async function setBaseMap(baseMap) {
+    const nextBaseMap = MAP_BASE_LAYERS[baseMap] ? baseMap : "blank";
+    const previousBaseMap = renderedBaseMap;
+    state.baseMap = nextBaseMap;
+    syncMapControls();
+    if (!ukMap) return false;
+    if (renderedBaseMatches(nextBaseMap)) {
+      syncBaseMapVisualState();
+      return true;
+    }
+    const generation = ++baseMapChangeGeneration;
+    try {
+      return await installBaseMap(nextBaseMap, generation);
+    } catch (error) {
+      if (generation !== baseMapChangeGeneration) return false;
+      const failedLabel = MAP_BASE_LAYERS[nextBaseMap]?.label || "base map";
+      const fallbackBaseMap = previousBaseMap === nextBaseMap ? "blank" : previousBaseMap;
+      showClipboardToast(`Could not load ${failedLabel}; restored ${MAP_BASE_LAYERS[fallbackBaseMap].label}.`, true);
+      state.baseMap = fallbackBaseMap;
+      try {
+        if (await installBaseMap(fallbackBaseMap, generation)) return false;
+      } catch (_) {
+      }
+      if (fallbackBaseMap !== "blank" && generation === baseMapChangeGeneration) {
+        state.baseMap = "blank";
+        try {
+          await installBaseMap("blank", generation);
+        } catch (_) {
+        }
+      }
+      syncBaseMapVisualState();
+      syncMapControls();
+      return false;
+    }
   }
 
   function bringBaseLabelsToFront() {
     baseLabelLayer?.bringToFront?.();
+    ukMap?.bringStyleForegroundToFront?.();
+    const container = ukMap?.getContainer?.();
+    if (container) {
+      container._lucidumBaseStyleForegroundLayerIds = ukMap.getStyleForegroundLayerIds?.() || [];
+    }
   }
 
   function syncBaseMapVisualState() {
     if (!ukMap) return;
     const container = ukMap.getContainer();
-    container._lucidumBaseMap = state.baseMap;
+    container._lucidumBaseMap = renderedBaseMap;
+    container._lucidumRequestedBaseMap = state.baseMap;
     container._lucidumBaseTileLayer = baseTileLayer;
     container._lucidumBaseLabelLayer = baseLabelLayer;
-    container.classList.toggle("blank-base", state.baseMap === "blank");
+    container._lucidumBaseStyleForegroundLayerIds = ukMap.getStyleForegroundLayerIds?.() || [];
+    container.classList.toggle("blank-base", renderedBaseMap === "blank");
     applyMapBackground();
   }
 
@@ -1316,7 +1387,7 @@ export function createUkMapTool({
     container.classList.toggle("map-bg-light", !dark);
   }
 
-  function syncCartoBaseMapForTheme() {
+  function syncBaseMapForTheme() {
     const config = MAP_BASE_LAYERS[state.baseMap];
     const pair = config?.themePair;
     if (!pair) return;
@@ -3336,7 +3407,7 @@ export function createUkMapTool({
   }
 
   function refreshTheme() {
-    syncCartoBaseMapForTheme();
+    syncBaseMapForTheme();
     applyMapBackground();
     if (state.tool === "uk_map") measureToolRender("uk_map", () => scheduleMapViewportSync({ mode: "preserve" }));
   }

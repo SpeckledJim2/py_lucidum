@@ -11,6 +11,18 @@ export function loadMapLibreAdapter() {
 export function createMapLibreAdapter(maplibregl) {
   let nextObjectId = 1;
 
+  function emptyMapStyle() {
+    return {
+      version: 8,
+      sources: {},
+      layers: [{
+        id: "lucidum-background",
+        type: "background",
+        paint: { "background-color": "rgba(0, 0, 0, 0)" },
+      }],
+    };
+  }
+
   function objectId(prefix) {
     const id = `${prefix}-${nextObjectId}`;
     nextObjectId += 1;
@@ -285,17 +297,12 @@ export function createMapLibreAdapter(maplibregl) {
       this._popup = null;
       this._pendingSourceIds = new Set();
       this._renderPending = false;
+      this._styleGeneration = 0;
+      this._styleForegroundLayerIds = [];
+      this._usesExternalStyle = false;
       this.raw = new maplibregl.Map({
         container: this._container,
-        style: {
-          version: 8,
-          sources: {},
-          layers: [{
-            id: "lucidum-background",
-            type: "background",
-            paint: { "background-color": "rgba(0, 0, 0, 0)" },
-          }],
-        },
+        style: emptyMapStyle(),
         attributionControl: true,
         center: [-3.2, 54.5],
         zoom: 5,
@@ -310,12 +317,97 @@ export function createMapLibreAdapter(maplibregl) {
           if (!this.raw.loaded()) reject(event?.error || new Error("MapLibre could not initialise WebGL2."));
         });
       });
+      this._styleReadyPromise = this._readyPromise;
       this._container._lucidumMap = this;
       this._container._lucidumMapLibre = this.raw;
     }
 
     whenReady() {
       return this._readyPromise;
+    }
+
+    whenStyleReady() {
+      return this._styleReadyPromise;
+    }
+
+    usesExternalStyle() {
+      return this._usesExternalStyle;
+    }
+
+    getStyleForegroundLayerIds() {
+      return [...this._styleForegroundLayerIds];
+    }
+
+    bringStyleForegroundToFront() {
+      this._styleForegroundLayerIds.forEach((layerId) => {
+        if (this.raw.getLayer(layerId)) this.raw.moveLayer(layerId);
+      });
+      return this;
+    }
+
+    replaceStyle(style = null, { foregroundLayerPredicate = null, timeoutMs = 15000 } = {}) {
+      const generation = ++this._styleGeneration;
+      const nextStyle = style || emptyMapStyle();
+      this._usesExternalStyle = Boolean(style);
+      this._styleForegroundLayerIds = [];
+      Object.values(this._layers).forEach((layer) => layer.beforeStyleReplace?.(this));
+
+      const replacement = this.whenReady().then(() => new Promise((resolve, reject) => {
+        let settled = false;
+        let timer = null;
+        const cleanup = () => {
+          if (timer !== null) window.clearTimeout(timer);
+          this.raw.off("style.load", handleStyleLoad);
+          this.raw.off("error", handleError);
+        };
+        const finish = (value, error = null) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          if (error) reject(error);
+          else resolve(value);
+        };
+        const handleStyleLoad = () => {
+          if (generation !== this._styleGeneration) {
+            finish(false);
+            return;
+          }
+          try {
+            const styleLayers = this.raw.getStyle()?.layers || [];
+            this._styleForegroundLayerIds = typeof foregroundLayerPredicate === "function"
+              ? styleLayers.filter((layer) => foregroundLayerPredicate(layer)).map((layer) => layer.id)
+              : [];
+            Object.values(this._layers).forEach((layer) => layer.restoreStyleResources?.(this));
+            this.bringStyleForegroundToFront();
+            this._markRenderPending();
+            finish(true);
+          } catch (error) {
+            finish(false, error);
+          }
+        };
+        const handleError = (event) => {
+          if (generation !== this._styleGeneration) {
+            finish(false);
+            return;
+          }
+          if (event?.sourceId) return;
+          finish(false, event?.error || new Error("MapLibre could not load the requested style."));
+        };
+
+        this.raw.on("style.load", handleStyleLoad);
+        this.raw.on("error", handleError);
+        timer = window.setTimeout(() => {
+          if (generation !== this._styleGeneration) finish(false);
+          else finish(false, new Error("MapLibre style loading timed out."));
+        }, Math.max(1000, Number(timeoutMs) || 15000));
+        try {
+          this.raw.setStyle(nextStyle, { diff: false });
+        } catch (error) {
+          finish(false, error);
+        }
+      }));
+      this._styleReadyPromise = replacement;
+      return replacement;
     }
 
     _registerLayer(layer) {
@@ -554,29 +646,32 @@ export function createMapLibreAdapter(maplibregl) {
       return values.map((subdomain) => this.url.replace("{s}", subdomain).replace("{r}", retina));
     }
 
+    restoreStyleResources(map = this.map) {
+      if (!map || this.map !== map || map.raw.getSource(this.sourceId)) return this;
+      map.raw.addSource(this.sourceId, {
+        type: "raster",
+        tiles: this.tileUrls(),
+        tileSize: 256,
+        maxzoom: Number(this.options.maxZoom) || 19,
+        attribution: this.options.attribution || "",
+      });
+      const firstOverlay = Object.values(map._layers)
+        .map((candidate) => candidate !== this && (candidate.fillLayerId || (candidate.canvas && candidate.layerId)))
+        .find((layerId) => layerId && map.raw.getLayer(layerId));
+      map.raw.addLayer({
+        id: this.layerId,
+        type: "raster",
+        source: this.sourceId,
+      }, firstOverlay);
+      this.applyLayerPosition();
+      map._markRenderPending();
+      return this;
+    }
+
     onAdd(map) {
-      const add = () => {
-        if (!this.map || map.raw.getSource(this.sourceId)) return;
-        map.raw.addSource(this.sourceId, {
-          type: "raster",
-          tiles: this.tileUrls(),
-          tileSize: 256,
-          maxzoom: Number(this.options.maxZoom) || 19,
-          attribution: this.options.attribution || "",
-        });
-        const firstOverlay = Object.values(map._layers)
-          .map((candidate) => candidate !== this && (candidate.fillLayerId || (candidate.canvas && candidate.layerId)))
-          .find((layerId) => layerId && map.raw.getLayer(layerId));
-        map.raw.addLayer({
-          id: this.layerId,
-          type: "raster",
-          source: this.sourceId,
-        }, firstOverlay);
-        this.applyLayerPosition();
-        map._markRenderPending();
-      };
-      if (map.raw.loaded()) add();
-      else map.whenReady().then(add);
+      const add = () => this.restoreStyleResources(map);
+      if (map.raw.isStyleLoaded?.()) add();
+      else map.whenStyleReady().then(add).catch(() => {});
     }
 
     onRemove(map) {
@@ -620,28 +715,36 @@ export function createMapLibreAdapter(maplibregl) {
       this.renderListeners = new Set();
     }
 
+    beforeStyleReplace(map) {
+      this.renderListeners.forEach((listener) => map.raw.off("render", listener));
+      this.renderListeners.clear();
+    }
+
+    restoreStyleResources(map = this.map) {
+      if (!map || this.map !== map || map.raw.getSource(this.sourceId)) return this;
+      map.raw.addSource(this.sourceId, {
+        type: "canvas",
+        canvas: this.canvas,
+        coordinates: this.coordinates,
+        animate: false,
+      });
+      map.raw.addLayer({
+        id: this.layerId,
+        type: "raster",
+        source: this.sourceId,
+        paint: {
+          "raster-fade-duration": 0,
+          "raster-opacity": this.visible ? 1 : 0,
+        },
+      });
+      map._markRenderPending();
+      return this;
+    }
+
     onAdd(map) {
-      const add = () => {
-        if (!this.map || map.raw.getSource(this.sourceId)) return;
-        map.raw.addSource(this.sourceId, {
-          type: "canvas",
-          canvas: this.canvas,
-          coordinates: this.coordinates,
-          animate: false,
-        });
-        map.raw.addLayer({
-          id: this.layerId,
-          type: "raster",
-          source: this.sourceId,
-          paint: {
-            "raster-fade-duration": 0,
-            "raster-opacity": this.visible ? 1 : 0,
-          },
-        });
-        map._markRenderPending();
-      };
-      if (map.raw.loaded()) add();
-      else map.whenReady().then(add);
+      const add = () => this.restoreStyleResources(map);
+      if (map.raw.isStyleLoaded?.()) add();
+      else map.whenStyleReady().then(add).catch(() => {});
     }
 
     onRemove(map) {
@@ -819,8 +922,7 @@ export function createMapLibreAdapter(maplibregl) {
       return true;
     }
 
-    onAdd(map) {
-      const raw = map.raw;
+    prepareFeatureProperties() {
       this.features.forEach((layer) => {
         const properties = layer.feature.properties;
         properties.__lucidum_fill_color = layer.options.fillColor || "#e5e7eb";
@@ -829,6 +931,46 @@ export function createMapLibreAdapter(maplibregl) {
         properties.__lucidum_line_opacity = Number(layer.options.opacity) || 0;
         properties.__lucidum_line_width = Number(layer.options.weight) || 0;
       });
+    }
+
+    bindStyleEvents(map) {
+      const raw = map.raw;
+      this._eventHandlers.forEach(([type, handler]) => raw.off(type, this.fillLayerId, handler));
+      this._eventHandlers = [];
+      if (!raw.getLayer(this.fillLayerId)) return;
+      const mouseMove = (event) => {
+        const layer = this.featureForEvent(event);
+        if (!layer?._tooltipContent) return;
+        raw.getCanvas().style.cursor = "pointer";
+        this.tooltip
+          .setLatLng({ lat: event.lngLat.lat, lng: event.lngLat.lng })
+          .setContent(resolveContent(layer._tooltipContent, layer))
+          .addTo(map);
+      };
+      const mouseLeave = () => {
+        raw.getCanvas().style.cursor = "";
+        this.tooltip.remove();
+      };
+      const click = (event) => {
+        const layer = this.featureForEvent(event);
+        if (!layer?._popupContent) return;
+        this.openFeaturePopup(layer, { lat: event.lngLat.lat, lng: event.lngLat.lng });
+      };
+      raw.on("mousemove", this.fillLayerId, mouseMove);
+      raw.on("mouseleave", this.fillLayerId, mouseLeave);
+      raw.on("click", this.fillLayerId, click);
+      this._eventHandlers = [
+        ["mousemove", mouseMove],
+        ["mouseleave", mouseLeave],
+        ["click", click],
+      ];
+    }
+
+    restoreStyleResources(map = this.map) {
+      if (!map || this.map !== map) return this;
+      const raw = map.raw;
+      if (raw.getSource(this.sourceId)) return this;
+      this.prepareFeatureProperties();
       raw.addSource(this.sourceId, {
         type: "geojson",
         data: this.geoJson,
@@ -878,34 +1020,17 @@ export function createMapLibreAdapter(maplibregl) {
           ],
         },
       });
-      const mouseMove = (event) => {
-        const layer = this.featureForEvent(event);
-        if (!layer?._tooltipContent) return;
-        raw.getCanvas().style.cursor = "pointer";
-        this.tooltip
-          .setLatLng({ lat: event.lngLat.lat, lng: event.lngLat.lng })
-          .setContent(resolveContent(layer._tooltipContent, layer))
-          .addTo(map);
-      };
-      const mouseLeave = () => {
-        raw.getCanvas().style.cursor = "";
-        this.tooltip.remove();
-      };
-      const click = (event) => {
-        const layer = this.featureForEvent(event);
-        if (!layer?._popupContent) return;
-        this.openFeaturePopup(layer, { lat: event.lngLat.lat, lng: event.lngLat.lng });
-      };
-      raw.on("mousemove", this.fillLayerId, mouseMove);
-      raw.on("mouseleave", this.fillLayerId, mouseLeave);
-      raw.on("click", this.fillLayerId, click);
-      this._eventHandlers = [
-        ["mousemove", mouseMove],
-        ["mouseleave", mouseLeave],
-        ["click", click],
-      ];
-      this.features.forEach((layer) => map._registerFeatureLayer(layer));
+      this.bindStyleEvents(map);
+      this.applyFeatureStates();
       map._markSourcePending(this.sourceId);
+      return this;
+    }
+
+    onAdd(map) {
+      this.features.forEach((layer) => map._registerFeatureLayer(layer));
+      const add = () => this.restoreStyleResources(map);
+      if (map.raw.isStyleLoaded?.()) add();
+      else map.whenStyleReady().then(add).catch(() => {});
     }
 
     onRemove(map) {

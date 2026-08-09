@@ -15787,6 +15787,320 @@ COPY (
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_uk_map_openfreemap_styles_preserve_all_resolution_layers(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            data_path = root / "openfreemap.csv"
+            data_path.write_text(
+                "PostcodeArea,PostcodeSector,PostcodeUnit,lat,long,price\n"
+                "AB,AB10 1,AB10 1AA,57.1,-2.1,100\n"
+                "AB,AB10 1,AB10 1AB,57.2,-2.2,200\n"
+                "AL,AL1 1,AL1 1AA,51.8,-0.3,300\n"
+                "AL,AL1 2,AL1 2AA,51.7,-0.2,400\n",
+                encoding="utf-8",
+            )
+            favourites_path = root / "favourites.json"
+            base_url, server, thread = self.start_app(
+                data_path,
+                defaults={"actual": "price", "denominator": "__none__"},
+                tools=["uk_map"],
+                token="",
+                line_bar_favourites_path=favourites_path,
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    summary_requests: list[str] = []
+                    route_state = {"fail_dark": False}
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.on(
+                        "request",
+                        lambda request: summary_requests.append(request.url)
+                        if request.url.endswith("/api/uk-map/summary")
+                        else None,
+                    )
+
+                    def mock_openfreemap_style(route: object) -> None:
+                        request_url = route.request.url
+                        if route_state["fail_dark"] and request_url.endswith("/styles/dark"):
+                            route.fulfill(
+                                status=503,
+                                content_type="text/plain",
+                                headers={"access-control-allow-origin": "*"},
+                                body="style unavailable",
+                            )
+                            return
+                        dark = request_url.endswith("/styles/dark")
+                        route.fulfill(
+                            status=200,
+                            content_type="application/json",
+                            headers={"access-control-allow-origin": "*"},
+                            body=json.dumps(
+                                {
+                                    "version": 8,
+                                    "glyphs": "https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf",
+                                    "sources": {
+                                        "ofm-mock": {
+                                            "type": "geojson",
+                                            "data": {"type": "FeatureCollection", "features": []},
+                                        }
+                                    },
+                                    "layers": [
+                                        {
+                                            "id": "ofm-background",
+                                            "type": "background",
+                                            "paint": {"background-color": "#101010" if dark else "#f5f5f4"},
+                                        },
+                                        {
+                                            "id": "ofm-base",
+                                            "type": "fill",
+                                            "source": "ofm-mock",
+                                            "paint": {"fill-color": "#303030" if dark else "#e7e5e4"},
+                                        },
+                                        {
+                                            "id": "ofm-label",
+                                            "type": "symbol",
+                                            "source": "ofm-mock",
+                                            "layout": {"text-field": "Mock place"},
+                                        },
+                                    ],
+                                }
+                            ),
+                        )
+
+                    page.route("https://tiles.openfreemap.org/styles/**", mock_openfreemap_style)
+
+                    def select_base(base_map: str) -> None:
+                        page.locator(
+                            f'#mapBaseLayerTiles input[name="baseMap"][value="{base_map}"]'
+                        ).check()
+                        page.wait_for_function(
+                            """
+                            (baseMap) => {
+                              const container = document.querySelector("#ukMap");
+                              return container?._lucidumBaseMap === baseMap
+                                && container?._lucidumRequestedBaseMap === baseMap
+                                && container?._lucidumMapLibre?.isStyleLoaded();
+                            }
+                            """,
+                            arg=base_map,
+                            timeout=10_000,
+                        )
+
+                    def assert_vector_layer_order(level: str) -> None:
+                        layer_state = page.evaluate(
+                            """
+                            (level) => {
+                              const container = document.querySelector("#ukMap");
+                              const map = container?._lucidumMap;
+                              const raw = container?._lucidumMapLibre;
+                              const layers = raw?.getStyle()?.layers?.map((layer) => layer.id) || [];
+                              const analysis = level === "unit"
+                                ? Object.values(map?._layers || {}).find((layer) => layer?.data?.level === "unit")
+                                  ?.canvasMapLayer
+                                : Object.values(map?._layers || {}).find((layer) => layer?.fillLayerId);
+                              const analysisLayerId = level === "unit" ? analysis?.layerId : analysis?.fillLayerId;
+                              return {
+                                base: layers.indexOf("ofm-base"),
+                                analysis: layers.indexOf(analysisLayerId),
+                                label: layers.indexOf("ofm-label"),
+                                sourcePresent: level === "unit"
+                                  ? Boolean(raw?.getSource(analysis?.sourceId))
+                                  : Boolean(raw?.getSource(analysis?.sourceId)),
+                                foreground: container?._lucidumBaseStyleForegroundLayerIds || [],
+                                eventHandlerCount: level === "unit" ? null : analysis?._eventHandlers?.length,
+                              };
+                            }
+                            """,
+                            level,
+                        )
+                        self.assertGreaterEqual(layer_state["base"], 0)
+                        self.assertGreater(layer_state["analysis"], layer_state["base"])
+                        self.assertGreater(layer_state["label"], layer_state["analysis"])
+                        self.assertTrue(layer_state["sourcePresent"])
+                        self.assertEqual(layer_state["foreground"], ["ofm-label"])
+                        if level != "unit":
+                            self.assertEqual(layer_state["eventHandlerCount"], 3)
+
+                    try:
+                        page.goto(base_url, wait_until="domcontentloaded")
+                        self.wait_for_app_ready(page)
+                        page.wait_for_function(
+                            '() => document.querySelector("#mapGroupMeta")?.textContent.includes("areas matched")',
+                            timeout=10_000,
+                        )
+                        page.locator("#mapControlReset").click()
+                        page.wait_for_function(
+                            '() => !document.querySelector("#mapFloatingControl")?.classList.contains("collapsed")',
+                            timeout=10_000,
+                        )
+                        self.assertEqual(
+                            page.locator('#mapBaseLayerTiles input[name="baseMap"]').count(),
+                            8,
+                        )
+
+                        if page.locator("body").get_attribute("class") and "dark" in (page.locator("body").get_attribute("class") or "").split():
+                            page.locator("#themeBtn").click()
+                            page.wait_for_function('() => !document.body.classList.contains("dark")')
+
+                        for level in ("area", "sector", "unit"):
+                            if level != "area":
+                                with page.expect_response(
+                                    lambda response: response.url.endswith("/api/uk-map/summary")
+                                    and response.status == 200,
+                                    timeout=10_000,
+                                ):
+                                    page.locator(
+                                        f'#mapLevelTiles input[name="mapLevel"][value="{level}"]'
+                                    ).check()
+                                page.wait_for_function(
+                                    """
+                                    (level) => (document.querySelector("#mapGroupMeta")?.textContent || "")
+                                      .includes(level === "sector" ? "sectors matched" : "units plotted")
+                                    """,
+                                    arg=level,
+                                    timeout=10_000,
+                                )
+
+                            page.evaluate(
+                                """
+                                () => document.querySelector("#ukMap")?._lucidumMap
+                                  ?.setView([54.5, -3.2], 6, { animate: false })
+                                """
+                            )
+                            page.wait_for_timeout(100)
+                            camera_before = page.evaluate(
+                                """
+                                () => {
+                                  const map = document.querySelector("#ukMap")?._lucidumMap;
+                                  const center = map.getCenter();
+                                  return { lat: center.lat, lng: center.lng, zoom: map.getZoom() };
+                                }
+                                """
+                            )
+                            request_count = len(summary_requests)
+                            select_base("openFreeMapPositron")
+                            assert_vector_layer_order(level)
+                            camera_after = page.evaluate(
+                                """
+                                () => {
+                                  const map = document.querySelector("#ukMap")?._lucidumMap;
+                                  const center = map.getCenter();
+                                  return { lat: center.lat, lng: center.lng, zoom: map.getZoom() };
+                                }
+                                """
+                            )
+                            self.assertAlmostEqual(camera_after["lat"], camera_before["lat"], delta=0.01)
+                            self.assertAlmostEqual(camera_after["lng"], camera_before["lng"], delta=0.01)
+                            self.assertAlmostEqual(camera_after["zoom"], camera_before["zoom"], delta=0.01)
+                            select_base("openFreeMapDark")
+                            assert_vector_layer_order(level)
+                            select_base("grey")
+                            page.wait_for_function(
+                                """
+                                () => {
+                                  const container = document.querySelector("#ukMap");
+                                  const raw = container?._lucidumMapLibre;
+                                  return Boolean(container?._lucidumBaseTileLayer
+                                    && container?._lucidumBaseLabelLayer
+                                    && raw?.getLayer(container._lucidumBaseTileLayer.layerId)
+                                    && raw?.getLayer(container._lucidumBaseLabelLayer.layerId));
+                                }
+                                """,
+                                timeout=10_000,
+                            )
+                            self.assertEqual(len(summary_requests), request_count)
+
+                        request_count = len(summary_requests)
+                        page.evaluate(
+                            """
+                            () => {
+                              for (const value of ["openFreeMapPositron", "openFreeMapDark"]) {
+                                const input = document.querySelector(
+                                  `#mapBaseLayerTiles input[name="baseMap"][value="${value}"]`
+                                );
+                                input.checked = true;
+                                input.dispatchEvent(new Event("change", { bubbles: true }));
+                              }
+                            }
+                            """
+                        )
+                        page.wait_for_function(
+                            '() => document.querySelector("#ukMap")?._lucidumBaseMap === "openFreeMapDark"',
+                            timeout=10_000,
+                        )
+                        assert_vector_layer_order("unit")
+                        self.assertEqual(len(summary_requests), request_count)
+
+                        select_base("openFreeMapPositron")
+                        page.locator("#themeBtn").click()
+                        page.wait_for_function(
+                            """
+                            () => document.body.classList.contains("dark")
+                              && document.querySelector("#ukMap")?._lucidumBaseMap === "openFreeMapDark"
+                            """,
+                            timeout=10_000,
+                        )
+                        page.locator("#themeBtn").click()
+                        page.wait_for_function(
+                            """
+                            () => !document.body.classList.contains("dark")
+                              && document.querySelector("#ukMap")?._lucidumBaseMap === "openFreeMapPositron"
+                            """,
+                            timeout=10_000,
+                        )
+
+                        route_state["fail_dark"] = True
+                        page.locator(
+                            '#mapBaseLayerTiles input[name="baseMap"][value="openFreeMapDark"]'
+                        ).check()
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector("#ukMap")?._lucidumBaseMap === "openFreeMapPositron"
+                              && document.querySelector(
+                                '#mapBaseLayerTiles input[name="baseMap"][value="openFreeMapPositron"]'
+                              )?.checked
+                              && (document.querySelector("#clipboardToast")?.textContent || "")
+                                .includes("Could not load OFM Dark")
+                            """,
+                            timeout=10_000,
+                        )
+                        assert_vector_layer_order("unit")
+                        route_state["fail_dark"] = False
+
+                        if page.locator("#favouritesCollapseBtn").get_attribute("aria-expanded") == "false":
+                            page.locator("#favouritesCollapseBtn").click()
+                        self.click_sidebar_favourite_action(page, "#sidebarFavouriteAddBtn")
+                        page.locator("#sidebarFavouriteNameInput").fill("OpenFreeMap trial")
+                        page.locator('[data-favourite-action="save-add"]').click()
+                        page.wait_for_function(
+                            """
+                            () => [...document.querySelectorAll(".saved-favourite-option")]
+                              .some((button) => button.querySelector(".saved-filter-name")?.textContent.trim()
+                                === "OpenFreeMap trial")
+                            """,
+                            timeout=10_000,
+                        )
+                        saved = json.loads(favourites_path.read_text(encoding="utf-8"))
+                        saved_map = next(
+                            item["view"]["map"]
+                            for item in saved["favourites"]
+                            if item["name"] == "OpenFreeMap trial"
+                        )
+                        self.assertEqual(saved_map["baseMap"], "openFreeMapPositron")
+                        self.assertEqual(page_errors, [])
+                    finally:
+                        browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+                stop_persistent_glm_fit_worker()
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_glm_tabulations_discovers_first_ebm_built_after_boot(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "sample.csv"
