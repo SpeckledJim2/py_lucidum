@@ -12272,23 +12272,6 @@ COPY (
                         """,
                         timeout=20_000,
                     )
-                    page.evaluate(
-                        """
-                        async () => {
-                          const table = (window.Tabulator.findTable("#lineBarTableGrid") || [])
-                            .find((candidate) => candidate?.element?.isConnected);
-                          const row = table.getRows().find((candidate) => candidate.getData()?.x === "G09999");
-                          await table.scrollToRow(row, "bottom", true);
-                        }
-                        """
-                    )
-                    page.wait_for_function(
-                        """
-                        () => [...document.querySelectorAll("#lineBarTableGrid .tabulator-row:not(.tabulator-calcs) .tabulator-cell[tabulator-field='x']")]
-                          .some((cell) => cell.textContent.trim() === "G09999")
-                        """,
-                        timeout=20_000,
-                    )
                     table_requests_before_table_search = table_requests
                     with page.expect_response(lambda response: response.url.endswith("/api/line-bar/table") and response.status == 200, timeout=10_000):
                         page.locator("#lineBarTableSearch").fill("g10004")
