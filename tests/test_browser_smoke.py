@@ -19084,7 +19084,9 @@ COPY (
                     self.assertEqual(page.locator("#glmModelGrid .tabulator-row.tabulator-selected").count(), 2)
 
                     page.locator("#gbmTool").click()
-                    page.get_by_role("tab", name="Model navigator").click()
+                    gbm_models_tab = page.locator("#gbm-screen-tab-models")
+                    gbm_models_tab.wait_for(state="visible", timeout=10_000)
+                    gbm_models_tab.click()
                     page.wait_for_function(
                         """
                         () => {
