@@ -19191,7 +19191,7 @@ COPY (
                             """
                             () => {
                               const raw = document.querySelector("#ukMap")?._lucidumMapLibre;
-                              raw?.easeTo({ zoom: raw.getZoom() + 1, duration: 600 });
+                              raw?.easeTo({ zoom: raw.getZoom() + 1, duration: 10_000 });
                             }
                             """
                         )
@@ -19235,6 +19235,8 @@ COPY (
                                   const unitLayer = Object.values(map?._layers || {})
                                     .find((candidate) => candidate?.data?.level === "unit");
                                   return {
+                                    zooming: raw?.isZooming(),
+                                    unitZooming: unitLayer?.zooming,
                                     visible: unitLayer?.canvasMapLayer?.visible,
                                     visibility: raw?.getLayoutProperty(
                                       unitLayer?.canvasMapLayer?.layerId,
@@ -19244,13 +19246,18 @@ COPY (
                                 }
                                 """
                             ),
-                            {"visible": False, "visibility": "none"},
+                            {
+                                "zooming": True,
+                                "unitZooming": True,
+                                "visible": False,
+                                "visibility": "none",
+                            },
                         )
                         page.evaluate(
                             """
                             () => {
                               const raw = document.querySelector("#ukMap")?._lucidumMapLibre;
-                              raw?.easeTo({ zoom: raw.getZoom() - 1.5, duration: 600 });
+                              raw?.easeTo({ zoom: raw.getZoom() - 1.5, duration: 10_000 });
                             }
                             """
                         )
@@ -19284,6 +19291,9 @@ COPY (
                                 }
                                 """
                             )
+                        )
+                        page.evaluate(
+                            '() => document.querySelector("#ukMap")?._lucidumMapLibre?.stop()'
                         )
                         page.wait_for_function(
                             """
