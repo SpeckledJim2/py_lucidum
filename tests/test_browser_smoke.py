@@ -12642,7 +12642,12 @@ COPY (
                     page.locator("#specsTool:not(.hidden)").click()
                     page.locator('[data-spec-kind="filter"]').click()
                     page.locator('[data-spec-kind="filter"][aria-selected="true"]').wait_for(timeout=10_000)
-                    page.locator('#specGrid .tabulator-row .tabulator-cell[tabulator-field="name"]').first.dblclick()
+                    page.locator("#specNotice", has_text="Valid filter spec").wait_for(timeout=10_000)
+                    filter_name_cell = page.locator(
+                        '#specGrid .tabulator-row .tabulator-cell[tabulator-field="name"]'
+                    ).first
+                    filter_name_cell.wait_for(state="visible", timeout=10_000)
+                    filter_name_cell.dblclick()
                     page.locator("#specGrid .tabulator-cell.tabulator-editing input").fill("Young updated")
                     page.keyboard.press("Enter")
                     page.locator("#specSaveBtn").click()
@@ -12669,7 +12674,12 @@ COPY (
 
                     page.locator('[data-spec-kind="kpi"]').click()
                     page.locator('[data-spec-kind="kpi"][aria-selected="true"]').wait_for(timeout=10_000)
-                    page.locator("#specGrid .tabulator-row").nth(1).locator('.tabulator-cell[tabulator-field="name"]').dblclick()
+                    page.locator("#specNotice", has_text="Valid KPI spec").wait_for(timeout=10_000)
+                    kpi_name_cell = page.locator("#specGrid .tabulator-row").nth(1).locator(
+                        '.tabulator-cell[tabulator-field="name"]'
+                    )
+                    kpi_name_cell.wait_for(state="visible", timeout=10_000)
+                    kpi_name_cell.dblclick()
                     page.locator("#specGrid .tabulator-cell.tabulator-editing input").fill("Value updated")
                     page.keyboard.press("Enter")
                     page.locator("#specSaveBtn").click()
