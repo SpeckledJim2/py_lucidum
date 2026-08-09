@@ -732,6 +732,7 @@ export function createMapLibreAdapter(maplibregl) {
         id: this.layerId,
         type: "raster",
         source: this.sourceId,
+        layout: { visibility: this.visible ? "visible" : "none" },
         paint: {
           "raster-fade-duration": 0,
           "raster-opacity": this.visible ? 1 : 0,
@@ -763,6 +764,11 @@ export function createMapLibreAdapter(maplibregl) {
     setVisible(visible) {
       this.visible = Boolean(visible);
       if (this.map?.raw.getLayer(this.layerId)) {
+        this.map.raw.setLayoutProperty(
+          this.layerId,
+          "visibility",
+          this.visible ? "visible" : "none",
+        );
         this.map.raw.setPaintProperty(this.layerId, "raster-opacity", this.visible ? 1 : 0);
       }
       return this;

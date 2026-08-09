@@ -19485,9 +19485,9 @@ COPY (
                                         stillMounted: Boolean(layer && map?.hasLayer(layer)),
                                         visibility: layer?.canvas?.style?.visibility || "",
                                         mapLayerVisible: layer?.canvasMapLayer?.visible,
-                                        rasterOpacity: map?.raw?.getPaintProperty(
+                                        mapLayerVisibility: map?.raw?.getLayoutProperty(
                                           layer?.canvasMapLayer?.layerId,
-                                          "raster-opacity"
+                                          "visibility"
                                         ),
                                       };
                                     }
@@ -19499,7 +19499,7 @@ COPY (
                                 "stillMounted": True,
                                 "visibility": "hidden",
                                 "mapLayerVisible": False,
-                                "rasterOpacity": 0,
+                                "mapLayerVisibility": "none",
                             },
                         )
                         expanded_request = json.loads(expanded_request_info.value.post_data or "{}")

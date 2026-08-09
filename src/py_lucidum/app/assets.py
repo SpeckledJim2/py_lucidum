@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import mimetypes
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,10 @@ from fastapi.staticfiles import StaticFiles
 
 
 NO_STORE_CACHE_CONTROL = "no-store"
+
+# Windows does not consistently register ECMAScript modules as JavaScript.
+# Starlette's FileResponse delegates to this process-wide MIME registry.
+mimetypes.add_type("text/javascript", ".mjs")
 
 
 def mark_no_store(response: Any) -> Any:

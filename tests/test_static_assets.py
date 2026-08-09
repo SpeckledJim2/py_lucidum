@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import mimetypes
 import re
 import shutil
 import subprocess
@@ -2300,6 +2301,13 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('base-openfreemap-positron.png', index)
         self.assertIn('base-openfreemap-dark.png', index)
         self.assertNotIn("leaflet", index.lower())
+
+    def test_javascript_modules_are_served_with_a_javascript_media_type(self) -> None:
+        headers, body = self.assert_no_store("/static/vendor/maplibre-gl/maplibre-gl.mjs")
+
+        self.assertTrue(body)
+        self.assertEqual(mimetypes.guess_type("module.mjs")[0], "text/javascript")
+        self.assertTrue(headers.get("content-type", "").startswith("text/javascript"), headers)
 
     def test_non_vendored_static_modules_are_served_no_store(self) -> None:
         static_root = Path(__file__).resolve().parents[1] / "src/py_lucidum/static"
