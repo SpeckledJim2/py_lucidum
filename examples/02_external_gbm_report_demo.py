@@ -1,6 +1,6 @@
 """Create static GBM Actual-vs-Expected and rebased-SHAP HTML reports.
 
-This is the file to read and adapt.  The YAML chooses the model, rows, feature
+Normally run this script unchanged.  The YAML chooses the model, rows, feature
 scenario, chart controls, and output folder.  Lucidum is used only as a chart
 library: no app or server is started.
 """

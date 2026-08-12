@@ -25,3 +25,7 @@ build/
 # Generated README previews
 README.html
 README_files/
+
+# Generated documentation previews
+docs/external-model-builds-and-reports.html
+docs/external-model-builds-and-reports_files/

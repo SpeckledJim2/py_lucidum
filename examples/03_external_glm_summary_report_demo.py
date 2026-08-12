@@ -1,6 +1,6 @@
 """Tabulate an external GLM and create one static model-summary report.
 
-This is the file to read and adapt.  The YAML chooses the 01 model build,
+Normally run this script unchanged.  The YAML chooses the 01 model build,
 Feature Specification, KPI Specification, report title, and output folder.
 Lucidum supplies the same tabulation, scoring, and XLSX export used by its app;
 the app itself is not started.

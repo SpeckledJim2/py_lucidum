@@ -344,6 +344,15 @@ def load_model_helpers() -> Any:
     return module
 
 
+def load_export_adapter() -> Any:
+    spec = importlib.util.spec_from_file_location("lucidum_export_for_tests", EXPORT_ADAPTER)
+    if spec is None or spec.loader is None:
+        raise AssertionError(f"Could not load {EXPORT_ADAPTER}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 class ExternalModelExampleTests(unittest.TestCase):
     def test_checked_in_glm_demo_uses_gamma_with_log_link(self) -> None:
         import yaml
@@ -368,6 +377,112 @@ class ExternalModelExampleTests(unittest.TestCase):
                 any(name == "py_lucidum" or name.startswith("py_lucidum.") for name in imported),
                 f"{script.name} must remain independent of py_lucidum",
             )
+
+    def test_external_glm_coefficients_use_stored_glum_inference(self) -> None:
+        import numpy as np
+        import pandas as pd
+
+        adapter = load_export_adapter()
+
+        for statistic_column in ("t_value", "z_value"):
+            with self.subTest(statistic_column=statistic_column):
+                class Model:
+                    covariance_matrix_ = np.eye(2)
+                    feature_names_ = ["Age"]
+                    fit_intercept = True
+                    intercept_ = 1.0
+                    coef_ = np.asarray([0.5])
+
+                    def __init__(self) -> None:
+                        self.calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+                    def coef_table(self, *args: Any, **kwargs: Any) -> Any:
+                        self.calls.append((args, kwargs))
+                        return pd.DataFrame(
+                            {
+                                "coef": [1.0, 0.5],
+                                "se": [0.1, 0.2],
+                                statistic_column: [10.0, 2.5],
+                                "p_value": [0.001, 0.02],
+                                "ci_lower": [0.8, 0.1],
+                                "ci_upper": [1.2, 0.9],
+                            },
+                            index=["intercept", "Age"],
+                        )
+
+                model = Model()
+                rows, warning = adapter.glm_coefficient_rows(
+                    model,
+                    ["Age"],
+                    include_inference=True,
+                )
+
+                self.assertIsNone(warning)
+                self.assertEqual(model.calls, [((), {})])
+                self.assertEqual([row["term"] for row in rows], ["(Intercept)", "Age"])
+                self.assertEqual(rows[1]["features"], ["Age"])
+                self.assertEqual(rows[1]["std_error"], 0.2)
+                self.assertEqual(rows[1]["statistic"], 2.5)
+                self.assertEqual(rows[1]["p_value"], 0.02)
+                self.assertEqual(rows[1]["ci_lower"], 0.1)
+                self.assertEqual(rows[1]["ci_upper"], 0.9)
+                self.assertEqual(list(rows[0]), adapter.GLM_COEFFICIENT_COLUMNS)
+
+    def test_external_glm_penalized_coefficients_keep_inference_blank(self) -> None:
+        import numpy as np
+
+        adapter = load_export_adapter()
+
+        class PenalizedModel:
+            feature_names_ = ["Age"]
+            fit_intercept = True
+            intercept_ = 1.0
+            coef_ = np.asarray([0.5])
+
+            def coef_table(self) -> Any:
+                raise AssertionError("Penalized inference must not be requested")
+
+        rows, warning = adapter.glm_coefficient_rows(
+            PenalizedModel(),
+            ["Age"],
+            include_inference=False,
+        )
+
+        self.assertIsNone(warning)
+        self.assertTrue(
+            all(
+                row[name] is None
+                for row in rows
+                for name in ("std_error", "statistic", "p_value", "ci_lower", "ci_upper")
+            )
+        )
+
+    def test_external_glm_inference_failure_saves_blank_rows_with_warning(self) -> None:
+        import numpy as np
+
+        adapter = load_export_adapter()
+
+        class FailedInferenceModel:
+            covariance_matrix_ = np.eye(2)
+            feature_names_ = ["Age"]
+            fit_intercept = True
+            intercept_ = 1.0
+            coef_ = np.asarray([0.5])
+
+            def coef_table(self) -> Any:
+                raise ValueError("inference unavailable")
+
+        with self.assertWarnsRegex(RuntimeWarning, "inference could not be exported"):
+            rows, warning = adapter.glm_coefficient_rows(
+                FailedInferenceModel(),
+                ["Age"],
+                include_inference=True,
+            )
+
+        self.assertIn("inference unavailable", str(warning))
+        self.assertEqual([row["estimate"] for row in rows], [1.0, 0.5])
+        self.assertTrue(all(row["std_error"] is None for row in rows))
+        self.assertTrue(all(row["p_value"] is None for row in rows))
 
     def test_external_validation_metric_is_sparse_and_failures_become_warnings(self) -> None:
         helpers = load_model_helpers()
@@ -741,6 +856,38 @@ COPY (
             self.assertNotIn("feature_config.json", {path.name for path in gbm_dir.iterdir()})
             self.assertNotIn("training_log.json", {path.name for path in gbm_dir.iterdir()})
 
+            con = duckdb.connect(database=":memory:")
+            try:
+                coefficient_columns = [
+                    row[0]
+                    for row in con.execute(
+                        f"DESCRIBE SELECT * FROM read_parquet({sql_literal(str(glm_dir / 'coefficients.parquet'))})"
+                    ).fetchall()
+                ]
+                coefficient_inference = con.execute(
+                    f"""
+SELECT std_error, statistic, p_value, ci_lower, ci_upper
+FROM read_parquet({sql_literal(str(glm_dir / 'coefficients.parquet'))})
+"""
+                ).fetchall()
+            finally:
+                con.close()
+            self.assertEqual(
+                coefficient_columns,
+                [
+                    "term",
+                    "features",
+                    "estimate",
+                    "std_error",
+                    "statistic",
+                    "p_value",
+                    "ci_lower",
+                    "ci_upper",
+                ],
+            )
+            self.assertTrue(coefficient_inference)
+            self.assertTrue(all(value is not None for row in coefficient_inference for value in row))
+
             # The 02 scripts name the model written by 01.  Pointing Lucidum's
             # active files elsewhere proves report generation does not silently
             # switch to whichever model happens to be active.
@@ -788,6 +935,15 @@ COPY (
             self.assertEqual(
                 [column["label"] for column in glm_summary_report["coefficients"]["columns"]],
                 ["#", "term", "estimate", "std.error", "p.value"],
+            )
+            self.assertTrue(
+                all(row["std_error"] != "--" for row in glm_summary_report["coefficients"]["rows"])
+            )
+            self.assertTrue(
+                all(row["p_value"] != "--" for row in glm_summary_report["coefficients"]["rows"])
+            )
+            self.assertTrue(
+                all(row["significance"] for row in glm_summary_report["coefficients"]["rows"])
             )
             self.assertEqual(glm_summary_report["tabulations"]["path"], str((glm_dir / "tabulations" / f"{GLM_MODEL_ID}_tabulations_linear.xlsx").resolve()))
             self.assertTrue((glm_dir / "tabulated_predictions.parquet").is_file())

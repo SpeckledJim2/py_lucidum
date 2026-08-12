@@ -19,6 +19,7 @@ import pickle
 import re
 import shutil
 import time
+import warnings as python_warnings
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -29,6 +30,16 @@ import pandas as pd
 
 
 FEATURE_IMPORTANCE_METRIC = "weighted_mean_abs_centered_linear_predictor_contribution"
+GLM_COEFFICIENT_COLUMNS = [
+    "term",
+    "features",
+    "estimate",
+    "std_error",
+    "statistic",
+    "p_value",
+    "ci_lower",
+    "ci_upper",
+]
 MODEL_ID_RE = re.compile(r"[A-Za-z0-9_.-]+")
 WORKSPACE_VERSION = 1
 
@@ -94,7 +105,12 @@ def save_glm_for_lucidum(
     scored_row_ids = np.flatnonzero(scoring_mask.to_numpy()).astype("int64") + 1
     source_columns = [str(name) for name in data.columns]
 
-    coefficients = glm_coefficient_rows(model, source_columns)
+    alpha = float(regularization["alpha"])
+    coefficients, inference_warning = glm_coefficient_rows(
+        model,
+        source_columns,
+        include_inference=alpha == 0,
+    )
     importance = glm_feature_importance(
         model,
         fit_frame,
@@ -121,11 +137,10 @@ def save_glm_for_lucidum(
             "n_interactions": len(
                 {tuple(sorted(row["features"])) for row in coefficients if len(row["features"]) > 1}
             ),
-            "warnings": [],
+            "warnings": [inference_warning] if inference_warning else [],
         }
     )
 
-    alpha = float(regularization["alpha"])
     l1_ratio = float(regularization["l1_ratio"])
     drop_first = alpha == 0
     nonzero = int(np.count_nonzero(np.abs(np.asarray(model.coef_, dtype=float)) > 1e-10))
@@ -170,7 +185,10 @@ def save_glm_for_lucidum(
     portable_root = resolve_path(config["_config_dir"], output["portable_root"])
     model_dir, staging = new_model_staging(portable_root, "glm", model_id)
     try:
-        write_parquet(pd.DataFrame(coefficients), staging / "coefficients.parquet")
+        write_parquet(
+            pd.DataFrame(coefficients, columns=GLM_COEFFICIENT_COLUMNS),
+            staging / "coefficients.parquet",
+        )
         write_parquet(pd.DataFrame(importance), staging / "feature_importance.parquet")
         write_parquet(prediction_frame, staging / "predictions.parquet")
         with (staging / "estimator.pkl").open("wb") as handle:
@@ -382,34 +400,114 @@ def save_gbm_for_lucidum(
 # ---------------------------------------------------------------------------
 
 
-def glm_coefficient_rows(model: Any, source_columns: list[str]) -> list[dict[str, Any]]:
+def glm_coefficient_rows(
+    model: Any,
+    source_columns: list[str],
+    *,
+    include_inference: bool,
+) -> tuple[list[dict[str, Any]], str | None]:
     feature_rows = coefficient_feature_rows(model, source_columns)
-    names = list(getattr(model, "feature_names_", []))
+    names = [str(name) for name in getattr(model, "feature_names_", [])]
+    features_by_name = {
+        name: feature_rows[index] if index < len(feature_rows) else []
+        for index, name in enumerate(names)
+    }
+
+    if include_inference:
+        try:
+            if getattr(model, "covariance_matrix_", None) is None:
+                raise ValueError("the fitted model has no stored covariance matrix")
+            table = model.coef_table()
+            missing = {"coef", "se", "p_value"} - set(table.columns)
+            if missing:
+                raise ValueError(
+                    "glum's coefficient table is missing " + ", ".join(sorted(missing))
+                )
+
+            rows = []
+            coefficient_index = 0
+            for term, values in table.iterrows():
+                raw_term = str(term)
+                is_intercept = raw_term.lower() == "intercept" or raw_term == "(Intercept)"
+                features = []
+                if not is_intercept:
+                    features = features_by_name.get(
+                        raw_term,
+                        feature_rows[coefficient_index]
+                        if coefficient_index < len(feature_rows)
+                        else [],
+                    )
+                    coefficient_index += 1
+                statistic = (
+                    values.get("z_value")
+                    if "z_value" in table.columns
+                    else values.get("t_value")
+                )
+                rows.append(
+                    {
+                        "term": "(Intercept)" if is_intercept else raw_term,
+                        "features": list(features),
+                        "estimate": json_number(values.get("coef")),
+                        "std_error": json_number(values.get("se")),
+                        "statistic": json_number(statistic),
+                        "p_value": json_number(values.get("p_value")),
+                        "ci_lower": json_number(values.get("ci_lower")),
+                        "ci_upper": json_number(values.get("ci_upper")),
+                    }
+                )
+
+            inference_fields = (
+                "std_error",
+                "statistic",
+                "p_value",
+                "ci_lower",
+                "ci_upper",
+            )
+            if rows and all(
+                row[field] is not None
+                for row in rows
+                for field in inference_fields
+            ):
+                return rows, None
+            raise ValueError("glum returned one or more non-finite inference values")
+        except Exception as exc:
+            inference_warning = (
+                "External GLM coefficient inference could not be exported; standard errors, "
+                f"statistics, p-values, and confidence intervals are blank. {exc}"
+            )
+            python_warnings.warn(inference_warning, RuntimeWarning, stacklevel=2)
+    else:
+        inference_warning = None
+
     coefficients = np.asarray(model.coef_, dtype=float)
-    standard_errors = np.asarray(getattr(model, "std_errors_", []), dtype=float)
-    p_values = np.asarray(getattr(model, "p_values_", []), dtype=float)
     rows: list[dict[str, Any]] = []
     if bool(getattr(model, "fit_intercept", False)):
         rows.append(
             {
                 "term": "(Intercept)",
-                "estimate": json_number(model.intercept_),
-                "std_error": json_number(getattr(model, "intercept_standard_error_", None)),
-                "p_value": json_number(getattr(model, "intercept_p_value_", None)),
                 "features": [],
+                "estimate": json_number(model.intercept_),
+                "std_error": None,
+                "statistic": None,
+                "p_value": None,
+                "ci_lower": None,
+                "ci_upper": None,
             }
         )
     for index, name in enumerate(names):
         rows.append(
             {
-                "term": str(name),
-                "estimate": json_number(coefficients[index] if index < len(coefficients) else None),
-                "std_error": json_number(standard_errors[index] if index < len(standard_errors) else None),
-                "p_value": json_number(p_values[index] if index < len(p_values) else None),
+                "term": name,
                 "features": feature_rows[index] if index < len(feature_rows) else [],
+                "estimate": json_number(coefficients[index] if index < len(coefficients) else None),
+                "std_error": None,
+                "statistic": None,
+                "p_value": None,
+                "ci_lower": None,
+                "ci_upper": None,
             }
         )
-    return rows
+    return rows, inference_warning
 
 
 def coefficient_feature_rows(model: Any, source_columns: list[str]) -> list[list[str]]:

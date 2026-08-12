@@ -1,8 +1,9 @@
 """Train a GBM outside Lucidum, then save it so Lucidum can display it.
 
-This is the file to read and adapt.  Parts 1-4 are ordinary pandas and
-LightGBM modelling code.  Part 5 is the single compatibility handoff to
-Lucidum.
+Normally run this script unchanged.  The YAML and Feature Specification
+control the analysis.  Parts 1-4 are ordinary pandas and LightGBM modelling
+code; Part 5 saves the fitted model and predictions for reports and optional
+Lucidum viewing.
 """
 
 # %% Imports

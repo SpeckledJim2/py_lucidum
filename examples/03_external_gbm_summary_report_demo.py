@@ -1,8 +1,8 @@
 """Create one static GBM model-summary HTML report.
 
-This is the file to read and adapt.  The YAML points to the 01 build, KPI
-specification, and output folder.  Lucidum supplies the tested evaluation-chart
-renderer and portable report layout; no app or server is started.
+Normally run this script unchanged.  The YAML points to the 01 build, KPI
+Specification, and output folder.  Lucidum supplies the tested evaluation
+chart and report layout; no app or server is started.
 """
 
 # %% Imports
