@@ -723,7 +723,7 @@ reports:
                             self.assertEqual(page.locator(".chart-card").count(), 16)
                             self.assertIn("SOURCE PARQUET", page.locator(".report-header").inner_text())
                             self.assertIn("MODEL", page.locator(".report-provenance").inner_text())
-                            self.assertIn(str(root), page.locator(".report-provenance").inner_text())
+                            self.assertIn(str(root.resolve()), page.locator(".report-provenance").inner_text())
                             series_names = set(
                                 page.evaluate(
                                     """

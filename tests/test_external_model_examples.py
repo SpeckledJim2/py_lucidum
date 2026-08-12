@@ -420,8 +420,8 @@ class ExternalModelExampleTests(unittest.TestCase):
             glm_report_path = report_dir / "motor_fixture_external_glm_validation_actual_vs_expected.html"
             gbm_report_path = report_dir / "motor_fixture_external_gbm_validation_actual_vs_expected.html"
             shap_report_path = report_dir / "motor_fixture_external_gbm_all_rows_rebased_shap.html"
-            self.assertIn(str(glm_report_path), glm_report_run.stdout)
-            self.assertIn(str(gbm_report_path), gbm_report_run.stdout)
+            self.assertIn(str(glm_report_path.resolve()), glm_report_run.stdout)
+            self.assertIn(str(gbm_report_path.resolve()), gbm_report_run.stdout)
             self.assertTrue(shap_report_path.is_file())
 
             glm_report = report_payload(glm_report_path)
