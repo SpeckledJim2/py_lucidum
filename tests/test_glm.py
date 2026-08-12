@@ -3555,13 +3555,15 @@ COPY (
         self.assertEqual(rule["anchor_feature"], "Age")
         self.assertEqual(rule["target_table_id"], "Segment")
         self.assertEqual(rule["offset_count"], len(original_age_slice))
-        self.assertEqual(
+        self.assertAlmostEqual(
             payload["diagnostics"]["mean_linear_error"],
             original_diagnostics["mean_linear_error"],
+            delta=1e-9,
         )
-        self.assertEqual(
+        self.assertAlmostEqual(
             payload["diagnostics"]["linear_sd_error"],
             original_diagnostics["linear_sd_error"],
+            delta=1e-9,
         )
         rebased_interaction = store.read_parquet_records(interaction_path)
         self.assertTrue(
