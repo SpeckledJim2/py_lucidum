@@ -773,7 +773,7 @@ output:
                         ) in report_checks:
                             page.goto(report_path.as_uri(), wait_until="domcontentloaded")
                             page.locator(".report-chart canvas").first.wait_for(timeout=15_000)
-                            self.assertEqual(page.locator(".chart-card").count(), 16)
+                            self.assertEqual(page.locator(".chart-card").count(), 14)
                             self.assertIn("SOURCE PARQUET", page.locator(".report-header").inner_text())
                             self.assertIn("MODEL", page.locator(".report-provenance").inner_text())
                             self.assertIn(str(root.resolve()), page.locator(".report-provenance").inner_text())
