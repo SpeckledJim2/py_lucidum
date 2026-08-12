@@ -37,7 +37,7 @@ The functionality of each tab is described in sections below.
 - ignore the filter when building a GBM (don't show the filter tool in the sidebar when GBM is displayed)
 - the first parameter-table row is `init_score`; `none` keeps the denominator-derived offset behavior, while a selected fitted GLM prediction or numeric source column is transformed into LightGBM's linear predictor space and replaces the denominator-derived initial score
 - saved `parameters.json` is a LightGBM Python params dict, including objective, metric, and generated numeric `interaction_constraints` when applicable; the generated allowlist is retained as exact training provenance but hidden from the editable Parameters grid, while semantic Feature constraints are restored from `manifest.json`; Lucidum-only init-score and training-mode metadata is also stored in `manifest.json`
-- model input feature order lives in `features.json`; fitted display metadata lives in optional `feature_config.parquet`; raw dataset columns exposed by GBM prediction and SHAP sources are derived from the dataset schema, not stored in `manifest.json`
+- new fits use one case-insensitive alphabetical model input feature order, regardless of the Feature grid's visible sort; the exact fitted order lives in `features.json`, while historical models retain their saved order; fitted display metadata lives in optional `feature_config.parquet`; raw dataset columns exposed by GBM prediction and SHAP sources are derived from the dataset schema, not stored in `manifest.json`
 
 ## Features and parameters tab
 

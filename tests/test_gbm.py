@@ -30,7 +30,7 @@ from py_lucidum.tools.gbm.store import GbmModelStore, GbmSourceProvider
 from py_lucidum.tools.gbm.tabulation import build_gbm_tabulations
 from py_lucidum.tools.gbm.trees import ebm_gain_summary, tree_detail, tree_summary
 from py_lucidum.tools.gbm.training import MissingGbmDependency, append_holdout_evaluation, feature_config_with_mean_abs_shap, gbm_dependencies, gbm_training_dependencies, lightgbm_interaction_constraints, lightgbm_pair_interaction_constraints, lightgbm_progress_payload, normalise_feature_scenario, polars_feature_frame, predict_response_values, shap_dataframes, shap_interaction_group_columns, shap_row_limit, should_use_offset_init_score, train_model, tree_dataframe, training_projection_columns, training_select_sql, write_dataframe_parquet
-from py_lucidum.tools.gbm.validation import DEFAULT_TWEEDIE_VARIANCE_POWER, GBM_METRICS, GBM_OBJECTIVES, available_feature_interaction_groupings, categorical_distinct_counts, default_parameters, ebm_available, feature_interaction_constraint_groups, feature_rows, normalise_feature_grouping_map, normalise_feature_interaction_features, normalise_feature_interaction_groupings, normalise_feature_interaction_pairs, normalise_parameters, validate_request
+from py_lucidum.tools.gbm.validation import DEFAULT_TWEEDIE_VARIANCE_POWER, GBM_METRICS, GBM_OBJECTIVES, available_feature_interaction_groupings, categorical_distinct_counts, default_parameters, ebm_available, feature_interaction_constraint_groups, feature_rows, normalise_feature_grouping_map, normalise_feature_interaction_features, normalise_feature_interaction_groupings, normalise_feature_interaction_pairs, normalise_features, normalise_parameters, validate_request
 from py_lucidum.tools.glm.store import GlmModelStore
 from py_lucidum.tools.glm.tabulation import export_tabulations, tabulation_config, tabulation_plot, tabulation_table
 from py_lucidum.tools.line_bar.query import chart
@@ -1309,6 +1309,19 @@ COPY (
         )
         self.assertIsNone(normalise_feature_scenario({"name": "", "features": ["Age"]}))
         self.assertIsNone(normalise_feature_scenario(None))
+
+    def test_selected_gbm_features_use_canonical_alphabetical_order(self) -> None:
+        dataset = Dataset(self.data_path)
+        features = normalise_features(
+            [
+                {"name": "Segment", "include": True},
+                {"name": "lat", "include": True},
+                {"name": "Age", "include": True},
+            ],
+            dataset.column_map(),
+        )
+
+        self.assertEqual([feature["name"] for feature in features], ["Age", "lat", "Segment"])
 
     def test_feature_interaction_groupings_are_unique_sorted_and_nonblank(self) -> None:
         grouping_map = normalise_feature_grouping_map(
@@ -2679,6 +2692,43 @@ COPY (
         self.assertNotIn("*", sql)
         self.assertNotIn("Segment", sql)
         self.assertIn('"Age"', sql)
+        self.assertIn("ORDER BY base.__lucidum_row_id", sql)
+
+    def test_generated_sample_training_projection_restores_source_row_order(self) -> None:
+        dataset = Dataset(self.data_path)
+        sample_path = self.root / "generated_sample.parquet"
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"""
+COPY (
+  SELECT * FROM (VALUES
+    (3, 'training'),
+    (1, 'training'),
+    (2, 'test')
+  ) sample(__lucidum_row_id, SAMPLE)
+) TO {sql_literal(str(sample_path))} (FORMAT PARQUET)
+"""
+            )
+        finally:
+            con.close()
+        projection = training_projection_columns(
+            response_col="actualNumerator",
+            offset_col="denominator",
+            sample_column=None,
+            feature_names=["Age"],
+            columns=dataset.column_map(),
+        )
+        sql = training_select_sql(
+            dataset.relation_sql(),
+            projection,
+            generated_sample_path=sample_path,
+        )
+
+        rows = dataset.con.execute(sql).fetchall()
+
+        self.assertEqual([row[0] for row in rows], [1, 2, 3])
+        self.assertEqual([row[-1] for row in rows], ["training", "test", "training"])
 
     def test_active_model_feature_rows_mirror_saved_feature_config(self) -> None:
         dataset = Dataset(self.data_path)
@@ -3469,7 +3519,11 @@ COPY (
         )
         self.assertEqual(
             store.read_json(store.artifact_path(result["model_id"], "parameters"))["interaction_constraints"],
-            [[0, 2], [1], [3], [4], [5]],
+            [[0, 4], [5], [3], [1], [2]],
+        )
+        self.assertEqual(
+            store.read_json(store.artifact_path(result["model_id"], "features")),
+            ["Age", "CarValue", "Ncd", "PostcodeArea", "Segment", "VehicleAge"],
         )
 
     def test_training_creates_and_verifies_selected_interaction_group_models(self) -> None:

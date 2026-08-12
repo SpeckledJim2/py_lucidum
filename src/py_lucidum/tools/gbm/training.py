@@ -562,6 +562,7 @@ FROM (
   FROM {relation_sql}
 ) base{join_sql}
 {where_sql}
+ORDER BY base.__lucidum_row_id
 """
 
 

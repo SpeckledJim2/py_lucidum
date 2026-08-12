@@ -619,7 +619,7 @@ def normalise_features(raw: Any, columns: dict[str, ColumnInfo]) -> list[dict[st
             raise ValueError(f"Choose a valid GBM feature: {name}")
         monotonicity = normalise_monotonicity(item.get("monotonicity"))
         features.append({"name": name, "monotonicity": monotonicity, "kind": columns[name].kind})
-    return features
+    return sorted(features, key=lambda feature: (feature["name"].casefold(), feature["name"]))
 
 
 def normalise_feature_grouping_map(raw: Any) -> dict[str, str]:

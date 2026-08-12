@@ -13,6 +13,7 @@ import time
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 
 from external_model_helpers import (
     config_path_from_command_line,
@@ -27,6 +28,24 @@ from external_model_results import save_gbm_model_results
 
 
 LOG_LINK_OBJECTIVES = {"poisson", "gamma", "tweedie"}
+
+
+def lightgbm_arrow_table(frame, categorical_names):
+    """Use the same Float64/Int32 Arrow matrix representation as Lucidum."""
+
+    categorical_names = set(categorical_names)
+    columns = {}
+    for name in frame.columns:
+        if name in categorical_names:
+            codes = frame[name].cat.codes.to_numpy(dtype="int32", copy=False)
+            columns[name] = pa.array(codes, mask=codes < 0, type=pa.int32())
+        else:
+            columns[name] = pa.array(
+                frame[name].to_numpy(dtype="float64", copy=False),
+                from_pandas=True,
+                type=pa.float64(),
+            )
+    return pa.table(columns)
 
 
 # %% 1. Load settings and data
@@ -44,19 +63,12 @@ dataset_path = resolve_path(config, dataset_settings["path"])
 feature_spec_path = resolve_path(config, feature_settings["spec_path"])
 
 data = read_table(dataset_path)
-feature_data, feature_names, categorical_features = prepare_feature_data(
-    data,
-    feature_spec_path,
-    str(feature_settings["scenario_column"]),
-)
 
 response_name = str(dataset_settings["response_numerator"])
 denominator_name = str(dataset_settings.get("denominator") or "").strip()
 sample_name = str(dataset_settings["sample_column"])
 
 require_columns(data, [response_name, denominator_name, sample_name])
-if {response_name, denominator_name, sample_name}.intersection(feature_names):
-    raise ValueError("Response, denominator, and sample columns cannot also be model features")
 
 
 # %% 2. Prepare modelling inputs
@@ -65,16 +77,25 @@ response = pd.to_numeric(data[response_name], errors="coerce")
 
 if denominator_name:
     denominator = pd.to_numeric(data[denominator_name], errors="coerce")
-    scoring_mask = (
-        response.notna()
-        & np.isfinite(response)
-        & denominator.notna()
+    feature_eligibility = (
+        denominator.notna()
         & np.isfinite(denominator)
         & denominator.gt(0)
     )
+    scoring_mask = response.notna() & np.isfinite(response) & feature_eligibility
 else:
     denominator = None
+    feature_eligibility = pd.Series(True, index=data.index)
     scoring_mask = response.notna() & np.isfinite(response)
+
+feature_data, feature_names, categorical_features = prepare_feature_data(
+    data,
+    feature_spec_path,
+    str(feature_settings["scenario_column"]),
+    eligible_rows=feature_eligibility,
+)
+if {response_name, denominator_name, sample_name}.intersection(feature_names):
+    raise ValueError("Response, denominator, and sample columns cannot also be model features")
 
 sample = data[sample_name].astype("string").str.strip().str.lower()
 training_mask = scoring_mask & sample.eq(
@@ -98,13 +119,20 @@ for sample_label, sample_rows in (
 parameters = dict(training_settings["parameters"])
 objective = str(parameters["objective"]).strip().lower()
 use_log_offset = denominator is not None and objective in LOG_LINK_OBJECTIVES
-initial_score = np.log(denominator) if use_log_offset else None
+initial_score = (
+    np.log(denominator.where(denominator.gt(0)))
+    if use_log_offset
+    else None
+)
 
 
 # %% 3. Train
 
 training_data = lgb.Dataset(
-    feature_data.loc[training_mask, feature_names],
+    lightgbm_arrow_table(
+        feature_data.loc[training_mask, feature_names],
+        categorical_features,
+    ),
     label=response.loc[training_mask],
     categorical_feature=categorical_features,
     init_score=initial_score.loc[training_mask] if initial_score is not None else None,
@@ -113,7 +141,10 @@ training_data = lgb.Dataset(
 )
 
 test_data = lgb.Dataset(
-    feature_data.loc[test_mask, feature_names],
+    lightgbm_arrow_table(
+        feature_data.loc[test_mask, feature_names],
+        categorical_features,
+    ),
     label=response.loc[test_mask],
     categorical_feature=categorical_features,
     init_score=initial_score.loc[test_mask] if initial_score is not None else None,
@@ -147,10 +178,11 @@ best_iteration = int(model.best_iteration or model.current_iteration())
 # added back before converting to the response scale.
 predictions = pd.Series(np.nan, index=data.index, dtype=float)
 scoring_data = feature_data.loc[scoring_mask, feature_names]
+scoring_table = lightgbm_arrow_table(scoring_data, categorical_features)
 
 if initial_score is not None:
     raw_prediction = model.predict(
-        scoring_data,
+        scoring_table,
         raw_score=True,
         num_iteration=best_iteration,
     )
@@ -159,7 +191,7 @@ if initial_score is not None:
     )
 else:
     predictions.loc[scoring_mask] = model.predict(
-        scoring_data,
+        scoring_table,
         num_iteration=best_iteration,
     )
 

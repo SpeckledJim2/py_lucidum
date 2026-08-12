@@ -214,6 +214,27 @@ additional settings:
 A Feature Specification row is used by the model when the selected scenario
 cell contains `feature`, ignoring letter case.
 
+Selected GBM features are then put into a canonical case-insensitive
+alphabetical order (with the original name as the tie-breaker) before matrix
+construction and artifact writing. Regular Lucidum training uses the same
+rule, so Feature grid sorting and Feature Specification row order do not alter
+LightGBM feature indexes. The exact fitted order is recorded in
+`features.json`; existing models keep their historical saved order.
+
+Both workflows also preserve ascending source-row identity when constructing
+the LightGBM matrix. In particular, Lucidum restores `__lucidum_row_id` order
+after joining a generated `SAMPLE` sidecar, so using the same assignments as a
+physical external `SAMPLE` column produces the same bounded bin-construction
+sample as well as the same Training/Test/Validation membership.
+
+Canonical feature order makes `feature_fraction` select from the same feature
+index mapping, but a seed alone is not a complete bit-for-bit reproducibility
+contract. For reproducible CPU builds, keep the data and LightGBM version
+fixed, set `seed` (and any explicitly overridden component seeds), and use
+`deterministic: true` together with exactly one of `force_col_wise: true` or
+`force_row_wise: true`. A fixed `num_threads` is also useful for keeping the
+runtime environment comparable.
+
 Training and Test are passed to LightGBM. Validation is not used for fitting or
 early stopping. After the model has scored all rows, the configured metric is
 calculated on Validation from those saved predictions and stored as one result
@@ -221,7 +242,11 @@ at the best iteration.
 
 For Poisson, Gamma, and Tweedie objectives with a denominator, the script uses
 `log(denominator)` as the LightGBM offset. It saves both the predicted numerator
-(`gbm_prediction`) and rate (`gbm_prediction_rate`).
+(`gbm_prediction`) and rate (`gbm_prediction_rate`). Rows with a missing,
+non-finite, zero, or negative denominator are excluded before fitting and
+scoring. Categorical levels are likewise derived only from denominator-eligible
+rows, matching Lucidum's in-application builder while retaining the complete
+source-row identity.
 
 SHAP values are calculated by the `01` GBM script and saved with the model.
 Later reports read those values; they do not calculate SHAP again.

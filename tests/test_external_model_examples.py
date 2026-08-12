@@ -15,6 +15,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 import duckdb
+import pandas as pd
 
 from py_lucidum import score_glm_tabulations
 from py_lucidum.app import create_app
@@ -390,6 +391,52 @@ class ExternalModelExampleTests(unittest.TestCase):
         self.assertEqual(config["model"]["family"], "tweedie")
         self.assertEqual(config["model"]["family_parameter"], 1.2)
         self.assertEqual(config["model"]["link"], "log")
+
+    def test_external_gbm_categories_use_denominator_eligible_rows(self) -> None:
+        helpers = load_model_helpers()
+        with TemporaryDirectory() as tmp_dir:
+            spec_path = Path(tmp_dir) / "features.csv"
+            spec_path.write_text(
+                "Feature,Grouping,scenario\nCATEGORY,GROUP,feature\nVALUE,GROUP,feature\n",
+                encoding="utf-8",
+            )
+            data = pd.DataFrame(
+                {
+                    "CATEGORY": ["kept", "excluded-only", "kept"],
+                    "VALUE": [1, 2, 3],
+                }
+            )
+
+            features, names, categorical = helpers.prepare_feature_data(
+                data,
+                spec_path,
+                "scenario",
+                eligible_rows=pd.Series([True, False, True]),
+            )
+
+            self.assertEqual(names, ["CATEGORY", "VALUE"])
+            self.assertEqual(categorical, ["CATEGORY"])
+            self.assertEqual(list(features["CATEGORY"].cat.categories), ["kept"])
+            self.assertTrue(pd.isna(features.loc[1, "CATEGORY"]))
+            self.assertEqual(str(features["VALUE"].dtype), "float64")
+
+    def test_external_gbm_features_use_canonical_alphabetical_order(self) -> None:
+        helpers = load_model_helpers()
+        with TemporaryDirectory() as tmp_dir:
+            spec_path = Path(tmp_dir) / "features.csv"
+            spec_path.write_text(
+                "Feature,scenario\nzebra,feature\nAge,feature\nalpha,feature\n",
+                encoding="utf-8",
+            )
+            data = pd.DataFrame({"zebra": [1], "Age": [2], "alpha": [3]})
+
+            features, names, categorical = helpers.prepare_feature_data(
+                data, spec_path, "scenario"
+            )
+
+            self.assertEqual(names, ["Age", "alpha", "zebra"])
+            self.assertEqual(list(features.columns), names)
+            self.assertEqual(categorical, [])
 
     def test_external_builders_do_not_import_py_lucidum(self) -> None:
         for script in (

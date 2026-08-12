@@ -227,8 +227,10 @@ def prepare_feature_data(
     data: pd.DataFrame,
     spec_path: Path,
     scenario: str,
+    *,
+    eligible_rows: Any | None = None,
 ) -> tuple[pd.DataFrame, list[str], list[str]]:
-    """Select a feature scenario and prepare LightGBM categorical columns."""
+    """Select a scenario and encode categories found on denominator-eligible rows."""
 
     feature_spec = pd.read_csv(spec_path, dtype="string")
     require_columns(feature_spec, ["Feature", scenario])
@@ -240,19 +242,29 @@ def prepare_feature_data(
         if name and name not in feature_names:
             feature_names.append(name)
 
+    feature_names.sort(key=lambda name: (name.casefold(), name))
+
     if not feature_names:
         raise ValueError(f"Feature scenario selects no usable features: {scenario}")
     require_columns(data, feature_names)
 
     feature_data = data[feature_names].copy()
+    category_rows = (
+        pd.Series(True, index=feature_data.index)
+        if eligible_rows is None
+        else pd.Series(eligible_rows, index=feature_data.index).fillna(False).astype(bool)
+    )
     categorical_features = []
     for name in feature_names:
         if pd.api.types.is_numeric_dtype(feature_data[name]):
-            feature_data[name] = pd.to_numeric(feature_data[name], errors="coerce")
+            feature_data[name] = pd.to_numeric(
+                feature_data[name], errors="coerce"
+            ).astype("float64")
         else:
-            categories = sorted(str(value) for value in feature_data[name].dropna().unique())
+            values = feature_data[name].astype("string")
+            categories = sorted(str(value) for value in values.loc[category_rows].dropna().unique())
             feature_data[name] = pd.Categorical(
-                feature_data[name].astype("string"),
+                values.where(values.isin(categories)),
                 categories=categories,
             )
             categorical_features.append(name)
