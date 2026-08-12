@@ -1,0 +1,23 @@
+dataset:
+  path: ../datasets/motor_premiums.parquet
+  response_numerator: PREMIUM
+  denominator: null
+  sample_column: SAMPLE
+  training_value: training
+
+model:
+  id: EXTERNAL_BUILD-config-glm
+  label: EXTERNAL_BUILD config GLM
+  formula_path: external_glm_formula.txt
+  family: normal
+  link: auto
+  fit_intercept: true
+  regularization:
+    alpha: 0.0
+    l1_ratio: 0.0
+    scale_predictors: false
+
+output:
+  portable_root: ../local/external_model_artifacts
+  install: true
+  replace_existing: true

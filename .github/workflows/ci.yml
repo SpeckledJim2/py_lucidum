@@ -38,7 +38,7 @@ jobs:
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[glm,gbm]" pytest
+          python -m pip install -e ".[glm,gbm,examples]" pytest
 
       - name: Run complete test gate
         run: python scripts/run_tests.py prepush --skip-browser
@@ -68,7 +68,7 @@ jobs:
       - name: Install browser test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[glm,gbm]" pytest playwright
+          python -m pip install -e ".[glm,gbm,examples]" pytest playwright
           python -m playwright install --with-deps chromium webkit
 
       - name: Run browser smoke shard
@@ -111,7 +111,7 @@ jobs:
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[glm,gbm]" pytest pipx
+          python -m pip install -e ".[glm,gbm,examples]" pytest pipx
 
       - name: Smoke-test pipx installation and launcher
         run: python scripts/run_tests.py pipx
@@ -140,7 +140,7 @@ jobs:
       - name: Install browser test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[glm,gbm]" pytest playwright
+          python -m pip install -e ".[glm,gbm,examples]" pytest playwright
           python -m playwright install chromium webkit
 
       - name: Run browser smoke tests

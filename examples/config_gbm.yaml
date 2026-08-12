@@ -1,0 +1,39 @@
+dataset:
+  path: ../datasets/motor_premiums.parquet
+  response_numerator: PREMIUM
+  denominator: null
+  sample_column: SAMPLE
+  training_value: training
+  early_stopping_value: test
+  holdout_value: validation
+
+features:
+  spec_path: ../specs/feature_spec.csv
+  scenario_column: scenario1
+
+model:
+  id: EXTERNAL_BUILD-config-gbm
+  label: EXTERNAL_BUILD config GBM
+
+training:
+  num_boost_round: 120
+  early_stopping_rounds: 20
+  shap_rows: 10000
+  parameters:
+    objective: regression
+    metric: l2
+    learning_rate: 0.08
+    num_leaves: 3
+    min_data_in_leaf: 40
+    feature_fraction: 1.0
+    bagging_fraction: 1.0
+    bagging_freq: 0
+    seed: 2026
+    feature_fraction_seed: 2026
+    bagging_seed: 2026
+    verbosity: -1
+
+output:
+  portable_root: ../local/external_model_artifacts
+  install: true
+  replace_existing: true

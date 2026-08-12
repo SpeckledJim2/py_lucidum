@@ -1,0 +1,50 @@
+1
+
+  # SHAP rank 1: ordered postcode risk score, dominant and broadly monotone.
+  + ns(POSTCODE_CATEGORY, df=5, constraints="center")
+
+
+  # SHAP rank 2: exact early no-claims levels with a simple mature tail slope.
+  + ifelse(NCD_YEARS == 0, 1, 0)
+  + ifelse(NCD_YEARS == 1, 1, 0)
+  + ns(pmax(2, pmin(9, NCD_YEARS)), df=5, constraints="center")
+  + pmax(pmin(NCD_YEARS, 20) - 10, 0)
+
+  # SHAP rank 3: new-driver risk matures; cap avoids over-reading sparse 40+ year tail.
+  + ifelse(YEARS_LICENCE_HELD==0,1,0)
+  + ns(pmax(1,pmin(YEARS_LICENCE_HELD, 40)), df=5, constraints="center")
+
+  # SHAP rank 4: young-driver and senior-driver curve, with extreme ages capped for table stability.
+  + ns(pmin(DRIVER_AGE, 90), df=8, constraints="center")
+
+  # SHAP rank 5: ordered vehicle risk category, slightly flexible to remove visible one-way gaps.
+  + ifelse(VEHICLE_CATEGORY==1,1,0)
+  + ifelse(VEHICLE_CATEGORY==30,1,0)
+  + ns(VEHICLE_CATEGORY, df=6, constraints="center")
+
+  # SHAP rank 6: discrete early ownership tenure with a capped mature tail.
+  + ifelse(YEARS_OWNED_VEHICLE == 0, 1, 0)
+  + pmax(1, pmin(15, YEARS_OWNED_VEHICLE))
+
+  # SHAP rank 7: modest vehicle-age curve.
+  + ns(VEHICLE_AGE, df=6, constraints="center")
+
+  # SHAP rank 8: mileage loading with high-mileage tail capped for rating-table stability.
+  + ifelse(ANNUAL_MILEAGE<=1000,1,0)
+  + ns(pmin(ANNUAL_MILEAGE, 30000), df=6, constraints="center")
+
+  # SHAP rank 9: claim count is monotone and sparse, so a linear count is enough.
+  + PRIOR_CLAIMS
+
+  # SHAP rank 10: usage relativity.
+  + C(VEHICLE_USAGE)
+
+  # SHAP rank 11: overnight parking relativity.
+  + C(OVERNIGHT_LOCATION)
+
+  # SHAP rank 12: fuel-type relativity.
+  + C(FUEL_TYPE)
+
+
+  # SHAP rank 14: rare provisional-licence main effect.
+  + C(LICENCE_TYPE)

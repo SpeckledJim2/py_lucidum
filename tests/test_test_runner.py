@@ -141,6 +141,10 @@ class TestRunnerTests(unittest.TestCase):
             ),
             ["tests/test_gbm.py", "tests/test_uk_map.py"],
         )
+        self.assertEqual(
+            run_tests.changed_test_targets(["examples/external_glm_artifacts_demo.py"]),
+            ["tests/test_external_model_examples.py"],
+        )
 
     def test_changed_targets_use_fast_glm_and_preserve_slow_classification(self) -> None:
         targets = run_tests.changed_test_targets(["src/py_lucidum/tools/glm/validation.py"])
@@ -241,7 +245,7 @@ class TestRunnerTests(unittest.TestCase):
             for index in range(1, 5)
         ]
 
-        self.assertEqual(len(nodeids), 88)
+        self.assertEqual(len(nodeids), 89)
         self.assertEqual(sorted(nodeid for shard in shards for nodeid in shard), nodeids)
         self.assertEqual(len({nodeid for shard in shards for nodeid in shard}), len(nodeids))
         self.assertLessEqual(max(map(len, shards)) - min(map(len, shards)), 1)

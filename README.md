@@ -363,6 +363,143 @@ app = create_app(
 py_lucidum.run_app(app, host="127.0.0.1", port=8000, open_browser=True)
 ```
 
+## External GLM and GBM builds
+
+The checked-in examples show how a separate Python pipeline can train a model,
+write Lucidum's current artifact format, and install the result without
+importing `py_lucidum`. Start with the two training scripts and their YAML
+files. Each script is a linear, numbered `# %%` example: load, prepare, fit,
+predict, then make one save call. The sections can be run from top to bottom as
+a normal script or sent to a Python console one at a time from an editor that
+supports Python cells.
+
+Routine command-line, YAML, and data-loading code is kept in
+`examples/external_model_helpers.py`. Lucidum's file-format and installation
+machinery is isolated in `examples/lucidum_export.py`; most users should not
+need to read or modify either helper. These are compatibility examples rather
+than a public writer API: external Python performs the fit and prediction,
+then the adapter creates the artifacts. Lucidum discovers the installed files
+and supplies its normal model navigator, coefficients, evaluation, tree, SHAP,
+tabulation, and Line/Bar views.
+
+From a source checkout, install the modelling and YAML dependencies together:
+
+```bash
+python -m pip install -e ".[glm,gbm,examples]"
+python examples/external_glm_artifacts_demo.py
+python examples/external_gbm_artifacts_demo.py
+lucidum datasets/motor_premiums.parquet --tools line-bar,glm,gbm \
+  --features specs/feature_spec.csv
+```
+
+Each script accepts one optional argument: the path to its YAML config. With no
+argument it uses `examples/config_glm.yaml` or `examples/config_gbm.yaml`.
+Paths inside a config resolve from that config file's directory, so builds do
+not depend on the shell's current directory. The supplied configs install and
+activate `EXTERNAL_BUILD-config-glm` and `EXTERNAL_BUILD-config-gbm` and replace
+only that exact ID on subsequent runs.
+
+The GLM config fields are:
+
+- `dataset.path`: one CSV or Parquet file.
+- `dataset.response_numerator`: numeric response/numerator column.
+- `dataset.denominator`: a numeric exposure/weight column, or `null` for
+  average-row modelling.
+- `dataset.sample_column` and `dataset.training_value`: the mandatory physical
+  sample column and value used for fitting.
+- `model.formula_path`: a text file containing only the Formulaic RHS, without
+  `response ~`. Python-style `#` comments are removed for fitting while the
+  original commented formula is retained in the saved model artifacts.
+- `model.family`, `model.link`, and `model.fit_intercept`: direct `glum`
+  settings.
+- `model.regularization.alpha`, `l1_ratio`, and `scale_predictors`: the manual
+  regularization settings.
+- `model.id` and `model.label`: the sidecar folder ID and display label.
+- `output.portable_root`, `install`, and `replace_existing`: portable output
+  location and installation policy.
+
+When a denominator is configured, the GLM fits
+`response_numerator / denominator` with the denominator as sample weight. It
+writes numerator-scale `glm_prediction` and rate-scale `glm_prediction_rate`.
+With `denominator: null`, `glm_prediction` is the direct average-row prediction
+and no rate column is needed.
+
+The GBM config uses the same dataset, model identity, and output fields, plus:
+
+- `dataset.training_value`, `early_stopping_value`, and `holdout_value`: three
+  distinct values in the mandatory sample column.
+- `features.spec_path` and `features.scenario_column`: a Feature Specification
+  CSV and the scenario column to read. Rows whose scenario value is `feature`,
+  case-insensitively, define the ordered input feature set.
+- `training.parameters`: the dictionary passed to `lightgbm.train`, including
+  objective, metric, seed, and normal LightGBM parameters.
+- `training.num_boost_round`, `early_stopping_rounds`, and `shap_rows`: the
+  training cap, stopping patience, and deterministic saved SHAP sample size;
+  `shap_rows` also accepts `all`.
+
+For Poisson, Gamma, and Tweedie objectives with a denominator, the GBM uses
+`log(denominator)` as the LightGBM initial score and adds that offset back when
+scoring. It writes numerator-scale `gbm_prediction` and
+`gbm_prediction_rate = gbm_prediction / denominator`.
+
+Both builders assign one-based `__lucidum_row_id` over the complete source file
+before sample or denominator filtering. They train on the configured sample
+rows and score every eligible row while retaining those original IDs. This is
+the join key Lucidum uses to attach compact predictions and SHAP values to the
+source dataset; an external pipeline must not reset or renumber it after
+filtering.
+
+Portable output has this shape:
+
+```text
+<portable_root>/
+├── lucidum_artifacts.json
+├── glm/<model-id>/
+│   ├── manifest.json
+│   ├── formula.txt
+│   ├── estimator.pkl
+│   ├── coefficients.parquet
+│   ├── feature_importance.parquet
+│   ├── predictions.parquet
+│   └── diagnostics.json
+└── gbm/<model-id>/
+    ├── manifest.json
+    ├── parameters.json
+    ├── features.json
+    ├── feature_config.parquet
+    ├── model.txt
+    ├── predictions.parquet
+    ├── evaluation.parquet
+    ├── tree_table.parquet
+    ├── shap_values.parquet
+    └── shap_summary.parquet
+```
+
+Installation independently reproduces Lucidum workspace-signature version 1
+and copies the model to:
+
+```text
+<dataset-directory>/.lucidum/datasets/<dataset-slug>/<signature>/models/
+├── glm/<model-id>/...
+├── glm/active_model.json
+├── gbm/<model-id>/...
+└── gbm/active_model.json
+```
+
+The builders stage complete directories, atomically swap only the configured
+`<model-id>` folder, and then update that model type's active marker. They do
+not delete the surrounding sidecar or other model IDs. `replace_existing:
+false` rejects an existing target; `install: false` leaves only the portable
+copy. Because the workspace signature includes file size, modification time,
+row count, and ordered schema, changing or rewriting the dataset creates a new
+workspace and requires rebuilding or reinstalling artifacts for that version.
+
+The generated portable output and `.lucidum` sidecars are local artifacts and
+remain ignored by Git. Lucidum-created tabulations are written later beneath
+the installed model folder; they demonstrate that the external estimator or
+tree table is functional, but are intentionally not fabricated by these
+training examples.
+
 ## Filters
 
 The footer filter box accepts DuckDB `WHERE` expressions:

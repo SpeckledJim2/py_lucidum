@@ -55,6 +55,18 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
   - `py_lucidum.demo_dataset_path()`
   - `py_lucidum.extract_lightgbm_interaction_group(...)`
   - `py_lucidum.app.create_app(...)`
+- External compatibility examples:
+  - `examples/external_glm_artifacts_demo.py [config-path]`
+  - `examples/external_gbm_artifacts_demo.py [config-path]`
+  - The two executable examples are linear `# %%` scripts whose numbered
+    load, prepare, fit, predict, and save sections are the user-facing surface.
+  - `examples/external_model_helpers.py` contains only shared CLI, YAML,
+    path, and input-table preparation helpers.
+  - `examples/lucidum_export.py` contains all workspace, artifact, and install
+    adapter code and is not intended as part of the teaching flow.
+  - These scripts intentionally do not import `py_lucidum` and do not establish
+    a public writer API. They are executable documentation of the current
+    manual artifact and installation contract.
 - HTTP:
   - `GET /api/schema`
   - `POST /api/dataset-viewer/table`
@@ -244,6 +256,34 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 
 **GLM and GBM**
 
+- The external builders under `examples/` accept only one YAML config path,
+  resolve config-relative paths, and reject missing/unknown keys, unsafe model
+  IDs, unsupported dataset kinds, invalid sample partitions, and invalid
+  formula/scenario references. Keep `PyYAML` in the `examples` optional extra;
+  a checkout that runs both examples uses `.[glm,gbm,examples]`.
+- External builders must remain independent of `py_lucidum`. They reproduce
+  workspace-signature version 1 from file size, nanosecond mtime, row count,
+  and ordered DuckDB schema; assign one-based `__lucidum_row_id` before any
+  filtering; and install only to
+  `.lucidum/datasets/<slug>/<signature>/models/<type>/<model-id>`.
+- Installation is a staged rename of one validated model folder. Replacement
+  may move that exact folder through a temporary backup, but must never delete
+  a model-type root or wider dataset sidecar. Write `active_model.json` only
+  after the model folder is live. Portable copies live below
+  `<output>/glm|gbm/<model-id>` and are indexed by the output-level
+  `lucidum_artifacts.json`.
+- The external GLM contract fits `glum` directly, persists a compatible
+  `estimator.pkl`, and writes the current compact manifest, formula,
+  coefficient, importance, prediction, and diagnostic artifacts. A denominator
+  means rate target plus denominator weight, with response- and rate-scale
+  predictions both persisted.
+- The external GBM contract fits LightGBM directly and writes the current
+  parameters/features/feature-config/model/prediction/evaluation/tree/SHAP
+  artifacts. Preserve deterministic category ordering and SHAP sampling,
+  decoded categorical threshold labels, denominator eligibility, and log-link
+  offset scoring. Do not restore obsolete `feature_config.json` or training-log
+  artifacts.
+
 - GLM and GBM are opt-in tools and are not part of the default user-facing tool set. `--tools all` enables them with every other tool in the built-in registry order. Explicit modelling selections preserve the supplied order and must also include `line-bar` because GLM/GBM context-menu actions open Line/Bar charts. GLM and GBM do not imply each other; request both when cross-model tabulation or comparison workflows are needed.
 - The shared header application-status badge times GLM and GBM builds from the user's click through all post-training work and separately times GLM tabulation through row scoring. It returns to untimed `Ready` only after the final client refresh. Phase changes reuse the operation's original `performance.now()` timestamp; other badge uses remain untimed, and the changing elapsed text is hidden from live-region announcements.
 - GLM and GBM artifacts are scoped to the exact dataset version under `.lucidum/datasets/<dataset-slug>/<dataset-signature>/models/{glm,gbm}/`. The slug is derived from the dataset filename. The signature is derived from file size, modification time, row count, and schema fingerprint. Startup scans only the current signature workspace; root-level `.lucidum/models/` folders and other dataset-version workspaces are ignored and must never break raw dataset startup.
@@ -403,7 +443,8 @@ Use these tiers to keep iteration focused while preserving the full suite.
 ```
 
 - Syntax-only checks compile Python and discover every non-vendored JavaScript
-  file dynamically before running `node --check`:
+  file dynamically before running `node --check`. Python compilation includes
+  `src`, `tests`, and `examples`:
 
 ```bash
 .venv/bin/python scripts/run_tests.py syntax
@@ -477,10 +518,10 @@ Current timings recorded on macOS arm64 with Python 3.13.14 and Node 26.5.0:
 
 - Static-frontend changed lane equivalent: 23 tests plus syntax in about 2.1 seconds.
 - GBM changed lane equivalent: 126 tests plus syntax in about 6 seconds.
-- Broad development lane: 512 tests, one expected skip, and syntax in about 16 seconds.
-- Full unittest discovery: 642 tests, 64 expected skips, in about 87 seconds.
-- Browser smoke: 63 tests in about 2 minutes 14 seconds.
-- Complete pre-push gate: about 3 minutes 42 seconds.
+- Broad development lane: 587 tests, one expected skip, and syntax in about 33 seconds.
+- Full unittest discovery: 752 tests, 90 expected skips, in about 116 seconds.
+- Browser smoke: 89 tests in about 3 minutes 38 seconds.
+- Complete pre-push gate: about 5 minutes 35 seconds.
 
 Browser smoke coverage should include cross-tool focus and listener regressions
 after visiting tools that install global listeners, especially document/window
@@ -498,6 +539,10 @@ The current test suite should cover:
 - Parquet folder input validation, direct-child file selection, combined schema metadata, default tool querying, and GLM/GBM rejection.
 - GLM config without optional dependencies, formula validation/comment stripping and `offset(...)` extraction, lazy dependency failures, training jobs, coefficient/diagnostic artifacts, active-model mutation routes, tabulation routes/artifacts, and `glm_prediction` / `glm_prediction_rate` / `glm_tabulated_prediction` data-source publishing.
 - GBM validation, sidecar model store behavior, optional dependency failures, native runtime dependency failures, live job progress, active-model feature/parameter refresh, model data-source publishing, interaction-group text-model extraction and metadata compaction, Gain ordering, SHAP row limits, SHAP plot aggregation routes, tree summary/detail routes, and chart/map use of prediction sources.
+- External GLM/GBM builders staying import-independent, reproducing the current
+  workspace, artifact, row-identity, replacement, and active-model contracts,
+  plus API and browser loading through predictions, GLM overlays/tabulations,
+  GBM evaluation, trees, SHAP, Stacked SHAP, and tree-table tabulations.
 - Browser smoke behavior for loading profile, chart, histogram, map, and GBM tools without unexpected extra API requests, stale active-model state, or leaked cross-tool focus/listener side effects, including live GBM progress, the GBM tree viewer, and the GBM SHAP screen.
 
 ## Releasing

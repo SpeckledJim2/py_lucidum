@@ -111,6 +111,9 @@ def changed_test_targets(paths: Sequence[str]) -> list[str] | None:
         if path == "scripts/run_tests.py" or path == "scripts/run_browser_smoke.py":
             targets.add("tests/test_test_runner.py")
             continue
+        if path.startswith("examples/"):
+            targets.add("tests/test_external_model_examples.py")
+            continue
         if path.startswith("tests/") and name.startswith("test_") and name.endswith(".py"):
             if name in DEV_EXCLUDED_TEST_FILES:
                 if name == "test_glm.py":
@@ -121,7 +124,12 @@ def changed_test_targets(paths: Sequence[str]) -> list[str] | None:
             continue
         if path == "pyproject.toml":
             targets.update(
-                {"tests/test_demo_dataset.py", "tests/test_pipx_install.py", "tests/test_static_assets.py"}
+                {
+                    "tests/test_demo_dataset.py",
+                    "tests/test_external_model_examples.py",
+                    "tests/test_pipx_install.py",
+                    "tests/test_static_assets.py",
+                }
             )
             continue
         if path in {"src/py_lucidum/cli.py", "src/py_lucidum/__init__.py", "src/py_lucidum/demo.py"}:
@@ -245,7 +253,7 @@ def run_unittest_targets(targets: Sequence[str], *, excluded_ids: frozenset[str]
 
 
 def run_syntax(root: Path) -> int:
-    compile_command = [sys.executable, "-m", "compileall", "src", "tests"]
+    compile_command = [sys.executable, "-m", "compileall", "src", "tests", "examples"]
     code = run_command_phase("Python syntax", compile_command, root=root)
     if code:
         return code

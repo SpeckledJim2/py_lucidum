@@ -5,7 +5,9 @@ import importlib.util
 import math
 import os
 import re
+import shutil
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -23,6 +25,8 @@ from py_lucidum import __version__
 from py_lucidum.app import create_app
 from py_lucidum.app.local_folders import LocalFolderOpenError
 from py_lucidum.core import Dataset, quote_ident, sql_literal
+from py_lucidum.core.features import load_features
+from py_lucidum.tools.gbm.tabulation import build_gbm_tabulations
 from py_lucidum.tools.gbm.store import GbmModelStore
 from py_lucidum.tools.glm.store import GlmModelStore
 from py_lucidum.tools.glm.tabulation import build_tabulations
@@ -396,6 +400,233 @@ class BrowserSmokeTests(unittest.TestCase):
             '() => document.querySelector("#toolButtonTooltip")?.hidden !== false',
             timeout=2_000,
         )
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    @unittest.skipUnless(
+        all(importlib.util.find_spec(name) is not None for name in ("glum", "lightgbm", "yaml")),
+        "external-model example dependencies are not installed",
+    )
+    def test_external_glm_and_gbm_builders_load_across_model_views(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        glm_model_id = "EXTERNAL_BUILD-config-glm"
+        gbm_model_id = "EXTERNAL_BUILD-config-gbm"
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            data_path = root / "motor_fixture.parquet"
+            feature_spec_path = root / "feature_spec.csv"
+            formula_path = root / "formula.txt"
+            shutil.copyfile(repo_root / "specs" / "feature_spec.csv", feature_spec_path)
+            shutil.copyfile(repo_root / "examples" / "external_glm_formula.txt", formula_path)
+            con = duckdb.connect(database=":memory:")
+            try:
+                con.execute(
+                    f"""
+COPY (
+  SELECT * EXCLUDE (__source_position, __sample_position)
+  FROM (
+    SELECT *, ROW_NUMBER() OVER (PARTITION BY SAMPLE ORDER BY __source_position) AS __sample_position
+    FROM (
+      SELECT *, ROW_NUMBER() OVER () AS __source_position
+      FROM read_parquet({sql_literal(str(repo_root / 'datasets' / 'motor_premiums.parquet'))})
+    ) source_rows
+  ) sampled_rows
+  WHERE __sample_position <= 250
+  ORDER BY __source_position
+) TO {sql_literal(str(data_path))} (FORMAT PARQUET)
+"""
+                )
+            finally:
+                con.close()
+
+            glm_config = root / "config_glm.yaml"
+            gbm_config = root / "config_gbm.yaml"
+            glm_config.write_text(
+                f"""dataset:
+  path: {data_path.name}
+  response_numerator: PREMIUM
+  denominator: null
+  sample_column: SAMPLE
+  training_value: training
+model:
+  id: {glm_model_id}
+  label: External browser GLM
+  formula_path: {formula_path.name}
+  family: normal
+  link: auto
+  fit_intercept: true
+  regularization:
+    alpha: 0.0
+    l1_ratio: 0.0
+    scale_predictors: false
+output:
+  portable_root: portable
+  install: true
+  replace_existing: true
+""",
+                encoding="utf-8",
+            )
+            gbm_config.write_text(
+                f"""dataset:
+  path: {data_path.name}
+  response_numerator: PREMIUM
+  denominator: null
+  sample_column: SAMPLE
+  training_value: training
+  early_stopping_value: test
+  holdout_value: validation
+features:
+  spec_path: {feature_spec_path.name}
+  scenario_column: scenario1
+model:
+  id: {gbm_model_id}
+  label: External browser GBM
+training:
+  num_boost_round: 14
+  early_stopping_rounds: 4
+  shap_rows: 100
+  parameters:
+    objective: regression
+    metric: l2
+    learning_rate: 0.1
+    num_leaves: 3
+    min_data_in_leaf: 10
+    feature_fraction: 1.0
+    bagging_fraction: 1.0
+    bagging_freq: 0
+    seed: 2026
+    feature_fraction_seed: 2026
+    bagging_seed: 2026
+    verbosity: -1
+output:
+  portable_root: portable
+  install: true
+  replace_existing: true
+""",
+                encoding="utf-8",
+            )
+            for script, config in (
+                (repo_root / "examples" / "external_glm_artifacts_demo.py", glm_config),
+                (repo_root / "examples" / "external_gbm_artifacts_demo.py", gbm_config),
+            ):
+                subprocess.run(
+                    [sys.executable, str(script), str(config)],
+                    cwd=repo_root,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+
+            # Tabulations are intentionally created by Lucidum after the two
+            # external fits; this proves both the saved estimator and tree table
+            # are useful beyond passive model discovery.
+            dataset = Dataset(data_path)
+            feature_spec = load_features(feature_spec_path)
+            glm_store = GlmModelStore(data_path, dataset=dataset)
+            gbm_store = GbmModelStore(data_path, dataset=dataset)
+            build_tabulations(dataset, glm_store, {"model_ids": [glm_model_id]}, feature_spec)
+            gbm_tabulation = build_gbm_tabulations(dataset, gbm_store, gbm_model_id, feature_spec)
+            self.assertEqual(gbm_tabulation["status"], "tabulated")
+
+            base_url, server, thread = self.start_app(
+                data_path,
+                tools=["line_bar", "glm", "gbm"],
+                defaults={"x": "DRIVER_AGE", "actual": "PREMIUM", "denominator": "__none__"},
+                features_path=feature_spec_path,
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1440, "height": 900})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    try:
+                        page.goto(f"{base_url}/?tool=glm", wait_until="domcontentloaded")
+                        self.wait_for_app_ready(page)
+                        page.locator("#glmModelSelectedMeta", has_text="External browser GLM").wait_for(timeout=15_000)
+                        page.wait_for_function(
+                            """
+                            () => [...document.querySelectorAll("#glmCoefficientTable tbody tr")]
+                              .filter((row) => !row.querySelector(".glm-empty-cell")).length > 1
+                            """,
+                            timeout=15_000,
+                        )
+                        page.get_by_role("tab", name="Model navigator").click()
+                        page.locator("#glmModelGrid .tabulator-row", has_text="External browser GLM").wait_for(timeout=15_000)
+                        page.get_by_role("tab", name="Tabulations").click()
+                        page.locator("#glmTabulationModelGrid .tabulator-row", has_text="External browser GLM").wait_for(timeout=15_000)
+                        page.locator("#glmTabulationTableGrid .tabulator-row").first.click()
+                        page.locator("#glmTabulationTable .tabulator-row").first.wait_for(timeout=15_000)
+
+                        page.locator("#lineBarTool").click()
+                        page.wait_for_function(
+                            '() => document.querySelector("#lineBarGroupMeta")?.textContent.includes("groups")',
+                            timeout=15_000,
+                        )
+                        if page.locator("#lineBarSideControlsToggleBtn").get_attribute("aria-expanded") == "false":
+                            page.locator("#lineBarSideControlsToggleBtn").click()
+                        if page.locator("#chartExpectedToggle").get_attribute("aria-expanded") == "false":
+                            page.locator("#chartExpectedToggle").click()
+                        glm_expected = page.locator(
+                            f'#expectedList .feature[data-source-id="glm:{glm_model_id}:predictions"]'
+                            '[data-value="glm_prediction"]'
+                        )
+                        gbm_expected = page.locator(
+                            f'#expectedList .feature[data-source-id="gbm:{gbm_model_id}:predictions"]'
+                            '[data-value="gbm_prediction"]'
+                        )
+                        platform = page.evaluate("() => navigator.userAgentData?.platform || navigator.platform || ''")
+                        modifier = "Meta" if re.search(r"mac|iphone|ipad|ipod", str(platform), re.I) else "Control"
+                        with page.expect_response(
+                            lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                            timeout=15_000,
+                        ):
+                            glm_expected.click()
+                        with page.expect_response(
+                            lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                            timeout=15_000,
+                        ):
+                            gbm_expected.click(modifiers=[modifier])
+                        page.wait_for_function(
+                            """
+                            () => {
+                              const names = (window.echarts.getInstanceByDom(document.querySelector("#chart"))
+                                ?.getOption()?.series || []).map((series) => series.name);
+                              return names.includes("glm_prediction") && names.includes("gbm_prediction");
+                            }
+                            """,
+                            timeout=15_000,
+                        )
+
+                        page.locator("#gbmTool").click()
+                        page.locator("#modelToolWrap:not(.hidden) .gbm-tool").wait_for(timeout=15_000)
+                        page.locator("#gbmModelSelectedMeta", has_text="External browser GBM").wait_for(timeout=15_000)
+                        page.wait_for_function(
+                            """
+                            () => {
+                              const target = document.querySelector("#gbmEvaluationChart");
+                              return target && window.echarts.getInstanceByDom(target)
+                                ?.getOption()?.series?.some((series) => series.data.length > 0);
+                            }
+                            """,
+                            timeout=15_000,
+                        )
+                        page.get_by_role("tab", name="Model navigator").click()
+                        page.locator("#gbmModelGrid .tabulator-row", has_text="External browser GBM").wait_for(timeout=15_000)
+                        page.get_by_role("tab", name="Tree viewer").click()
+                        page.locator("#gbmTreeChart svg.gbm-tree-svg").wait_for(state="attached", timeout=15_000)
+                        page.get_by_role("tab", name="SHAP", exact=True).click()
+                        page.locator("#gbmShapChart canvas").wait_for(timeout=15_000)
+                        page.get_by_role("tab", name="Stacked SHAP", exact=True).click()
+                        page.locator("#gbmStackedShapChart canvas").wait_for(timeout=15_000)
+                        self.assertEqual(page_errors, [])
+                    finally:
+                        browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
