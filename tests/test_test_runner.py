@@ -142,8 +142,12 @@ class TestRunnerTests(unittest.TestCase):
             ["tests/test_gbm.py", "tests/test_uk_map.py"],
         )
         self.assertEqual(
-            run_tests.changed_test_targets(["examples/external_glm_artifacts_demo.py"]),
+            run_tests.changed_test_targets(["examples/01_external_glm_artifacts_demo.py"]),
             ["tests/test_external_model_examples.py"],
+        )
+        self.assertEqual(
+            run_tests.changed_test_targets(["src/py_lucidum/reporting.py"]),
+            ["tests/test_external_model_examples.py", "tests/test_reporting.py"],
         )
 
     def test_changed_targets_use_fast_glm_and_preserve_slow_classification(self) -> None:

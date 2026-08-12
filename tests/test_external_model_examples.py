@@ -4,6 +4,7 @@ import ast
 import asyncio
 import importlib.util
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -26,10 +27,13 @@ from py_lucidum.tools.glm.overlay import stop_persistent_glm_overlay_worker
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = ROOT / "examples"
-GLM_SCRIPT = EXAMPLES / "external_glm_artifacts_demo.py"
-GBM_SCRIPT = EXAMPLES / "external_gbm_artifacts_demo.py"
+GLM_SCRIPT = EXAMPLES / "01_external_glm_artifacts_demo.py"
+GBM_SCRIPT = EXAMPLES / "01_external_gbm_artifacts_demo.py"
+GLM_REPORT_SCRIPT = EXAMPLES / "02_external_glm_report_demo.py"
+GBM_REPORT_SCRIPT = EXAMPLES / "02_external_gbm_report_demo.py"
 EXAMPLE_HELPERS = EXAMPLES / "external_model_helpers.py"
 EXPORT_ADAPTER = EXAMPLES / "lucidum_export.py"
+REPORT_HELPERS = EXAMPLES / "external_report_helpers.py"
 GLM_MODEL_ID = "EXTERNAL_BUILD-config-glm"
 GBM_MODEL_ID = "EXTERNAL_BUILD-config-gbm"
 REQUIRED_GLM_FILES = {
@@ -148,7 +152,7 @@ def write_example_configs(root: Path, dataset_path: Path) -> tuple[Path, Path, P
             "early_stopping_value": "test",
             "holdout_value": "validation",
         },
-        "features": {"spec_path": feature_spec_path.name, "scenario_column": "scenario1"},
+        "features": {"spec_path": feature_spec_path.name, "scenario_column": "report_demo"},
         "model": {"id": GBM_MODEL_ID, "label": "External integration GBM"},
         "training": {
             "num_boost_round": 16,
@@ -176,6 +180,94 @@ def write_example_configs(root: Path, dataset_path: Path) -> tuple[Path, Path, P
     glm_path.write_text(yaml.safe_dump(glm_config, sort_keys=False), encoding="utf-8")
     gbm_path.write_text(yaml.safe_dump(gbm_config, sort_keys=False), encoding="utf-8")
     return glm_path, gbm_path, feature_spec_path
+
+
+def write_report_configs(root: Path) -> tuple[Path, Path]:
+    import yaml
+
+    defaults = {
+        "banding": 0,
+        "quantiles": 0,
+        "low_weights": 0,
+        "missings": "show",
+        "labels": "none",
+        "sort": "alpha",
+        "transform": "none",
+        "sigma": 0,
+        "date_bucket": "none",
+        "empty_periods": "show",
+    }
+    common = {
+        "features": {"spec_path": "feature_spec.csv", "scenario_column": "report_demo"},
+        "chart_defaults": defaults,
+        "output": {"directory": "reports"},
+    }
+    glm = {
+        "build_config": "config_glm.yaml",
+        **common,
+        "chart": {
+            "expected": "glm_prediction_rate",
+            "expected_label": "GLM prediction",
+            "expected_source": "glm",
+        },
+        "reports": [
+            {
+                "name": "validation_actual_vs_expected",
+                "title": "External GLM validation",
+                "sample_values": ["validation"],
+                "chart_content": "actual_expected",
+                "partial_dependence": "glm",
+                "transform": "none",
+                "sigma": 2,
+            }
+        ],
+    }
+    gbm = {
+        "build_config": "config_gbm.yaml",
+        **common,
+        "chart": {
+            "expected": "gbm_prediction_rate",
+            "expected_label": "GBM prediction",
+            "expected_source": "gbm",
+        },
+        "reports": [
+            {
+                "name": "validation_actual_vs_expected",
+                "title": "External GBM validation",
+                "sample_values": ["validation"],
+                "chart_content": "actual_expected",
+                "partial_dependence": "none",
+                "transform": "none",
+                "sigma": 2,
+            },
+            {
+                "name": "all_rows_rebased_shap",
+                "title": "External GBM rebased SHAP",
+                "sample_values": "all",
+                "chart_content": "shap_only",
+                "partial_dependence": "shap",
+                "transform": "one",
+                "sigma": 0,
+            },
+        ],
+    }
+    glm_path = root / "config_glm_report.yaml"
+    gbm_path = root / "config_gbm_report.yaml"
+    glm_path.write_text(yaml.safe_dump(glm, sort_keys=False), encoding="utf-8")
+    gbm_path.write_text(yaml.safe_dump(gbm, sort_keys=False), encoding="utf-8")
+    return glm_path, gbm_path
+
+
+def report_payload(path: Path) -> dict[str, Any]:
+    document = path.read_text(encoding="utf-8")
+    match = re.search(
+        r'<script id="lucidum-report-data" type="application/json">(.*?)</script>',
+        document,
+        flags=re.DOTALL,
+    )
+    if not match:
+        raise AssertionError(f"Report payload is missing from {path}")
+    return json.loads(match.group(1))
 
 
 def run_builder(script: Path, config: Path) -> subprocess.CompletedProcess[str]:
@@ -227,6 +319,25 @@ class ExternalModelExampleTests(unittest.TestCase):
             self.assertNotIn("__lucidum_", source)
             for step in range(1, 6):
                 self.assertIn(f"# %% {step}.", source)
+
+    def test_report_scripts_keep_a_short_linear_teaching_flow(self) -> None:
+        for script in (GLM_REPORT_SCRIPT, GBM_REPORT_SCRIPT):
+            source = script.read_text(encoding="utf-8")
+            tree = ast.parse(source, filename=str(script))
+            self.assertFalse(
+                any(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) for node in tree.body)
+            )
+            calls = [
+                node.func.id
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            ]
+            self.assertEqual(calls.count("line_bar_chart"), 1)
+            self.assertEqual(calls.count("write_echarts_report"), 1)
+            for step in range(1, 4):
+                self.assertIn(f"# %% {step}.", source)
+            self.assertNotIn("create_app", source)
+            self.assertNotIn("run_app", source)
 
     @unittest.skipUnless(HAS_EXAMPLE_DEPENDENCIES, "external-model example dependencies are not installed")
     def test_external_configs_fail_closed_for_unknown_keys_and_unsafe_ids(self) -> None:
@@ -291,6 +402,72 @@ class ExternalModelExampleTests(unittest.TestCase):
             self.assertEqual(gbm_store.active_model_id(), GBM_MODEL_ID)
             self.assertNotIn("feature_config.json", {path.name for path in gbm_dir.iterdir()})
             self.assertNotIn("training_log.json", {path.name for path in gbm_dir.iterdir()})
+
+            # The 02 scripts name the model written by 01.  Pointing Lucidum's
+            # active files elsewhere proves report generation does not silently
+            # switch to whichever model happens to be active.
+            glm_report_config, gbm_report_config = write_report_configs(root)
+            glm_store.write_json(glm_store.active_path, {"model_id": "NOT-THE-REPORT-MODEL"})
+            gbm_store.write_json(gbm_store.active_path, {"model_id": "NOT-THE-REPORT-MODEL"})
+            try:
+                glm_report_run = run_builder(GLM_REPORT_SCRIPT, glm_report_config)
+                gbm_report_run = run_builder(GBM_REPORT_SCRIPT, gbm_report_config)
+            finally:
+                glm_store.activate_model(GLM_MODEL_ID)
+                gbm_store.activate_model(GBM_MODEL_ID)
+
+            report_dir = root / "reports"
+            glm_report_path = report_dir / "motor_fixture_external_glm_validation_actual_vs_expected.html"
+            gbm_report_path = report_dir / "motor_fixture_external_gbm_validation_actual_vs_expected.html"
+            shap_report_path = report_dir / "motor_fixture_external_gbm_all_rows_rebased_shap.html"
+            self.assertIn(str(glm_report_path), glm_report_run.stdout)
+            self.assertIn(str(gbm_report_path), gbm_report_run.stdout)
+            self.assertTrue(shap_report_path.is_file())
+
+            glm_report = report_payload(glm_report_path)
+            gbm_report = report_payload(gbm_report_path)
+            shap_report = report_payload(shap_report_path)
+            self.assertEqual(glm_report["metadata"]["model"], str(glm_dir.resolve()))
+            self.assertEqual(gbm_report["metadata"]["model"], str(gbm_dir.resolve()))
+            self.assertEqual(shap_report["metadata"]["model"], str(gbm_dir.resolve()))
+            self.assertEqual(len(glm_report["charts"]), 16)
+            self.assertEqual(len(gbm_report["charts"]), 16)
+            self.assertEqual(len(shap_report["charts"]), 16)
+            self.assertEqual(
+                [chart["metadata"]["feature"] for chart in glm_report["charts"]],
+                [
+                    "ANNUAL_MILEAGE", "CAR_VALUE", "DRIVER_AGE", "FUEL_TYPE",
+                    "LICENCE_TYPE", "MAKE", "NCD_YEARS", "OVERNIGHT_LOCATION",
+                    "POSTCODE_AREA", "POSTCODE_CATEGORY", "PRIOR_CLAIMS",
+                    "VEHICLE_AGE", "VEHICLE_CATEGORY", "VEHICLE_USAGE",
+                    "YEARS_LICENCE_HELD", "YEARS_OWNED_VEHICLE",
+                ],
+            )
+            for chart_spec in glm_report["charts"]:
+                self.assertEqual(chart_spec["metadata"]["sample_values"], ["validation"])
+                self.assertEqual(chart_spec["metadata"]["selected_rows"], 350)
+                self.assertEqual(chart_spec["metadata"]["model_id"], GLM_MODEL_ID)
+                self.assertEqual(chart_spec["presentation"]["content"], "actual_expected")
+                self.assertEqual(chart_spec["presentation"]["sigma"], 2)
+                self.assertEqual(chart_spec["data"]["partial_dependence"]["model_id"], GLM_MODEL_ID)
+                self.assertTrue(chart_spec["data"]["partial_dependence"]["rows"])
+            for chart_spec in gbm_report["charts"]:
+                self.assertEqual(chart_spec["metadata"]["sample_values"], ["validation"])
+                self.assertEqual(chart_spec["metadata"]["selected_rows"], 350)
+                self.assertEqual(chart_spec["presentation"]["content"], "actual_expected")
+                self.assertEqual(chart_spec["presentation"]["sigma"], 2)
+                self.assertNotIn("partial_dependence", chart_spec["data"])
+            for chart_spec in shap_report["charts"]:
+                overlay = chart_spec["data"]["partial_dependence"]
+                self.assertEqual(chart_spec["metadata"]["selected_rows"], row_count)
+                self.assertEqual(set(chart_spec["metadata"]["sample_values"]), {"training", "test", "validation"})
+                self.assertEqual(chart_spec["presentation"]["content"], "shap_only")
+                self.assertEqual(chart_spec["presentation"]["sigma"], 0)
+                self.assertEqual(chart_spec["presentation"]["transform"], "one")
+                self.assertEqual(overlay["model_id"], GBM_MODEL_ID)
+                self.assertEqual(overlay["transform"]["mode"], "one")
+                self.assertEqual(overlay["transform"]["reference"], "base")
+                self.assertTrue(overlay["rows"])
 
             portable_index = json.loads((root / "portable" / "lucidum_artifacts.json").read_text(encoding="utf-8"))
             self.assertEqual(portable_index["version"], 1)

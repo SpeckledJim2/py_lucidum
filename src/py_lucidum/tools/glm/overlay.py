@@ -647,12 +647,14 @@ def _build_glm_partial_dependence_overlay_impl(
     denominator: dict[str, str | None],
 ) -> dict[str, Any]:
     store = GlmModelStore(dataset.path, dataset=dataset)
-    model_id = store.active_model_id()
+    model_id = glm_partial_dependence_model_id(request) or store.active_model_id()
     if not model_id:
         return empty_glm_partial_dependence_warning("No active GLM is available for GLM overlay.")
     estimator_path = store.artifact_path(model_id, "estimator")
     if not estimator_path.exists():
-        return empty_glm_partial_dependence_warning("Rebuild the active GLM before using GLM overlay; estimator.pkl is missing.")
+        return empty_glm_partial_dependence_warning(
+            f"Rebuild GLM {model_id} before using its overlay; estimator.pkl is missing."
+        )
     try:
         _glum, _glr, _glrcv, np, pd = glm_dependencies()
     except MissingGlmDependency as exc:
@@ -663,7 +665,7 @@ def _build_glm_partial_dependence_overlay_impl(
     manifest = store.manifest(model_id)
     source_columns = store.source_columns(manifest)
     if x_col not in source_columns:
-        return empty_glm_partial_dependence_warning(f"The active GLM source does not include {x_col}.")
+        return empty_glm_partial_dependence_warning(f"GLM {model_id} does not include {x_col}.")
 
     context = formula_context(np)
     offset_terms = [str(term) for term in (manifest.get("offset_terms") or manifest.get("formula", {}).get("offset_terms") or [])]
@@ -852,6 +854,13 @@ def _build_glm_partial_dependence_overlay_impl(
         "sample": sample,
         "transform": {"mode": str(request.get("transform") or "none")},
     }
+
+
+def glm_partial_dependence_model_id(request: dict[str, Any]) -> str:
+    partial_dependence = request.get("partialDependence")
+    if not isinstance(partial_dependence, dict):
+        return ""
+    return str(partial_dependence.get("model_id") or "").strip()
 
 
 def glm_prediction_mean(

@@ -185,6 +185,49 @@ if (!isEchartsTargetReady(target(true, 640, 480))) throw new Error("positive con
 """
         self.run_node_script(script)
 
+    def test_shared_line_bar_renderer_supports_static_glm_and_shap_reports(self) -> None:
+        module = Path("src/py_lucidum/static/app/line-bar-chart.js").resolve().as_uri()
+        script = f"""
+import {{ lineBarChartOption }} from "{module}";
+const base = {{
+  x: "AGE",
+  x_kind: "integer",
+  x_group_kind: "integer",
+  denominator: {{ column: null, bar_label: "Weight" }},
+  responses: [
+    {{ label: "Actual", numerator: "PREMIUM" }},
+    {{ label: "GBM prediction", numerator: "gbm_prediction" }},
+  ],
+  rows: [
+    {{ x: "20", volume: 10, resp0: 100, resp1: 105 }},
+    {{ x: "30", volume: 20, resp0: 120, resp1: 118 }},
+  ],
+}};
+const glm = lineBarChartOption({{
+  ...base,
+  transform: {{ mode: "none" }},
+  partial_dependence: {{ mode: "glm", rows: [{{ x: "20", p50: 101 }}, {{ x: "30", p50: 117 }}] }},
+}}, {{ content: "actual_expected" }}).option;
+const glmNames = glm.series.map((series) => series.name);
+if (!glmNames.includes("Actual") || !glmNames.includes("GBM prediction") || !glmNames.includes("Weight") || !glmNames.includes("GLM")) throw new Error(glmNames.join("|"));
+if (glm.yAxis.length !== 2) throw new Error("A/E needs a response and weight axis");
+
+const shapRows = [
+  {{ x: "20", p0: .7, p5: .75, p10: .8, p20: .85, p30: .9, p40: .95, p50: 1, p60: 1.05, p70: 1.1, p80: 1.15, p90: 1.2, p95: 1.25, p100: 1.3 }},
+  {{ x: "30", p0: .8, p5: .82, p10: .84, p20: .88, p30: .92, p40: .97, p50: 1.02, p60: 1.07, p70: 1.12, p80: 1.18, p90: 1.24, p95: 1.28, p100: 1.35 }},
+];
+const shap = lineBarChartOption({{
+  ...base,
+  transform: {{ mode: "one" }},
+  partial_dependence: {{ mode: "shap", rows: shapRows }},
+}}, {{ content: "shap_only" }}).option;
+const shapNames = shap.series.map((series) => series.name);
+if (shapNames.includes("Actual") || shapNames.includes("GBM prediction") || shapNames.includes("Weight")) throw new Error(shapNames.join("|"));
+if (!shapNames.includes("SHAP Min-Max") || !shapNames.includes("SHAP median")) throw new Error(shapNames.join("|"));
+if (shap.yAxis.length !== 1 || shap.yAxis[0].name !== "SHAP relativity") throw new Error("SHAP-only axis failed");
+"""
+        self.run_node_script(script)
+
     def test_line_bar_importance_model_order_follows_expected_model_family(self) -> None:
         module = Path("src/py_lucidum/static/app/line-bar-tool.js").resolve().as_uri()
         script = f"""

@@ -54,19 +54,30 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
   - `py_lucidum.run_app(...)`
   - `py_lucidum.demo_dataset_path()`
   - `py_lucidum.extract_lightgbm_interaction_group(...)`
+  - `py_lucidum.line_bar_chart(...)`
+  - `py_lucidum.write_echarts_report(...)`
+  - `py_lucidum.report_filename(...)`
   - `py_lucidum.app.create_app(...)`
 - External compatibility examples:
-  - `examples/external_glm_artifacts_demo.py [config-path]`
-  - `examples/external_gbm_artifacts_demo.py [config-path]`
+  - `examples/01_external_glm_artifacts_demo.py [config-path]`
+  - `examples/01_external_gbm_artifacts_demo.py [config-path]`
+  - `examples/02_external_glm_report_demo.py [config-path]`
+  - `examples/02_external_gbm_report_demo.py [config-path]`
   - The two executable examples are linear `# %%` scripts whose numbered
     load, prepare, fit, predict, and save sections are the user-facing surface.
   - `examples/external_model_helpers.py` contains only shared CLI, YAML,
     path, and input-table preparation helpers.
   - `examples/lucidum_export.py` contains all workspace, artifact, and install
     adapter code and is not intended as part of the teaching flow.
-  - These scripts intentionally do not import `py_lucidum` and do not establish
+  - The 01 scripts intentionally do not import `py_lucidum` and do not establish
     a public writer API. They are executable documentation of the current
     manual artifact and installation contract.
+  - The 02 report scripts do import the public reporting functions. They name
+    the exact model ID from the 01 config, do not start the app, and write
+    self-contained static-data HTML with the shared Line/Bar renderer.
+  - `static/app/line-bar-chart.js` owns one-feature ECharts option generation
+    for both the normal app and standalone reports. Keep it free of DOM and app
+    state dependencies; report-only presentation choices are passed as options.
 - HTTP:
   - `GET /api/schema`
   - `POST /api/dataset-viewer/table`

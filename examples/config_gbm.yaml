@@ -9,7 +9,7 @@ dataset:
 
 features:
   spec_path: ../specs/feature_spec.csv
-  scenario_column: scenario1
+  scenario_column: report_demo
 
 model:
   id: EXTERNAL_BUILD-config-gbm

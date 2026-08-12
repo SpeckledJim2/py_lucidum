@@ -120,6 +120,32 @@ class FeatureSpecTests(unittest.TestCase):
             ],
         )
 
+    def test_feature_spec_parses_chart_metadata_before_scenarios(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "feature_spec.csv"
+            path.write_text(
+                "Feature,Grouping,Base,min,max,banding,chart_banding,chart_quantiles,chart_low_weights,"
+                "chart_missings,chart_labels,chart_sort,chart_transform,chart_sigma,chart_date_bucket,"
+                "chart_empty_periods,report_demo\n"
+                "Age,DRIVER,40,17,96,1,5,10,0.1%,hide,line,volume,one,2,month,skip,Feature\n",
+                encoding="utf-8",
+            )
+
+            spec = load_features(path)
+
+        row = spec["rows"][0]
+        self.assertEqual(row["chart_banding"], "5")
+        self.assertEqual(row["chart_quantiles"], "10")
+        self.assertEqual(row["chart_low_weights"], "0.1%")
+        self.assertEqual(row["chart_missings"], "hide")
+        self.assertEqual(row["chart_labels"], "line")
+        self.assertEqual(row["chart_sort"], "volume")
+        self.assertEqual(row["chart_transform"], "one")
+        self.assertEqual(row["chart_sigma"], "2")
+        self.assertEqual(row["chart_date_bucket"], "month")
+        self.assertEqual(row["chart_empty_periods"], "skip")
+        self.assertEqual(spec["scenarios"], [{"name": "report_demo", "features": ["Age"]}])
+
     def test_default_feature_spec_falls_back_to_specs_directory(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)

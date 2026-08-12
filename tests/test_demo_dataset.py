@@ -124,7 +124,17 @@ class DemoDatasetTests(unittest.TestCase):
             rows = list(reader)
 
         self.assertGreater(len(rows), 0)
-        self.assertEqual(reader.fieldnames, ["Feature", "Grouping", "Base", "min", "max", "banding", "scenario1", "scenario2", "scenario3"])
+        self.assertEqual(
+            reader.fieldnames,
+            [
+                "Feature", "Grouping", "Base", "min", "max", "banding",
+                "chart_banding", "chart_quantiles", "chart_low_weights",
+                "chart_missings", "chart_labels", "chart_sort",
+                "chart_transform", "chart_sigma", "chart_date_bucket",
+                "chart_empty_periods", "scenario1", "scenario2", "scenario3",
+                "report_demo",
+            ],
+        )
         scenario_sets = {
             scenario: {
                 row["Feature"]
@@ -135,6 +145,14 @@ class DemoDatasetTests(unittest.TestCase):
         }
         self.assertEqual(set(scenario_sets), {"scenario1", "scenario2", "scenario3"})
         self.assertEqual(len({frozenset(features) for features in scenario_sets.values()}), 3)
+        self.assertEqual(
+            {row["Feature"] for row in rows if "feature" in row["report_demo"].strip().lower()},
+            {
+                row["Feature"]
+                for row in rows
+                if row["Feature"] not in {"LATITUDE", "LONGITUDE", "POSTCODE_SECTOR"}
+            },
+        )
         self.assertGreaterEqual(len({row["Grouping"] for row in rows if row["Grouping"]}), 3)
         for row in rows:
             with self.subTest(feature=row["Feature"]):

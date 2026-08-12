@@ -271,7 +271,7 @@ On startup, when saved favourites exist and no `--line-bar-favourite` or `line_b
 - `--line-bar-favourites` points Lucidum at the JSON file used to store saved Favourites. It is a server-side file path, not a URL query parameter.
 - `--filters` points to a saved-filter CSV. By default the app tries `./filter_spec.csv`, then `./specs/filter_spec.csv`.
 - `--kpis` points to a KPI spec CSV. By default the app tries `./kpi_spec.csv`, then `./specs/kpi_spec.csv`.
-- `--features` points to a Feature Specification CSV for GBM feature scenarios, interaction constraints, optional Base metadata, and GLM tabulation `min/max/banding` metadata. By default the app tries `./feature_spec.csv`, then `./specs/feature_spec.csv`.
+- `--features` points to a Feature Specification CSV for GBM feature scenarios, interaction constraints, optional Base metadata, GLM tabulation `min/max/banding` metadata, and external report `chart_*` controls. By default the app tries `./feature_spec.csv`, then `./specs/feature_spec.csv`.
 - With `--demo`, if no explicit or local default spec exists, Lucidum loads the bundled demo filter, KPI, and feature specs.
 - `--no-filters`, `--no-kpis`, and `--no-features` disable discovery for those spec files. When the Specifications tab is enabled, disabled or missing spec kinds open as generated starter drafts instead of preloading default-discovered CSVs. Generated drafts are not written to disk until you click Save; the path line shows the save target and marks new files or suppressed existing files.
 - Without `--tools`, the default user-facing tools are `line-bar`, `dataset-viewer`, `column-profile`, `histogram`, `uk-map`, and `specs`, with Line and Bar opening first unless a saved favourite startup state applies. Use `--tools all` to load every tool, including GLM and GBM, in the built-in registry order. When `--tools` is provided with a comma-separated list, only those app tabs are loaded, the sidebar uses the supplied order, and the first supplied tool opens first unless a URL tool or saved favourite startup state applies. The sidebar shows multi-tool selections as a vertical rail that stays visible while the sidebar is collapsed; clicking the active tool button toggles the sidebar open or closed, while clicking another tool switches tools without changing the sidebar state. Enabled GLM and GBM icons carry blue numbered badges showing the saved model count, including zero. Add `glm` after installing the `glm` extra to train GLMs, and add `gbm` after installing the `gbm` extra to train GBMs; either modelling tool must be requested with `line-bar` because model context-menu actions open Line/Bar charts. When only one tool is enabled, the sidebar tool selector is hidden.
@@ -386,8 +386,8 @@ From a source checkout, install the modelling and YAML dependencies together:
 
 ```bash
 python -m pip install -e ".[glm,gbm,examples]"
-python examples/external_glm_artifacts_demo.py
-python examples/external_gbm_artifacts_demo.py
+python examples/01_external_glm_artifacts_demo.py
+python examples/01_external_gbm_artifacts_demo.py
 lucidum datasets/motor_premiums.parquet --tools line-bar,glm,gbm \
   --features specs/feature_spec.csv
 ```
@@ -500,6 +500,76 @@ the installed model folder; they demonstrate that the external estimator or
 tree table is functional, but are intentionally not fabricated by these
 training examples.
 
+## External Line/Bar HTML reports
+
+The matching 02 examples use Lucidum as a Python chart library without
+starting the Lucidum app or a web server. They read the model IDs and dataset
+settings used by the 01 builds, create the same interactive ECharts Line/Bar
+charts, and write portable HTML files containing their data, renderer, and
+vendored ECharts code. The chart data is fixed when the script runs, so there
+is no control strip or in-page recalculation; legends, hover tooltips, and zoom
+remain interactive.
+
+Run the 01 build before its 02 report:
+
+```bash
+python examples/01_external_glm_artifacts_demo.py
+python examples/02_external_glm_report_demo.py
+
+python examples/01_external_gbm_artifacts_demo.py
+python examples/02_external_gbm_report_demo.py
+```
+
+The supplied configs write three ignored local files beneath
+`local/external_reports/`:
+
+```text
+motor_premiums_external_glm_validation_actual_vs_expected.html
+motor_premiums_external_gbm_validation_actual_vs_expected.html
+motor_premiums_external_gbm_all_rows_rebased_shap.html
+```
+
+Each report header shows the complete source-Parquet path and installed model
+folder on separate full-width rows. Response, Weight, Expected, SAMPLE rows,
+and the remaining run details appear in the compact grid below them.
+
+Both 02 scripts are linear `# %%` examples: load settings, loop over features,
+then write HTML. `examples/external_report_helpers.py` contains the routine
+YAML/path and blank-value fallback handling. The report YAML fields are:
+
+- `build_config`: the matching 01 YAML. Its exact dataset path, response,
+  denominator, SAMPLE column, model ID, and model label are reused.
+- `features.spec_path` and `features.scenario_column`: the Feature
+  Specification and the scenario selecting the report pages. The demo's
+  `report_demo` scenario selects every Feature Specification row except
+  `LATITUDE`, `LONGITUDE`, and `POSTCODE_SECTOR`.
+- `chart.expected`, `expected_label`, and `expected_source`: the Expected line
+  column and whether it comes from the dataset, GLM artifacts, or GBM
+  artifacts. Other numeric columns are allowed.
+- `chart_defaults`: fallbacks for blank `chart_*` cells in the Feature
+  Specification.
+- each `reports` row: a readable name/title, SAMPLE values (a list or `all`),
+  `chart_content` (`actual_expected` or `shap_only`), `partial_dependence`
+  (`none`, `glm`, or `shap`), transform, and `sigma`. The supplied Actual vs
+  Expected reports use sigma `2`; the SHAP-only report uses `0`.
+- `output.directory`: where the self-contained HTML files are written.
+- `output.chart_height`: chart height in pixels. The default is `600`.
+
+The GLM demo uses validation rows and displays its GLM partial-dependence line.
+The GBM demo first uses validation rows for Actual vs Expected, then uses all
+rows for SHAP ribbons plus the median. The SHAP-only report hides Actual,
+Expected, and Weight and uses `transform: one` to rebase each feature at its
+Feature Specification `Base`. It uses the SHAP values saved by the named 01
+GBM build; it does not recalculate SHAP values or follow Lucidum's active-model
+marker.
+
+For direct Python use, `py_lucidum.line_bar_chart(...)` returns one chart
+specification and `py_lucidum.write_echarts_report(...)` combines any number of
+those charts into a self-contained report. Its optional `chart_height`
+parameter has the same `600px` default as the examples. The current writer supports
+Line/Bar charts; its chart-spec boundary deliberately leaves room for future
+SHAP chart types.
+
 ## Filters
 
 The footer filter box accepts DuckDB `WHERE` expressions:
@@ -545,14 +615,24 @@ When the Specifications tool opens a missing KPI spec, it starts with one blank 
 
 ## Feature Specs
 
-Feature Specification CSV files drive GBM feature scenarios, interaction-constraint groups, optional chart Base metadata, and GLM numeric tabulation metadata. The current format starts with these columns, followed by any number of scenario columns:
+Feature Specification CSV files drive GBM feature scenarios,
+interaction-constraint groups, optional chart Base metadata, GLM numeric
+tabulation metadata, and reproducible external report controls. The current
+format starts with `Feature,Grouping`, then any recognized metadata columns in
+the order below, followed by any number of scenario columns:
 
 ```csv
-Feature,Grouping,Base,min,max,banding,scenario1,scenario2,scenario3
-DRIVER_AGE,DRIVER,40,17,96,1,feature,feature,feature
-NCD_YEARS,DRIVER,10,0,20,1,feature,,feature
-POSTCODE_AREA,POSTCODE,B,,,,,feature,feature
+Feature,Grouping,Base,min,max,banding,chart_banding,chart_quantiles,chart_low_weights,chart_missings,chart_labels,chart_sort,chart_transform,chart_sigma,chart_date_bucket,chart_empty_periods,scenario1,report_demo
+DRIVER_AGE,DRIVER,40,17,96,1,5,0,0.1%,show,none,alpha,none,0,none,show,feature,feature
 ```
+
+For report generation, `chart_banding` falls back first to the existing
+`banding` cell and then to YAML. Every other blank `chart_*` cell falls back to
+the matching `chart_defaults` value. These columns use the same choices as the
+Lucidum Line/Bar controls: fixed band width or quantile count, low-weight tail
+grouping (`0`, `10`, `100`, `0.1%`, or `1%`), missing handling, labels, sort,
+transform, sigma, date bucket, and empty-period handling. `Base` is also used
+to rebase GLM/SHAP overlays for zero/one transforms.
 
 `Feature` must match a dataset column name exactly. `Grouping` is optional metadata shown in the GBM Feature table and, when present, is also used to offer GBM feature interaction constraints. `Base` is optional metadata used to anchor Line/Bar and GBM SHAP chart rescaling to `0` or `1` and to define GLM tabulation base cells; `1` rescaling is displayed as an uplift percentage, so the base level shows as `0%`. Numeric `min`, `max`, and `banding` define GLM rating-table grids; leave them blank for categorical features. Older specs without these metadata columns are still accepted, in which case every column after `Grouping` is treated as a scenario. Each scenario column appears in the GBM scenario dropdown; if a scenario cell contains the word `feature`, case-insensitive, that row is selected when the scenario is chosen.
 

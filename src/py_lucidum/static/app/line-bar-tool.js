@@ -6,6 +6,7 @@ import {
   twoFeatureChartOption,
   twoFeatureHeatmapLabelConfig,
 } from "./line-bar-two-feature-chart.js";
+import { lineBarChartOption } from "./line-bar-chart.js";
 
 const LINE_BAR_SPECIAL_COLUMN_NAMES = [
   "gbm_to_glm_ratio",
@@ -394,10 +395,6 @@ export function createLineBarTool({
   const MISSING_VALUES = new Set(["show", "hide"]);
   const RESPONSE_AXIS_PADDING = 0.08;
   const RESPONSE_AXIS_TARGET_INTERVALS = 15;
-  const LINE_BAR_MAIN_LEGEND_TOP = 52;
-  const LINE_BAR_OVERLAY_LEGEND_TOP = 78;
-  const LINE_BAR_GRID_TOP = 112;
-  const LINE_BAR_OVERLAY_GRID_TOP = 140;
   const SHAP_RIBBON_SERIES = [
     ["p0", "p100", "SHAP Min-Max", "rgba(209, 63, 63, 0.10)"],
     ["p5", "p95", "SHAP 5-95", "rgba(209, 63, 63, 0.16)"],
@@ -406,8 +403,6 @@ export function createLineBarTool({
     ["p30", "p70", "SHAP 30-70", "rgba(209, 63, 63, 0.28)"],
     ["p40", "p60", "SHAP 40-60", "rgba(209, 63, 63, 0.34)"],
   ];
-  const SHAP_LINE_COLOR = "#d13f3f";
-  const GLM_LINE_COLOR = "#1f7a8c";
   let chart = echartsImpl.init(el("chart"));
   let chartSupportsSurface = false;
   let currentHeatmapLabelConfig = null;
@@ -2868,237 +2863,71 @@ export function createLineBarTool({
     if (Array.isArray(data?.groupings) && data.groupings.length === 2) {
       return renderTwoFeatureChart(data);
     }
+    return renderSharedOneFeatureChart(data);
+  }
+
+  function renderSharedOneFeatureChart(data) {
     currentHeatmapLabelConfig = null;
     heatmapAxisContext = null;
     const presentation = lineBarDataPresentation(data);
-    const labels = data.rows.map((r) => formatChartXLabel(r, data));
-    const labelMode = String(presentation.labels || state.labels || "none");
+    const labels = data.rows.map((row) => formatChartXLabel(row, data));
     const renderTransform = String(data?.transform?.mode || presentation.transform || state.transform || "none");
+    const rawXValues = data.rows.map((row) => row.x);
+    const dateBucket = normaliseDateBucket(data.date_bucket);
+    const displayKind = data.x_group_kind || data.x_kind;
+    const xLabelPolicy = getXAxisLabelPolicy(
+      labels,
+      displayKind,
+      rawXValues,
+      dateBucket,
+      chart.getWidth?.() || el("chart").clientWidth,
+    );
+    dateXAxisContext = isDateKind(data.x_kind)
+      ? { labels, rawXValues, dateBucket, xKind: data.x_kind }
+      : null;
     const formatChartResponseValue = chartResponseFormatter(
       renderTransform,
       presentation.activeKpiFormat || state.activeKpiFormat,
     );
-    const rawXValues = data.rows.map((r) => r.x);
-    const dateBucket = normaliseDateBucket(data.date_bucket);
-    const displayKind = data.x_group_kind || data.x_kind;
-    const xLabelPolicy = getXAxisLabelPolicy(labels, displayKind, rawXValues, dateBucket, chart.getWidth?.() || el("chart").clientWidth);
-    dateXAxisContext = isDateKind(data.x_kind)
-      ? { labels, rawXValues, dateBucket, xKind: data.x_kind }
-      : null;
-    const dataLabelsAllowed = labels.length < LABEL_DENSITY_LIMIT;
-    const showBarLabels = dataLabelsAllowed && (labelMode === "bar" || labelMode === "all");
-    const showLineLabels = dataLabelsAllowed && (labelMode === "line" || labelMode === "all");
-    const barLayout = getBarLayout(labels.length);
-    const shapSeries = shapPartialDependenceSeries(data);
-    const glmSeries = glmPartialDependenceSeries(data);
-    const overlayLegendData = [...shapSeries, ...glmSeries].map((series) => series.name);
-    const hasOverlaySeries = overlayLegendData.length > 0;
-    const previousOption = chart.getOption();
-    const actualColor = getCss("--actual-line");
-    const expectedColor = "#d13f3f";
-    const secondExpectedColor = getCss("--accent") || "#2276d2";
-    const responseColors = [actualColor, expectedColor, secondExpectedColor];
-    const nColor = getCss("--bar");
-    const weightLabel = data.denominator?.bar_label || "Weight";
-    const sigmaColor = "#8a94a6";
-    const legendData = [
-      ...data.responses.map((response) => response.label),
-      { name: weightLabel, icon: "roundRect", itemStyle: { color: nColor, borderColor: nColor } },
-    ];
-    const primaryResponseLabel = String(data.responses[0]?.label || "");
-    const mainLegendDisplayLabels = primaryResponseLabel
-      ? { [primaryResponseLabel]: responseMetricAxisLabel(data, 0) }
-      : {};
-    const mainLegendSelection = matchingLegendSelection(previousOption, legendData);
-    const overlayLegendSelection = matchingLegendSelection(previousOption, overlayLegendData);
-    const responseAxis = responseAxisOptions(data, { ...mainLegendSelection, ...overlayLegendSelection }, renderTransform);
-    const responseAxisLayout = lineBarVerticalAxisLayout(
-      [responseAxis.min, responseAxis.max],
-      formatChartResponseValue,
-    );
-    const volumeAxisLayout = lineBarVerticalAxisLayout(
-      data.rows.map((row) => row.volume),
+    const rendered = lineBarChartOption(data, {
+      content: "actual_expected",
+      labels: String(presentation.labels || state.labels || "none"),
+      labelsArray: labels,
+      transform: renderTransform,
+      sigma: Number(presentation.sigma ?? state.sigma) || 0,
+      previousOption: chart.getOption(),
+      xLabelPolicy,
+      chartWidth: chart.getWidth?.() || el("chart").clientWidth,
       formatNumber,
-    );
-    const barSeries = {
-      name: weightLabel,
-      type: "bar",
-      yAxisIndex: 1,
-      z: 1,
-      legendHoverLink: true,
-      itemStyle: { color: nColor },
-      animation: false,
-      animationDuration: 0,
-      animationDurationUpdate: 0,
-      data: data.rows.map((r) => ({
-        value: r.volume,
-        itemStyle: { color: weightBarColor(data, r) },
-      })),
-      label: { show: showBarLabels, position: "top", fontSize: 10, formatter: formatChartLabel, ...lineBarChartLabelStyle() },
-      barWidth: barLayout.width,
-      barMaxWidth: barLayout.maxWidth,
-      barCategoryGap: barLayout.categoryGap,
-    };
-    const lineSeries = data.responses.map((response, index) => ({
-      name: response.label,
-      type: "line",
-      yAxisIndex: 0,
-      z: 3,
-      animation: false,
-      animationDuration: 0,
-      animationDurationUpdate: 0,
-      smooth: false,
-      showSymbol: data.rows.length < 250,
-      symbolSize: 5,
-      lineStyle: { color: responseColors[index] || actualColor },
-      itemStyle: { color: responseColors[index] || actualColor },
-      data: data.rows.map((r) => r[`resp${index}`]),
-      showAllSymbol: true,
-      label: { show: showLineLabels, fontSize: 10, formatter: (params) => formatResponseLabel(params, formatChartResponseValue), ...lineBarChartLabelStyle() },
-    }));
-    const upliftBaseline = upliftBaselineSeries(data, renderTransform);
-
-    const customSeries = [];
-    if (Number(presentation.sigma ?? state.sigma) > 0 && data.responses.length >= 2) {
-      customSeries.push({
-        name: "sigma",
-        type: "custom",
-        yAxisIndex: 0,
-        z: 5,
-        legendHoverLink: false,
-        animation: false,
-        animationDuration: 0,
-        animationDurationUpdate: 0,
-        renderItem: function (params, api) {
-          const x = api.coord([api.value(0), api.value(1)])[0];
-          const low = api.coord([api.value(0), api.value(2)])[1];
-          const high = api.coord([api.value(0), api.value(3)])[1];
-          if (!Number.isFinite(low) || !Number.isFinite(high)) return;
-          return {
-            type: "group",
-            children: [
-              { type: "line", shape: { x1: x, y1: low, x2: x, y2: high }, style: { stroke: sigmaColor, lineWidth: 1.5 } },
-              { type: "line", shape: { x1: x - 4, y1: low, x2: x + 4, y2: low }, style: { stroke: sigmaColor, lineWidth: 1.5 } },
-              { type: "line", shape: { x1: x - 4, y1: high, x2: x + 4, y2: high }, style: { stroke: sigmaColor, lineWidth: 1.5 } },
-            ],
-          };
-        },
-        data: data.rows.map((r, i) => [i, r.resp1, r.resp1_low, r.resp1_high]).filter((r) => r.every((v) => v !== null && v !== undefined)),
-        encode: { x: 0, y: [2, 3] },
-        tooltip: { show: false },
-      });
-    }
-
-    chart.setOption(
-      {
-        animation: false,
-        animationDuration: 0,
-        animationDurationUpdate: 0,
-        stateAnimation: { duration: 0 },
-        backgroundColor: "transparent",
-        color: [actualColor, expectedColor, secondExpectedColor, nColor],
-        tooltip: {
-          trigger: "axis",
-          formatter: (params) => formatChartTooltip(params, weightLabel, formatChartResponseValue),
-        },
-        legend: lineBarLegendOptions(
-          legendData,
-          mainLegendSelection,
-          overlayLegendData,
-          overlayLegendSelection,
-          mainLegendDisplayLabels,
-        ),
-        grid: {
-          left: responseAxisLayout.gridMargin,
-          right: volumeAxisLayout.gridMargin,
-          top: hasOverlaySeries ? LINE_BAR_OVERLAY_GRID_TOP : LINE_BAR_GRID_TOP,
-          bottom: xLabelPolicy.bottom,
-          containLabel: false,
-        },
-        xAxis: {
-          type: "category",
-          name: data.x || "",
-          nameLocation: "middle",
-          nameGap: xLabelPolicy.nameGap,
-          nameTextStyle: { color: getCss("--text"), fontSize: 13, fontWeight: 700 },
-          data: labels,
-          axisLabel: {
-            show: xLabelPolicy.show,
-            color: getCss("--text"),
-            interval: xLabelPolicy.interval,
-            formatter: xLabelPolicy.formatter,
-            hideOverlap: Boolean(xLabelPolicy.hideOverlap),
-            showMinLabel: xLabelPolicy.showMinLabel,
-            showMaxLabel: xLabelPolicy.showMaxLabel,
-            rotate: xLabelPolicy.rotate,
-            fontSize: xLabelPolicy.fontSize,
-            margin: 8,
-          },
-          axisLine: { lineStyle: { color: getCss("--line") } },
-        },
-        yAxis: [
-          {
-            type: "value",
-            name: responseMetricAxisLabel(data, 0),
-            nameLocation: "middle",
-            nameGap: responseAxisLayout.nameGap,
-            nameTextStyle: { color: getCss("--text"), fontWeight: 700 },
-            scale: true,
-            splitNumber: RESPONSE_AXIS_TARGET_INTERVALS,
-            min: responseAxis.min,
-            max: responseAxis.max,
-            interval: responseAxis.interval,
-            axisLabel: { color: getCss("--text"), formatter: (value) => formatChartResponseValue(value) },
-            splitLine: { lineStyle: { color: getCss("--line") } },
-          },
-          {
-            type: "value",
-            name: weightLabel,
-            nameLocation: "middle",
-            nameGap: volumeAxisLayout.nameGap,
-            nameTextStyle: { color: getCss("--text"), fontWeight: 700 },
-            position: "right",
-            axisLabel: { color: getCss("--text"), formatter: (value) => formatNumber(value) },
-            splitLine: { show: false },
-          },
-        ],
-        dataZoom: xLabelPolicy.dataZoomEnabled ? lineBarDataZoomOptions() : [],
-        series: [barSeries, ...shapSeries, ...glmSeries, ...lineSeries, ...(upliftBaseline ? [upliftBaseline] : []), ...customSeries],
+      formatResponse: formatChartResponseValue,
+      formatChartLabel,
+      escapeHtml,
+      labelStyle: lineBarChartLabelStyle(),
+      measureText: (value, fontSize = 12) => (
+        echartsImpl.format?.getTextRect?.(String(value), `${fontSize}px sans-serif`)?.width
+      ),
+      themeColors: {
+        text: getCss("--text"),
+        muted: getCss("--muted"),
+        line: getCss("--line"),
+        actual: getCss("--actual-line"),
+        secondExpected: getCss("--accent") || "#2276d2",
+        bar: getCss("--bar"),
+        missingBar: getCss("--missing-bar"),
+        baseBar: getCss("--base-bar"),
+        tailBar: getCss("--tail"),
       },
-      true,
-    );
+    });
+    chart.setOption(rendered.option, true);
     chartRenderTransform = renderTransform;
     requestAnimationFrame(() => {
       if (!lineBarChartReady()) return;
       chart.resize();
       refreshXAxisLabelsForCurrentZoom();
     });
-    return chartDensityMessage(labels.length, !xLabelPolicy.show, !dataLabelsAllowed && labelMode !== "-", xLabelPolicy.hiddenReason, Boolean(xLabelPolicy.hideOverlap));
+    return (rendered.messages || []).join(" ");
   }
 
-  function lineBarVerticalAxisLayout(values, formatter) {
-    const formatted = (Array.isArray(values) ? values : [])
-      .map(finiteNumberOrNull)
-      .filter((value) => value !== null)
-      .flatMap((value) => {
-        try {
-          return [String(formatter(value) ?? "")];
-        } catch (_error) {
-          return [String(value)];
-        }
-      });
-    if (!formatted.includes("0")) formatted.push("0");
-    const labelWidth = formatted.reduce((maximum, value) => {
-      const measured = echartsImpl.format?.getTextRect?.(value, "12px sans-serif")?.width;
-      const width = Number.isFinite(Number(measured)) ? Number(measured) : value.length * 6.72;
-      return Math.max(maximum, width);
-    }, 0);
-    const nameGap = Math.max(52, Math.ceil(labelWidth + 18));
-    return {
-      nameGap,
-      gridMargin: Math.max(76, nameGap + 28),
-    };
-  }
 
   function lineBarDataZoomOptions() {
     return [{ type: "inside" }, { type: "slider", height: 18, bottom: 18 }];
@@ -3219,180 +3048,6 @@ export function createLineBarTool({
     return partial.mode === key ? partial : {};
   }
 
-  function indexedPartialDependenceRows(data, rows) {
-    if (!rows.length) return [];
-    const labelIndex = new Map((data.rows || []).map((row, index) => [String(row.x), index]));
-    return rows
-      .map((row) => ({ ...row, index: labelIndex.get(String(row.x)) }))
-      .filter((row) => Number.isInteger(row.index));
-  }
-
-  function shapPartialDependenceSeries(data) {
-    const partial = partialDependenceOverlay(data, "shap");
-    const rows = Array.isArray(partial?.rows) ? partial.rows : [];
-    const indexedRows = indexedPartialDependenceRows(data, rows);
-    if (!indexedRows.length) return [];
-    const series = [];
-    SHAP_RIBBON_SERIES.forEach(([lowKey, highKey, label, color]) => {
-      const ribbon = shapRibbonSeries(indexedRows, lowKey, highKey, label, color);
-      if (ribbon) series.push(ribbon);
-    });
-    series.push({
-      name: "SHAP median",
-      type: "line",
-      yAxisIndex: 0,
-      z: 2.8,
-      animation: false,
-      animationDuration: 0,
-      animationDurationUpdate: 0,
-      smooth: false,
-      showSymbol: (data.rows || []).length < 250,
-      symbolSize: 4,
-      lineStyle: { color: SHAP_LINE_COLOR, width: 1.8, type: "dashed" },
-      itemStyle: { color: SHAP_LINE_COLOR },
-      data: (data.rows || []).map((row) => {
-        const match = rows.find((partialRow) => String(partialRow.x) === String(row.x));
-        const value = Number(match?.p50);
-        return Number.isFinite(value) ? value : null;
-      }),
-      label: { show: false },
-    });
-    return series;
-  }
-
-  function glmPartialDependenceSeries(data) {
-    const partial = partialDependenceOverlay(data, "glm");
-    const rows = Array.isArray(partial?.rows) ? partial.rows : [];
-    const indexedRows = indexedPartialDependenceRows(data, rows);
-    if (!indexedRows.length) return [];
-    return [
-      {
-        name: "GLM",
-        type: "line",
-        yAxisIndex: 0,
-        z: 2.9,
-        animation: false,
-        animationDuration: 0,
-        animationDurationUpdate: 0,
-        smooth: false,
-        showSymbol: (data.rows || []).length < 250,
-        symbolSize: 4,
-        lineStyle: { color: GLM_LINE_COLOR, width: 2, type: "dashed" },
-        itemStyle: { color: GLM_LINE_COLOR },
-        data: (data.rows || []).map((row) => {
-          const match = rows.find((partialRow) => String(partialRow.x) === String(row.x));
-          const value = Number(match?.p50);
-          return Number.isFinite(value) ? value : null;
-        }),
-        label: { show: false },
-      },
-    ];
-  }
-
-  function shapRibbonSeries(rows, lowKey, highKey, label, color) {
-    const segments = shapRibbonSegments(rows, lowKey, highKey);
-    if (!segments.length) return null;
-    return {
-      name: label,
-      type: "custom",
-      coordinateSystem: "cartesian2d",
-      yAxisIndex: 0,
-      data: segments.map((_, index) => index),
-      itemStyle: { color },
-      silent: true,
-      z: 2,
-      animation: false,
-      animationDuration: 0,
-      animationDurationUpdate: 0,
-      renderItem: (params, api) => {
-        const segment = segments[params.dataIndex] || [];
-        const upper = segment.map((row) => api.coord([row.index, row.high]));
-        const lower = [...segment].reverse().map((row) => api.coord([row.index, row.low]));
-        return {
-          type: "polygon",
-          shape: { points: [...upper, ...lower] },
-          style: { fill: color, stroke: "none" },
-        };
-      },
-    };
-  }
-
-  function shapRibbonSegments(rows, lowKey, highKey) {
-    const points = [];
-    rows.forEach((row) => {
-      const index = Number(row.index);
-      const low = Number(row[lowKey]);
-      const high = Number(row[highKey]);
-      if (!Number.isInteger(index) || !Number.isFinite(low) || !Number.isFinite(high)) return;
-      points.push({ index, low, high });
-    });
-    points.sort((a, b) => a.index - b.index);
-    const segments = [];
-    let current = [];
-    points.forEach((point) => {
-      const previous = current[current.length - 1];
-      if (previous && point.index !== previous.index + 1) {
-        if (current.length > 1) segments.push(current);
-        current = [];
-      }
-      current.push(point);
-    });
-    if (current.length > 1) segments.push(current);
-    return segments;
-  }
-
-  function lineBarLegendOptions(
-    legendData,
-    mainLegendSelection,
-    overlayLegendData,
-    overlayLegendSelection,
-    displayLabels = {},
-  ) {
-    const textStyle = { color: getCss("--text"), fontWeight: 700, fontSize: 13 };
-    const overlayTextStyle = { color: getCss("--text"), fontWeight: 400, fontSize: 11 };
-    const mainLegend = {
-      top: LINE_BAR_MAIN_LEGEND_TOP,
-      data: legendData,
-      selected: mainLegendSelection,
-      formatter: (name) => displayLabels[name] || name,
-      textStyle,
-    };
-    if (!overlayLegendData.length) return mainLegend;
-    return [
-      mainLegend,
-      {
-        top: LINE_BAR_OVERLAY_LEGEND_TOP,
-        left: "center",
-        type: "scroll",
-        data: overlayLegendData,
-        selected: overlayLegendSelection,
-        textStyle: overlayTextStyle,
-        pageIconColor: getCss("--text"),
-        pageIconInactiveColor: getCss("--muted"),
-        pageTextStyle: { color: getCss("--muted") },
-      },
-    ];
-  }
-
-  function matchingLegendSelection(option, entries) {
-    const names = entries.map(legendEntryName).filter(Boolean);
-    const defaults = Object.fromEntries(names.map((entry) => [entry, true]));
-    if (!entries.length) return defaults;
-    const legends = Array.isArray(option?.legend) ? option.legend : (option?.legend ? [option.legend] : []);
-    const previous = Object.assign({}, ...legends.map((legend) => legend?.selected || {}));
-    names.forEach((entry) => {
-      if (Object.prototype.hasOwnProperty.call(previous, entry)) {
-        defaults[entry] = previous[entry] !== false;
-      }
-    });
-    return defaults;
-  }
-
-  function legendEntryName(entry) {
-    if (typeof entry === "string") return entry;
-    if (entry && typeof entry === "object") return String(entry.name || "");
-    return "";
-  }
 
   function chartDensityMessage(groupCount, xLabelsHidden, chartLabelsHidden, xLabelReason = "", xLabelsSuppressed = false) {
     if (xLabelsSuppressed && !chartLabelsHidden) return xLabelReason ? `Some X-axis labels hidden ${xLabelReason}.` : "Some X-axis labels hidden to avoid overlap.";
@@ -3816,17 +3471,6 @@ export function createLineBarTool({
     return formatNumber(value);
   }
 
-  function formatChartTooltip(params, weightLabel, responseValueFormatter = formatResponseValue) {
-    const items = Array.isArray(params) ? params : [params];
-    if (!items.length) return "";
-    const lines = [escapeHtml(items[0].axisValueLabel ?? items[0].name ?? "")];
-    items.forEach((item) => {
-      const value = Array.isArray(item.value) ? item.value[1] : item.value;
-      const formatter = item.seriesName === weightLabel ? formatNumber : responseValueFormatter;
-      lines.push(`${item.marker || ""}${escapeHtml(item.seriesName)}: ${escapeHtml(formatter(value))}`);
-    });
-    return lines.join("<br/>");
-  }
 
   function updateMetricTitles(data) {
     const presentation = lineBarDataPresentation(data);
@@ -3844,10 +3488,6 @@ export function createLineBarTool({
     el("expectedMetricTitle").append(valueSpan);
   }
 
-  function formatResponseLabel(params, responseValueFormatter = formatResponseValue) {
-    const value = Array.isArray(params.value) ? params.value[1] : params.value;
-    return responseValueFormatter(value);
-  }
 
   function lineBarChartLabelStyle() {
     if (!document.body.classList.contains("dark")) return {};
@@ -3881,56 +3521,6 @@ export function createLineBarTool({
     return String(transform || "none") === "one";
   }
 
-  function isBaseReferenceTransform(transform = state.transform) {
-    return ["zero", "one"].includes(String(transform || "none"));
-  }
-
-  function isBaseWeightBar(data, row, transform = state.transform) {
-    if (!isBaseReferenceTransform(transform)) return false;
-    if (String(data?.transform?.reference || "") !== "base") return false;
-    const baseX = data?.transform?.base_x;
-    if (baseX === null || baseX === undefined) return false;
-    return String(row?.x) === String(baseX);
-  }
-
-  function weightBarColor(data, row) {
-    if (isMissingGroupLabel(row?.x)) return getCss("--missing-bar");
-    if (row?.is_tail) return getCss("--tail");
-    return isBaseWeightBar(data, row) ? getCss("--base-bar") : getCss("--bar");
-  }
-
-  function isMissingGroupLabel(value) {
-    const label = String(value ?? "").trim().toLowerCase();
-    return label === "missing" || label === "(missing)";
-  }
-
-  function upliftBaselineSeries(data, transform = state.transform) {
-    if (!isUpliftTransform(transform)) return null;
-    return {
-      name: "0% uplift baseline",
-      type: "line",
-      yAxisIndex: 0,
-      z: 2.7,
-      silent: true,
-      legendHoverLink: false,
-      animation: false,
-      animationDuration: 0,
-      animationDurationUpdate: 0,
-      showSymbol: false,
-      symbolSize: 0,
-      lineStyle: { opacity: 0 },
-      itemStyle: { opacity: 0 },
-      tooltip: { show: false },
-      data: (data.rows || []).map(() => 1),
-      markLine: {
-        silent: true,
-        symbol: "none",
-        label: { show: false },
-        lineStyle: { color: getCss("--text"), width: 2, type: "solid", opacity: 0.5 },
-        data: [{ yAxis: 1 }],
-      },
-    };
-  }
 
   function formatUpliftPercent(value) {
     if (value === null || value === undefined || Number.isNaN(value)) return "";
@@ -4348,21 +3938,6 @@ export function createLineBarTool({
     return String(value).padStart(2, "0");
   }
 
-  function getBarLayout(count) {
-    if (count <= 3) {
-      return { width: "62%", maxWidth: 240, categoryGap: "18%" };
-    }
-    if (count <= 8) {
-      return { width: "56%", maxWidth: 180, categoryGap: "24%" };
-    }
-    if (count <= 20) {
-      return { width: "46%", maxWidth: 90, categoryGap: "34%" };
-    }
-    if (count <= 60) {
-      return { width: "68%", maxWidth: 34, categoryGap: "28%" };
-    }
-    return { width: null, maxWidth: 18, categoryGap: "30%" };
-  }
 
   function invalidateLineBarTableCache() {
     tableRequestSeq += 1;

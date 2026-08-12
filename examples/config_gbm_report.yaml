@@ -1,0 +1,44 @@
+build_config: config_gbm.yaml
+
+features:
+  spec_path: ../specs/feature_spec.csv
+  scenario_column: report_demo
+
+chart:
+  expected: gbm_prediction
+  expected_label: GBM prediction
+  expected_source: gbm
+
+# A blank chart_* value in feature_spec.csv falls back to these values.
+chart_defaults:
+  banding: 0
+  quantiles: 0
+  low_weights: 0
+  missings: show
+  labels: none
+  sort: alpha
+  transform: none
+  sigma: 0
+  date_bucket: none
+  empty_periods: show
+
+reports:
+  - name: validation_actual_vs_expected
+    title: External GBM - validation Actual vs Expected
+    sample_values: [validation]
+    chart_content: actual_expected
+    partial_dependence: none
+    transform: none
+    sigma: 2
+
+  - name: all_rows_rebased_shap
+    title: External GBM - all rows rebased SHAP
+    sample_values: all
+    chart_content: shap_only
+    partial_dependence: shap
+    transform: one
+    sigma: 0
+
+output:
+  directory: ../local/external_reports
+  chart_height: 600

@@ -477,7 +477,7 @@ output:
   holdout_value: validation
 features:
   spec_path: {feature_spec_path.name}
-  scenario_column: scenario1
+  scenario_column: report_demo
 model:
   id: {gbm_model_id}
   label: External browser GBM
@@ -506,8 +506,8 @@ output:
                 encoding="utf-8",
             )
             for script, config in (
-                (repo_root / "examples" / "external_glm_artifacts_demo.py", glm_config),
-                (repo_root / "examples" / "external_gbm_artifacts_demo.py", gbm_config),
+                (repo_root / "examples" / "01_external_glm_artifacts_demo.py", glm_config),
+                (repo_root / "examples" / "01_external_gbm_artifacts_demo.py", gbm_config),
             ):
                 subprocess.run(
                     [sys.executable, str(script), str(config)],
@@ -517,6 +517,101 @@ output:
                     text=True,
                     timeout=120,
                 )
+
+            glm_report_config = root / "config_glm_report.yaml"
+            gbm_report_config = root / "config_gbm_report.yaml"
+            report_defaults = """chart_defaults:
+  banding: 0
+  quantiles: 0
+  low_weights: 0
+  missings: show
+  labels: none
+  sort: alpha
+  transform: none
+  sigma: 0
+  date_bucket: none
+  empty_periods: show
+output:
+  directory: reports
+"""
+            glm_report_config.write_text(
+                f"""build_config: {glm_config.name}
+features:
+  spec_path: {feature_spec_path.name}
+  scenario_column: report_demo
+chart:
+  expected: glm_prediction
+  expected_label: GLM prediction
+  expected_source: glm
+reports:
+  - name: validation_actual_vs_expected
+    title: External GLM validation
+    sample_values: [validation]
+    chart_content: actual_expected
+    partial_dependence: glm
+    transform: none
+    sigma: 2
+{report_defaults}""",
+                encoding="utf-8",
+            )
+            gbm_report_config.write_text(
+                f"""build_config: {gbm_config.name}
+features:
+  spec_path: {feature_spec_path.name}
+  scenario_column: report_demo
+chart:
+  expected: gbm_prediction
+  expected_label: GBM prediction
+  expected_source: gbm
+reports:
+  - name: validation_actual_vs_expected
+    title: External GBM validation
+    sample_values: [validation]
+    chart_content: actual_expected
+    partial_dependence: none
+    transform: none
+    sigma: 2
+  - name: all_rows_rebased_shap
+    title: External GBM rebased SHAP
+    sample_values: all
+    chart_content: shap_only
+    partial_dependence: shap
+    transform: one
+    sigma: 0
+{report_defaults}""",
+                encoding="utf-8",
+            )
+            for script, config in (
+                (repo_root / "examples" / "02_external_glm_report_demo.py", glm_report_config),
+                (repo_root / "examples" / "02_external_gbm_report_demo.py", gbm_report_config),
+            ):
+                subprocess.run(
+                    [sys.executable, str(script), str(config)],
+                    cwd=repo_root,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+
+            report_dir = root / "reports"
+            report_checks = [
+                (
+                    report_dir / "motor_fixture_external_glm_validation_actual_vs_expected.html",
+                    {"Actual", "GLM prediction", "Row count", "GLM", "sigma"},
+                    set(),
+                ),
+                (
+                    report_dir / "motor_fixture_external_gbm_validation_actual_vs_expected.html",
+                    {"Actual", "GBM prediction", "Row count", "sigma"},
+                    {"SHAP median"},
+                ),
+                (
+                    report_dir / "motor_fixture_external_gbm_all_rows_rebased_shap.html",
+                    {"SHAP median", "SHAP Min-Max"},
+                    {"Actual", "GBM prediction", "Weight", "Row count", "sigma"},
+                ),
+            ]
 
             # Tabulations are intentionally created by Lucidum after the two
             # external fits; this proves both the saved estimator and tree table
@@ -621,6 +716,24 @@ output:
                         page.locator("#gbmShapChart canvas").wait_for(timeout=15_000)
                         page.get_by_role("tab", name="Stacked SHAP", exact=True).click()
                         page.locator("#gbmStackedShapChart canvas").wait_for(timeout=15_000)
+
+                        for report_path, required_series, forbidden_series in report_checks:
+                            page.goto(report_path.as_uri(), wait_until="domcontentloaded")
+                            page.locator(".report-chart canvas").first.wait_for(timeout=15_000)
+                            self.assertEqual(page.locator(".chart-card").count(), 16)
+                            self.assertIn("SOURCE PARQUET", page.locator(".report-header").inner_text())
+                            self.assertIn("MODEL", page.locator(".report-provenance").inner_text())
+                            self.assertIn(str(root), page.locator(".report-provenance").inner_text())
+                            series_names = set(
+                                page.evaluate(
+                                    """
+                                    () => (window.echarts.getInstanceByDom(document.querySelector('.report-chart'))
+                                      ?.getOption()?.series || []).map((series) => series.name)
+                                    """
+                                )
+                            )
+                            self.assertTrue(required_series.issubset(series_names), series_names)
+                            self.assertTrue(forbidden_series.isdisjoint(series_names), series_names)
                         self.assertEqual(page_errors, [])
                     finally:
                         browser.close()

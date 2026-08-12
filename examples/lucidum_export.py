@@ -1,7 +1,7 @@
 """Compatibility machinery for Lucidum's current on-disk model format.
 
 Most users should not read or modify this file.  The readable examples are
-``external_glm_artifacts_demo.py`` and ``external_gbm_artifacts_demo.py``;
+``01_external_glm_artifacts_demo.py`` and ``01_external_gbm_artifacts_demo.py``;
 they contain the ordinary modelling workflow and make one call into this
 module after fitting and prediction.
 
