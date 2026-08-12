@@ -10,7 +10,7 @@ from py_lucidum.core import Dataset
 from py_lucidum.tools.gbm.store import GbmModelStore
 
 from .store import GlmModelStore
-from .tabulation import _build_tabulations_impl
+from .tabulation import _build_tabulations_impl, _score_tabulations_impl
 from .worker_progress import write_worker_progress
 
 
@@ -31,14 +31,17 @@ def run_worker(request_path: Path, response_path: Path) -> int:
         pending_path = progress_path.with_suffix(f".{os.getpid()}.tmp")
         write_worker_progress(progress_path, progress, pending_path=pending_path)
 
-    result = _build_tabulations_impl(
-        dataset,
-        store,
-        payload,
-        request.get("feature_spec"),
-        progress_callback=publish_progress,
-        gbm_store=gbm_store,
-    )
+    if request.get("operation") == "score":
+        result = _score_tabulations_impl(dataset, store, str(payload.get("model_id") or ""))
+    else:
+        result = _build_tabulations_impl(
+            dataset,
+            store,
+            payload,
+            request.get("feature_spec"),
+            progress_callback=publish_progress,
+            gbm_store=gbm_store,
+        )
     response_path.write_text(json.dumps({"ok": True, "result": result}, default=str), encoding="utf-8")
     return 0
 

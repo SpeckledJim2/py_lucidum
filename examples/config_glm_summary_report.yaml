@@ -1,0 +1,10 @@
+build_config: config_glm.yaml
+feature_spec: ../specs/feature_spec.csv
+kpi_spec: ../specs/kpi_spec.csv
+
+report:
+  name: model_summary
+  title: External GLM - model summary
+
+output:
+  directory: ../local/external_reports

@@ -54,10 +54,14 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
   - `py_lucidum.run_app(...)`
   - `py_lucidum.demo_dataset_path()`
   - `py_lucidum.extract_lightgbm_interaction_group(...)`
+  - `py_lucidum.build_glm_tabulations(...)`
+  - `py_lucidum.score_glm_tabulations(...)`
+  - `py_lucidum.export_glm_tabulations(...)`
   - `py_lucidum.gbm_evaluation_chart(...)`
   - `py_lucidum.line_bar_chart(...)`
   - `py_lucidum.write_echarts_report(...)`
   - `py_lucidum.write_gbm_summary_report(...)`
+  - `py_lucidum.write_glm_summary_report(...)`
   - `py_lucidum.report_filename(...)`
   - `py_lucidum.app.create_app(...)`
 - External compatibility examples:
@@ -67,6 +71,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
   - `examples/01_external_gbm_artifacts_demo.py [config-path]`
   - `examples/02_external_glm_report_demo.py [config-path]`
   - `examples/02_external_gbm_report_demo.py [config-path]`
+  - `examples/03_external_glm_summary_report_demo.py [config-path]`
   - `examples/03_external_gbm_summary_report_demo.py [config-path]`
   - The two executable examples are linear `# %%` scripts whose numbered
     load, prepare, fit, predict, and save sections are the user-facing surface.
@@ -84,6 +89,10 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
     writes eligible split performance, KPI-formatted Actual/prediction values,
     SHAP-preferred whole-model importance, parameters, and saved evaluation
     history without following `active_model.json`.
+  - The 03 GLM summary script names the exact 01 model, calls the public shared
+    tabulation/scoring and XLSX APIs, and writes fitted-prediction performance,
+    coefficients/p-values, and the shared workbook index without starting the
+    app.
   - `static/app/line-bar-chart.js` owns one-feature ECharts option generation
     for both the normal app and standalone reports. Keep it free of DOM and app
     state dependencies; report-only presentation choices are passed as options.
@@ -311,6 +320,20 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
   `docs/external-model-builds-and-reports.md`. The 02 and 03 report helpers must
   load the exact GLM or GBM model ID named by the matching 01 YAML, regardless
   of the current `active_model.json` marker.
+- Public GLM tabulation calls live in `glm_api.py`. The combined build delegates
+  to the normal tabulation builder, then both that build and explicit
+  `score_glm_tabulations` score from persisted table Parquets through
+  `tools/glm/tabulation.py`. Rebasing uses that scorer too. Re-scoring must not
+  call fitted-model prediction. Auto XLSX scale must inspect the fitted link:
+  `LogLink` means `exp`; all other links mean `linear`.
+- The 03 GLM report performance table uses fitted `glm_prediction`, never
+  `glm_tabulated_prediction`. It matches literal training/test/validation
+  values from `SAMPLE` case-insensitively, applies denominator rate/weight
+  semantics, always reports deviance and explained deviance, and adds weighted
+  AUC/Gini/log loss for binomial families or weighted RMSE/MAE for other
+  families. The coefficient row order and visible columns mirror the GLM tool.
+  The HTML tabulation index and XLSX index originate from one shared value
+  structure.
 - The 03 GBM summary counts only rows joined to a saved prediction with a
   finite Actual and, when configured, a finite positive Weight. Average-row
   Actual/prediction values are means; weighted values are numerator sums over
@@ -591,6 +614,10 @@ The current test suite should cover:
   workspace, artifact, row-identity, replacement, and active-model contracts,
   plus API and browser loading through predictions, GLM overlays/tabulations,
   GBM evaluation, trees, SHAP, Stacked SHAP, and tree-table tabulations.
+- Public GLM combined tabulation/scoring, estimator-free persisted-table
+  re-scoring, resolved-link XLSX scale, split performance, coefficient display,
+  shared workbook/HTML indexes, and the 01 → 03 external subprocess/browser
+  workflow.
 - Browser smoke behavior for loading profile, chart, histogram, map, and GBM tools without unexpected extra API requests, stale active-model state, or leaked cross-tool focus/listener side effects, including live GBM progress, the GBM tree viewer, and the GBM SHAP screen.
 
 ## Releasing

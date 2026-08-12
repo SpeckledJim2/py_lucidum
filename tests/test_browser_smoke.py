@@ -520,6 +520,7 @@ output:
 
             glm_report_config = root / "config_glm_report.yaml"
             gbm_report_config = root / "config_gbm_report.yaml"
+            glm_summary_config = root / "config_glm_summary_report.yaml"
             gbm_summary_config = root / "config_gbm_summary_report.yaml"
             kpi_spec_path = root / "kpi_spec.csv"
             shutil.copyfile(repo_root / "specs" / "kpi_spec.csv", kpi_spec_path)
@@ -602,9 +603,22 @@ output:
 """,
                 encoding="utf-8",
             )
+            glm_summary_config.write_text(
+                f"""build_config: {glm_config.name}
+feature_spec: {feature_spec_path.name}
+kpi_spec: {kpi_spec_path.name}
+report:
+  name: model_summary
+  title: External GLM summary
+output:
+  directory: reports
+""",
+                encoding="utf-8",
+            )
             for script, config in (
                 (repo_root / "examples" / "02_external_glm_report_demo.py", glm_report_config),
                 (repo_root / "examples" / "02_external_gbm_report_demo.py", gbm_report_config),
+                (repo_root / "examples" / "03_external_glm_summary_report_demo.py", glm_summary_config),
                 (repo_root / "examples" / "03_external_gbm_summary_report_demo.py", gbm_summary_config),
             ):
                 subprocess.run(
@@ -617,7 +631,8 @@ output:
                 )
 
             report_dir = root / "reports"
-            summary_report_path = report_dir / "motor_fixture_external_gbm_model_summary.html"
+            glm_summary_report_path = report_dir / "motor_fixture_external_glm_model_summary.html"
+            gbm_summary_report_path = report_dir / "motor_fixture_external_gbm_model_summary.html"
             report_checks = [
                 (
                     report_dir / "motor_fixture_external_glm_validation_actual_vs_expected.html",
@@ -645,14 +660,13 @@ output:
                 ),
             ]
 
-            # Tabulations are intentionally created by Lucidum after the two
-            # external fits; this proves both the saved estimator and tree table
-            # are useful beyond passive model discovery.
+            # The 03 GLM script has already tabulated the external estimator;
+            # Lucidum should discover those same tables without rebuilding them.
             dataset = Dataset(data_path)
             feature_spec = load_features(feature_spec_path)
             glm_store = GlmModelStore(data_path, dataset=dataset)
             gbm_store = GbmModelStore(data_path, dataset=dataset)
-            build_tabulations(dataset, glm_store, {"model_ids": [glm_model_id]}, feature_spec)
+            self.assertTrue(glm_store.artifact_path(glm_model_id, "tabulated_predictions").is_file())
             gbm_tabulation = build_gbm_tabulations(dataset, gbm_store, gbm_model_id, feature_spec)
             self.assertEqual(gbm_tabulation["status"], "tabulated")
 
@@ -792,7 +806,32 @@ output:
                             self.assertTrue(required_series.issubset(series_names), series_names)
                             self.assertTrue(forbidden_series.isdisjoint(series_names), series_names)
 
-                        page.goto(summary_report_path.as_uri(), wait_until="domcontentloaded")
+                        page.goto(glm_summary_report_path.as_uri(), wait_until="domcontentloaded")
+                        self.assertTrue(page.locator(".report-header").is_visible())
+                        self.assertEqual(page.locator(".summary-card").count(), 3)
+                        self.assertEqual(
+                            page.locator(".summary-card h2").all_inner_texts(),
+                            ["Model performance", "Coefficients and p-values", "Tabulation summary"],
+                        )
+                        self.assertEqual(page.locator(".performance-table tbody tr").count(), 3)
+                        self.assertGreater(page.locator(".coefficient-table tbody tr").count(), 1)
+                        self.assertGreater(page.locator(".tabulation-table tbody tr").count(), 1)
+                        tabulation_values = page.locator(
+                            ".tabulation-table tbody tr td:nth-child(5), "
+                            ".tabulation-table tbody tr td:nth-child(6), "
+                            ".tabulation-table tbody tr td:nth-child(7)"
+                        ).all_inner_texts()
+                        self.assertTrue(
+                            all(re.fullmatch(r"-?\d+\.\d{4}", value) for value in tabulation_values),
+                            tabulation_values,
+                        )
+                        self.assertIn(
+                            "tabulations_linear.xlsx",
+                            page.locator('[data-summary-section="tabulations"] a').inner_text(),
+                        )
+                        self.assertTrue(page.locator('[data-summary-section="tabulations"] a').get_attribute("href").startswith("file:"))
+
+                        page.goto(gbm_summary_report_path.as_uri(), wait_until="domcontentloaded")
                         page.locator("#gbm-summary-evaluation-chart canvas").wait_for(timeout=15_000)
                         self.assertEqual(page.locator(".summary-card").count(), 4)
                         performance_rows = page.locator(".performance-table tbody tr")

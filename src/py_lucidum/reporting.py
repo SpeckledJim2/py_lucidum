@@ -3,10 +3,11 @@ from __future__ import annotations
 import html
 import json
 import math
+import pickle
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 from uuid import uuid4
 
@@ -331,6 +332,100 @@ def write_gbm_summary_report(
         echarts_source=echarts_source,
         renderer_source=renderer_source,
         chart_height=chart_height,
+    )
+    temporary = output.with_name(f".{output.name}.tmp-{uuid4().hex}")
+    try:
+        temporary.write_text(document, encoding="utf-8")
+        temporary.replace(output)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    return output
+
+
+def write_glm_summary_report(
+    output_path: str | Path,
+    *,
+    title: str,
+    dataset_path: str | Path,
+    model_id: str,
+    kpi_spec_path: str | Path,
+    tabulation_export: Mapping[str, Any],
+    metadata: Mapping[str, Any] | None = None,
+) -> Path:
+    """Write a portable GLM summary using fitted and tabulated model artifacts."""
+
+    from py_lucidum.core.kpis import load_kpis
+    from py_lucidum.tools.glm.store import GlmModelStore
+
+    path = Path(dataset_path).expanduser().resolve()
+    dataset = Dataset(path)
+    try:
+        store = GlmModelStore(path, dataset=dataset)
+        manifest = store.manifest(model_id)
+        model_folder = store.model_dir(model_id).resolve()
+        scoring_path = store.artifact_path(model_id, "tabulated_predictions").resolve()
+        if not scoring_path.is_file():
+            raise ValueError("Build and score GLM tabulations before writing the summary report.")
+        workbook_path = Path(tabulation_export.get("path") or "").expanduser().resolve()
+        index_summary = tabulation_export.get("index")
+        if not workbook_path.is_file() or not isinstance(index_summary, Mapping):
+            raise ValueError("tabulation_export must come from export_glm_tabulations().")
+
+        estimator_path = store.artifact_path(model_id, "estimator")
+        if not estimator_path.is_file():
+            raise ValueError(f"GLM estimator.pkl is unavailable for model {model_id}")
+        with estimator_path.open("rb") as handle:
+            estimator = pickle.load(handle)
+
+        response = str(manifest.get("response_column") or "").strip()
+        denominator = str(manifest.get("denominator_column") or "").strip()
+        kpi = _glm_summary_kpi(load_kpis(kpi_spec_path), response, denominator, Path(kpi_spec_path))
+        performance = _glm_performance(
+            dataset,
+            store.artifact_path(model_id, "predictions"),
+            response=response,
+            denominator=denominator,
+            estimator=estimator,
+            kpi=kpi,
+        )
+        coefficients = _glm_coefficients(store.read_parquet_records(store.artifact_path(model_id, "coefficients")))
+        actual_link = _glm_link_name(estimator)
+        report_metadata = {
+            "source parquet": path,
+            "model": model_folder,
+            "tabulated scores": scoring_path,
+            "response": response,
+            "weight": denominator or "None",
+            "expected": "glm_prediction",
+            "SAMPLE_ROWS": ["training", "test", "validation"],
+            "model label": manifest.get("label") or model_id,
+            "family / link": f"{manifest.get('family') or type(estimator.family_instance).__name__} / {actual_link}",
+            **dict(metadata or {}),
+        }
+    finally:
+        dataset.con.close()
+
+    report_metadata = _report_metadata(report_metadata)
+    payload = {
+        "title": str(title),
+        "metadata": report_metadata,
+        "performance": performance,
+        "coefficients": coefficients,
+        "tabulations": {
+            "path": str(workbook_path),
+            "href": _file_uri(workbook_path),
+            "scale": str(tabulation_export.get("scale") or ""),
+            "columns": list(index_summary.get("columns") or []),
+            "rows": list(index_summary.get("rows") or []),
+        },
+    }
+    output = Path(output_path).expanduser().resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    document = _glm_summary_document(
+        title=str(title),
+        report_metadata=report_metadata,
+        payload=payload,
     )
     temporary = output.with_name(f".{output.name}.tmp-{uuid4().hex}")
     try:
@@ -816,6 +911,437 @@ def _gbm_summary_document(
 """
 
 
+def _glm_performance(
+    dataset: Dataset,
+    prediction_path: Path,
+    *,
+    response: str,
+    denominator: str,
+    estimator: Any,
+    kpi: Mapping[str, Any],
+) -> dict[str, Any]:
+    if not prediction_path.is_file():
+        raise ValueError("Fitted GLM predictions are unavailable.")
+    actual = quote_ident(response)
+    sample = quote_ident("SAMPLE")
+    weight = quote_ident(denominator) if denominator else ""
+    weight_projection = f", TRY_CAST(source.{weight} AS DOUBLE) AS report_weight" if denominator else ", 1.0 AS report_weight"
+    valid_weight = f"AND isfinite(TRY_CAST(source.{weight} AS DOUBLE)) AND TRY_CAST(source.{weight} AS DOUBLE) > 0" if denominator else ""
+    actual_value = f"TRY_CAST(source.{actual} AS DOUBLE) / TRY_CAST(source.{weight} AS DOUBLE)" if denominator else f"TRY_CAST(source.{actual} AS DOUBLE)"
+    prediction_value = f"TRY_CAST(prediction.glm_prediction AS DOUBLE) / TRY_CAST(source.{weight} AS DOUBLE)" if denominator else "TRY_CAST(prediction.glm_prediction AS DOUBLE)"
+    query = f"""
+WITH source AS (
+  SELECT ROW_NUMBER() OVER ()::BIGINT AS __lucidum_row_id, *
+  FROM {dataset.relation_sql()}
+)
+SELECT
+  LOWER(TRIM(CAST(source.{sample} AS VARCHAR))) AS sample_value,
+  {actual_value} AS actual_value,
+  {prediction_value} AS prediction_value
+  {weight_projection}
+FROM source
+INNER JOIN read_parquet({sql_literal(str(prediction_path))}) prediction
+  USING (__lucidum_row_id)
+WHERE isfinite(TRY_CAST(source.{actual} AS DOUBLE))
+  AND isfinite(TRY_CAST(prediction.glm_prediction AS DOUBLE))
+  {valid_weight}
+"""
+    grouped: dict[str, list[tuple[float, float, float]]] = {}
+    for sample_value, actual_number, prediction_number, weight_number in dataset.con.execute(query).fetchall():
+        if not all(_finite_number(value) is not None for value in (actual_number, prediction_number, weight_number)):
+            continue
+        grouped.setdefault(str(sample_value), []).append(
+            (float(actual_number), float(prediction_number), float(weight_number))
+        )
+
+    import numpy as np
+
+    is_binomial = "binomial" in type(estimator.family_instance).__name__.casefold()
+    rows = []
+    for label, sample_value in (("Training", "training"), ("Test", "test"), ("Validation", "validation")):
+        values = grouped.get(sample_value)
+        if not values:
+            raise ValueError(f"The {label} SAMPLE value has no eligible fitted predictions: {sample_value}")
+        array = np.asarray(values, dtype=float)
+        y = array[:, 0]
+        prediction = array[:, 1]
+        weights = array[:, 2]
+        actual_summary = float(np.average(y, weights=weights))
+        prediction_summary = float(np.average(prediction, weights=weights))
+        deviance = _safe_glm_metric(estimator.family_instance.deviance, y, prediction, weights)
+        null_prediction = np.full(len(y), actual_summary, dtype=float)
+        null_deviance = _safe_glm_metric(estimator.family_instance.deviance, y, null_prediction, weights)
+        deviance_explained = (
+            None
+            if deviance is None or null_deviance is None or null_deviance == 0
+            else 1.0 - deviance / null_deviance
+        )
+        raw = {
+            "row_count": len(values),
+            "weight": float(weights.sum()),
+            "actual": actual_summary,
+            "prediction": prediction_summary,
+            "deviance": deviance,
+            "deviance_explained": deviance_explained,
+        }
+        if is_binomial:
+            auc = _weighted_auc(y, prediction, weights)
+            clipped = np.clip(prediction, 1e-15, 1.0 - 1e-15)
+            log_loss = float(np.average(-(y * np.log(clipped) + (1.0 - y) * np.log1p(-clipped)), weights=weights))
+            raw.update({"auc": auc, "gini": None if auc is None else 2.0 * auc - 1.0, "log_loss": log_loss})
+        else:
+            error = prediction - y
+            raw.update(
+                {
+                    "rmse": float(math.sqrt(np.average(error * error, weights=weights))),
+                    "mae": float(np.average(np.abs(error), weights=weights)),
+                }
+            )
+        row = {
+            "sample": label,
+            "rows": f"{len(values):,}",
+            "weight": _format_weight(raw["weight"]) if denominator else None,
+            "actual": _format_kpi(raw["actual"], kpi),
+            "prediction": _format_kpi(raw["prediction"], kpi),
+            "deviance": _format_compact(raw["deviance"]),
+            "deviance_explained": _format_percent(raw["deviance_explained"]),
+            "raw": raw,
+        }
+        if is_binomial:
+            row.update(
+                {
+                    "auc": _format_percent(raw["auc"]),
+                    "gini": _format_percent(raw["gini"]),
+                    "log_loss": _format_compact(raw["log_loss"]),
+                }
+            )
+        else:
+            row.update({"rmse": _format_kpi(raw["rmse"], kpi), "mae": _format_kpi(raw["mae"], kpi)})
+        rows.append(row)
+
+    columns = [
+        {"key": "sample", "label": "Sample"},
+        {"key": "rows", "label": "Number of rows"},
+    ]
+    if denominator:
+        columns.append({"key": "weight", "label": f"Sum of {denominator}"})
+    columns.extend(
+        [
+            {"key": "actual", "label": "Actual response"},
+            {"key": "prediction", "label": "Model prediction"},
+            {"key": "deviance", "label": "Deviance"},
+            {"key": "deviance_explained", "label": "Deviance explained"},
+        ]
+    )
+    if is_binomial:
+        columns.extend(
+            [
+                {"key": "auc", "label": "AUC"},
+                {"key": "gini", "label": "Gini"},
+                {"key": "log_loss", "label": "Log loss"},
+            ]
+        )
+    else:
+        columns.extend([{"key": "rmse", "label": "RMSE"}, {"key": "mae", "label": "MAE"}])
+    return {
+        "columns": columns,
+        "rows": rows,
+        "family": type(estimator.family_instance).__name__,
+        "prediction_source": "glm_prediction",
+        "kpi": dict(kpi),
+    }
+
+
+def _safe_glm_metric(metric: Any, y: Any, prediction: Any, weights: Any) -> float | None:
+    try:
+        return _finite_number(metric(y, prediction, sample_weight=weights))
+    except Exception:
+        return None
+
+
+def _weighted_auc(y: Any, prediction: Any, weights: Any) -> float | None:
+    import numpy as np
+
+    if len(y) == 0 or np.any((y < 0) | (y > 1)):
+        return None
+    positive = np.asarray(weights, dtype=float) * np.asarray(y, dtype=float)
+    negative = np.asarray(weights, dtype=float) * (1.0 - np.asarray(y, dtype=float))
+    total_positive = float(positive.sum())
+    total_negative = float(negative.sum())
+    if total_positive <= 0 or total_negative <= 0:
+        return None
+    order = np.argsort(np.asarray(prediction, dtype=float), kind="mergesort")
+    scores = np.asarray(prediction, dtype=float)[order]
+    positive = positive[order]
+    negative = negative[order]
+    concordance = 0.0
+    prior_negative = 0.0
+    start = 0
+    while start < len(scores):
+        end = start + 1
+        while end < len(scores) and scores[end] == scores[start]:
+            end += 1
+        group_positive = float(positive[start:end].sum())
+        group_negative = float(negative[start:end].sum())
+        concordance += group_positive * (prior_negative + 0.5 * group_negative)
+        prior_negative += group_negative
+        start = end
+    return concordance / (total_positive * total_negative)
+
+
+def _glm_summary_kpi(
+    kpis: Sequence[Mapping[str, Any]],
+    response: str,
+    denominator: str,
+    path: Path,
+) -> dict[str, Any]:
+    expected_denominator = denominator or "__none__"
+    for kpi in kpis:
+        if str(kpi.get("actual")) == response and str(kpi.get("denominator")) == expected_denominator:
+            return dict(kpi)
+    weight = denominator or "Average row value"
+    raise ValueError(f"KPI specification {path.resolve()} has no row for Actual {response!r} and Weight {weight!r}")
+
+
+def _glm_coefficients(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    rows = []
+    for index, record in enumerate(records, start=1):
+        estimate = _finite_number(record.get("estimate"))
+        std_error = _finite_number(record.get("std_error", record.get("std.error")))
+        p_value = _finite_number(record.get("p_value", record.get("p.value")))
+        significance = ""
+        if p_value is not None:
+            significance = "significance-low" if p_value < 0.01 else "significance-medium" if p_value <= 0.05 else "significance-high"
+        rows.append(
+            {
+                "number": index,
+                "term": str(record.get("term") or ""),
+                "estimate": _format_glm_number(estimate),
+                "std_error": _format_glm_number(std_error),
+                "p_value": _format_p_value(p_value),
+                "significance": significance,
+                "raw": {"estimate": estimate, "std_error": std_error, "p_value": p_value},
+            }
+        )
+    return {
+        "columns": [
+            {"key": "number", "label": "#"},
+            {"key": "term", "label": "term"},
+            {"key": "estimate", "label": "estimate"},
+            {"key": "std_error", "label": "std.error"},
+            {"key": "p_value", "label": "p.value"},
+        ],
+        "rows": rows,
+    }
+
+
+def _format_glm_number(value: Any) -> str:
+    number = _finite_number(value)
+    return "--" if number is None else f"{number:,.4f}".rstrip("0").rstrip(".")
+
+
+def _format_p_value(value: Any) -> str:
+    number = _finite_number(value)
+    return "--" if number is None else f"{number * 100:.2f}".rstrip("0").rstrip(".") + "%"
+
+
+def _format_kpi(value: Any, kpi: Mapping[str, Any]) -> str:
+    number = _finite_number(value)
+    if number is None:
+        return "—"
+    display = number * 100 if kpi.get("format") == "percent" else number
+    decimals = int(kpi.get("decimals") or 0)
+    sign = "-" if display < 0 else ""
+    formatted = f"{abs(display):,.{decimals}f}"
+    if kpi.get("format") == "currency":
+        return f"{sign}£{formatted}"
+    if kpi.get("format") == "percent":
+        return f"{sign}{formatted}%"
+    return f"{sign}{formatted}"
+
+
+def _format_weight(value: Any) -> str:
+    number = _finite_number(value)
+    if number is None:
+        return "—"
+    return f"{number:,.0f}" if abs(number) >= 10 or number.is_integer() else _format_compact(number)
+
+
+def _format_compact(value: Any) -> str:
+    number = _finite_number(value)
+    if number is None:
+        return "—"
+    absolute = abs(number)
+    decimals = 1 if absolute >= 1000 else 2 if absolute >= 10 else 3 if absolute >= 1 else 4 if absolute >= 0.01 else 6
+    return f"{number:,.{decimals}f}".rstrip("0").rstrip(".")
+
+
+def _format_percent(value: Any) -> str:
+    number = _finite_number(value)
+    return "—" if number is None else f"{number * 100:.1f}%"
+
+
+def _finite_number(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _glm_link_name(estimator: Any) -> str:
+    names = {
+        "IdentityLink": "identity",
+        "LogLink": "log",
+        "LogitLink": "logit",
+        "CloglogLink": "cloglog",
+        "TweedieLink": "tweedie",
+    }
+    class_name = type(estimator.link_instance).__name__
+    return names.get(class_name, class_name.removesuffix("Link").casefold())
+
+
+def _file_uri(path: Any) -> str:
+    text = str(path)
+    if re.match(r"^[A-Za-z]:[\\/]", text) or text.startswith("\\\\"):
+        return PureWindowsPath(text).as_uri()
+    return Path(text).expanduser().resolve().as_uri()
+
+
+def _glm_summary_document(
+    *,
+    title: str,
+    report_metadata: Mapping[str, Any],
+    payload: Mapping[str, Any],
+) -> str:
+    full_width_metadata = {"source parquet", "model", "tabulated scores"}
+    provenance_html = _metadata_items(report_metadata, include=full_width_metadata)
+    metadata_html = _metadata_items(report_metadata, exclude=full_width_metadata)
+    performance = payload["performance"]
+    coefficients = payload["coefficients"]
+    tabulations = payload["tabulations"]
+    performance_table = _summary_table_html(
+        list(performance.get("columns") or []),
+        list(performance.get("rows") or []),
+        table_class="performance-table",
+    )
+    coefficient_table = _glm_coefficient_table_html(
+        list(coefficients.get("columns") or []),
+        list(coefficients.get("rows") or []),
+    )
+    tabulation_table = _glm_tabulation_table_html(
+        list(tabulations.get("columns") or []),
+        list(tabulations.get("rows") or []),
+    )
+    workbook_path = str(tabulations.get("path") or "")
+    workbook_href = str(tabulations.get("href") or "")
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{html.escape(title)}</title>
+  <style>
+    :root {{ color-scheme: light; --page: #f5f7fa; --panel: #ffffff; --text: #243447; --muted: #64748b; --line: #d9e0e8; --accent: #2563eb; }}
+    * {{ box-sizing: border-box; }}
+    body {{ margin: 0; background: var(--page); color: var(--text); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }}
+    main {{ width: min(1500px, 100%); margin: 0 auto; padding: 24px; }}
+    .report-header, .summary-card {{ background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06); }}
+    .report-header {{ padding: 20px 24px; margin-bottom: 20px; }}
+    h1 {{ margin: 0 0 16px; font-size: 24px; }}
+    h2 {{ margin: 0; padding: 18px 20px 0; font-size: 18px; }}
+    dl {{ margin: 0; }}
+    dl div {{ min-width: 0; }}
+    .report-provenance {{ display: grid; gap: 10px; margin-bottom: 14px; }}
+    .report-metadata-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px 24px; padding-top: 14px; border-top: 1px solid var(--line); }}
+    dt {{ color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }}
+    dd {{ margin: 2px 0 0; overflow-wrap: anywhere; font-size: 13px; }}
+    .summary-card {{ margin: 0 0 20px; overflow: hidden; }}
+    .section-detail {{ margin: 5px 20px 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }}
+    .section-detail a {{ color: var(--accent); }}
+    .table-wrap {{ padding: 16px 20px 20px; overflow-x: auto; }}
+    .summary-table {{ width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }}
+    .summary-table th {{ padding: 9px 12px; border-bottom: 2px solid var(--line); color: var(--muted); font-size: 11px; letter-spacing: .04em; text-align: right; text-transform: uppercase; white-space: nowrap; }}
+    .summary-table td {{ padding: 9px 12px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }}
+    .summary-table tbody tr:last-child td {{ border-bottom: 0; }}
+    .summary-table th:first-child, .summary-table td:first-child {{ text-align: left; }}
+    .coefficient-table th:nth-child(2), .coefficient-table td:nth-child(2), .tabulation-table th:nth-child(2), .tabulation-table td:nth-child(2) {{ text-align: left; }}
+    .coefficient-table td:nth-child(2) {{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }}
+    .coefficient-table tr.significance-low {{ background: #ecfdf3; }}
+    .coefficient-table tr.significance-medium {{ background: #fffbeb; }}
+    .coefficient-table tr.significance-high {{ background: #fff1f2; }}
+    @media (max-width: 700px) {{ main {{ padding: 10px; }} .table-wrap {{ padding-inline: 10px; }} }}
+    @media print {{ body {{ background: white; }} main {{ width: 100%; padding: 0; }} .report-header, .summary-card {{ break-inside: avoid; border-color: #bbb; box-shadow: none; }} }}
+  </style>
+</head>
+<body>
+  <main>
+    <header class="report-header">
+      <h1>{html.escape(title)}</h1>
+      <dl class="report-provenance">{provenance_html}</dl>
+      <dl class="report-metadata-grid">{metadata_html}</dl>
+    </header>
+    <section class="summary-card" data-summary-section="performance">
+      <h2>Model performance</h2>
+      <p class="section-detail">Performance uses fitted <code>glm_prediction</code> values.</p>
+      <div class="table-wrap">{performance_table}</div>
+    </section>
+    <section class="summary-card" data-summary-section="coefficients">
+      <h2>Coefficients and p-values</h2>
+      <div class="table-wrap">{coefficient_table}</div>
+    </section>
+    <section class="summary-card" data-summary-section="tabulations">
+      <h2>Tabulation summary</h2>
+      <p class="section-detail">Workbook: <a href="{html.escape(workbook_href, quote=True)}">{html.escape(workbook_path)}</a></p>
+      <div class="table-wrap">{tabulation_table}</div>
+    </section>
+  </main>
+  <script id="lucidum-report-data" type="application/json">{_json_for_script(payload)}</script>
+</body>
+</html>
+"""
+
+
+def _glm_coefficient_table_html(
+    columns: Sequence[Mapping[str, Any]],
+    rows: Sequence[Mapping[str, Any]],
+) -> str:
+    headings = "".join(f'<th scope="col">{html.escape(str(column["label"]))}</th>' for column in columns)
+    body = "".join(
+        f'<tr class="{html.escape(str(row.get("significance") or ""))}">'
+        + "".join(
+            f'<td>{html.escape(_display_value(row.get(str(column["key"]), "—")))}</td>'
+            for column in columns
+        )
+        + "</tr>"
+        for row in rows
+    )
+    return f'<table class="summary-table coefficient-table"><thead><tr>{headings}</tr></thead><tbody>{body}</tbody></table>'
+
+
+def _glm_tabulation_table_html(
+    columns: Sequence[Mapping[str, Any]],
+    rows: Sequence[Mapping[str, Any]],
+) -> str:
+    headings = "".join(f'<th scope="col">{html.escape(str(column["label"]))}</th>' for column in columns)
+
+    def display_cell(row: Mapping[str, Any], column: Mapping[str, Any]) -> str:
+        key = str(column["key"])
+        value = row.get(key, "—")
+        number = _finite_number(value)
+        if key in {"min", "max", "span"} and number is not None:
+            return f"{number:.4f}"
+        return _display_value(value)
+
+    body = "".join(
+        "<tr>"
+        + "".join(f"<td>{html.escape(display_cell(row, column))}</td>" for column in columns)
+        + "</tr>"
+        for row in rows
+    )
+    return f'<table class="summary-table tabulation-table"><thead><tr>{headings}</tr></thead><tbody>{body}</tbody></table>'
+
+
 def _report_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
     run_time = datetime.now().astimezone()
     timezone_name = run_time.tzname() or run_time.strftime("%z")
@@ -905,4 +1431,5 @@ __all__ = [
     "report_filename",
     "write_echarts_report",
     "write_gbm_summary_report",
+    "write_glm_summary_report",
 ]

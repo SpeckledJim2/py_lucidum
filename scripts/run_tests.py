@@ -135,6 +135,9 @@ def changed_test_targets(paths: Sequence[str]) -> list[str] | None:
         if path == "src/py_lucidum/reporting.py":
             targets.update({"tests/test_reporting.py", "tests/test_external_model_examples.py"})
             continue
+        if path == "src/py_lucidum/glm_api.py":
+            targets.update({"tests/test_reporting.py", "tests/test_external_model_examples.py"})
+            continue
         if path in {"src/py_lucidum/cli.py", "src/py_lucidum/__init__.py", "src/py_lucidum/demo.py"}:
             targets.update({"tests/test_cli.py", "tests/test_demo_dataset.py"})
             if path == "src/py_lucidum/__init__.py":

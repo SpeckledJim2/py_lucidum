@@ -2475,7 +2475,7 @@ USING (__lucidum_row_id)
         self.assertAlmostEqual(float(diagnostics["mean_linear_error"]), float(errors.mean()))
         self.assertAlmostEqual(float(diagnostics["linear_sd_error"]), float(errors.std()))
 
-    def test_glm_tabulation_missing_prediction_artifact_falls_back_to_linear_predictor(self) -> None:
+    def test_glm_tabulation_missing_prediction_artifact_leaves_error_metrics_unavailable(self) -> None:
         self.require_glm_dependencies()
         _glum, glr, _glrcv, _np, _pd = glm_dependencies()
         del _glum, _glrcv, _np, _pd
@@ -2488,21 +2488,12 @@ USING (__lucidum_row_id)
         )
         model_id = result["model_id"]
         store.artifact_path(model_id, "predictions").unlink()
-        original_linear_predictor = glr.linear_predictor
-        calls = 0
-
-        def counted_linear_predictor(estimator: Any, *args: Any, **kwargs: Any) -> Any:
-            nonlocal calls
-            calls += 1
-            return original_linear_predictor(estimator, *args, **kwargs)
-
-        with patch.object(glr, "linear_predictor", autospec=True, side_effect=counted_linear_predictor):
+        with patch.object(glr, "linear_predictor", side_effect=AssertionError("fitted prediction was called")):
             glm_tabulation._build_tabulations_impl(dataset, store, {"model_ids": [model_id]}, {"rows": []})
 
         diagnostics = store.read_json(store.artifact_path(model_id, "tabulation_manifest"))["diagnostics"]
-        self.assertEqual(calls, 1)
-        self.assertIsNotNone(diagnostics["mean_linear_error"])
-        self.assertIsNotNone(diagnostics["linear_sd_error"])
+        self.assertIsNone(diagnostics["mean_linear_error"])
+        self.assertIsNone(diagnostics["linear_sd_error"])
 
     def test_glm_tabulation_manifest_indexes_follow_formula_order(self) -> None:
         self.require_glm_dependencies()
@@ -3004,7 +2995,9 @@ USING (__lucidum_row_id)
         with patch("py_lucidum.tools.glm.tabulation._tabulation_frame_from_dataset", side_effect=capture_frame):
             glm_tabulation._build_tabulations_impl(dataset, store, {"model_ids": [result["model_id"]]}, {"rows": []})
 
-        self.assertEqual(captured_columns, [["Age"]])
+        # Table construction and the shared persisted-table scorer each load
+        # the same narrow projection; neither touches the unused columns.
+        self.assertEqual(captured_columns, [["Age"], ["Age"]])
 
     def test_glm_workspace_changes_after_same_path_dataset_replacement(self) -> None:
         data_path = self.root / "replace.csv"

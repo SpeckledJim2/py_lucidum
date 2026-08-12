@@ -29,11 +29,9 @@ from .terms import column_tokens as _column_tokens
 from .terms import model_matrix as _model_matrix
 from .terms import term_groups as _term_groups
 from .training import (
-    add_internal_intercept_column,
     estimator_intercept_value,
     formula_context,
     glm_dependencies,
-    internal_intercept_column_from_manifest,
     offset_values_for_frame,
     write_dataframe_parquet,
 )
@@ -743,28 +741,7 @@ def _tabulation_error_metrics(
             pd,
         )
         if exact_eta is None:
-            context = formula_context(np)
-            offset_terms = [
-                str(term)
-                for term in (
-                    model_manifest.get("offset_terms")
-                    or model_manifest.get("formula", {}).get("offset_terms")
-                    or []
-                )
-            ]
-            score_frame = frame.copy()
-            add_internal_intercept_column(score_frame, internal_intercept_column_from_manifest(model_manifest))
-            score_frame[TARGET_COLUMN] = 0.0
-            score_mask = pd.Series(True, index=frame.index)
-            offset_values = offset_values_for_frame(score_frame, offset_terms, context, np, pd)
-            if offset_values is not None:
-                score_mask = score_mask & offset_values.notna() & np.isfinite(offset_values.astype(float))
-            exact_eta = pd.Series(np.nan, index=frame.index, dtype=float)
-            exact_eta.loc[score_mask] = estimator.linear_predictor(
-                score_frame.loc[score_mask],
-                context=context,
-                offset=offset_values.loc[score_mask].astype(float).to_numpy() if offset_values is not None else None,
-            )
+            return None, None
         error = exact_eta - tabulated_linear
         finite_error = error.dropna()
         mean_linear_error = json_safe_number(float(finite_error.mean())) if len(finite_error) else None
@@ -1055,9 +1032,21 @@ def _rebuild_tabulated_predictions(
     tabulated["glm_tabulated_linear_prediction"] = eta.where(~missing, np.nan)
     tabulated["glm_tabulation_missing"] = missing
     write_dataframe_parquet(tabulated, store.artifact_path(model_id, "tabulated_predictions"))
+    mean_linear_error, linear_sd_error = _tabulation_error_metrics(
+        store,
+        model_id,
+        model_manifest,
+        estimator,
+        frame,
+        tabulated["glm_tabulated_linear_prediction"],
+        np,
+        pd,
+    )
     diagnostics = dict(manifest.get("diagnostics") or {})
     diagnostics.update(
         {
+            "mean_linear_error": mean_linear_error,
+            "linear_sd_error": linear_sd_error,
             "scored_rows": int(((~missing) & np.isfinite(eta.astype(float))).sum()),
             "tabulated_row_count": int(len(tabulated)),
             "missing_tabulated_prediction_rows": int(missing.sum()),
@@ -1709,7 +1698,6 @@ def _build_model_tabulations(
     store.tabulations_dir(model_id).mkdir(parents=True, exist_ok=True)
     cumulative_adjustment = 0.0
     skipped_tables: list[dict[str, Any]] = []
-    table_frames: dict[str, Any] = {}
     for features, info in non_base_group_items:
         table_id = "|".join(features)
         table_label = " × ".join(features)
@@ -1805,7 +1793,6 @@ def _build_model_tabulations(
         table["status"] = table["__status"]
         table = table.drop(columns=["__status"])
         write_dataframe_parquet(table, _table_file_path(store, model_id, table_id))
-        table_frames[table_id] = table
         tables.append(
             {
                 "table_id": table_id,
@@ -1838,68 +1825,7 @@ def _build_model_tabulations(
     tables.insert(0, {"table_id": "base", "label": "base", "features": [], "cell_count": 1, "skipped": False, "path": "tabulations/base.parquet", "min": base_value, "max": base_value})
     _assign_table_indexes(tables)
 
-    progress_callback(
-        {
-            "phase": "scoring",
-            "message": "Scoring tabulations...",
-            "model_id": model_id,
-            "scoring_rows": int(len(frame)),
-        }
-    )
-    tabulated = frame[["__lucidum_row_id"]].copy()
-    eta = pd.Series(base_value, index=frame.index, dtype=float)
-    missing = pd.Series(False, index=frame.index, dtype=bool)
-    for table_info in tables:
-        if table_info["table_id"] == "base" or table_info.get("skipped"):
-            continue
-        features = list(table_info.get("features") or [])
-        table_id = str(table_info["table_id"])
-        component = _component_from_table(
-            frame,
-            table_frames.get(table_id),
-            features,
-            _feature_meta_for_table(table_id, features, feature_meta, table_feature_meta),
-            np,
-            pd,
-        )
-        missing = missing | component.isna()
-        eta = eta + component.fillna(0.0)
-        safe_name = _safe_id(str(table_info["table_id"]))
-        tabulated[f"tabulated_linear__{safe_name}"] = component
-
-    finite_eta = (~missing) & np.isfinite(eta.astype(float))
-    prediction = pd.Series(np.nan, index=frame.index, dtype=float)
-    if finite_eta.any():
-        inverse = estimator.link_instance.inverse(eta.loc[finite_eta].to_numpy(dtype=float))
-        prediction.loc[finite_eta] = pd.to_numeric(inverse, errors="coerce")
-    denominator_column = str(manifest.get("denominator_column") or "")
-    if denominator_column and denominator_column in frame.columns:
-        denominator = pd.to_numeric(frame[denominator_column], errors="coerce")
-        valid_denominator = denominator.notna() & np.isfinite(denominator.astype(float)) & (denominator.astype(float) > 0)
-        prediction = prediction * denominator
-        missing = missing | ~valid_denominator
-    tabulated["glm_tabulated_prediction"] = prediction
-    tabulated["glm_tabulated_linear_prediction"] = eta.where(~missing, np.nan)
-    tabulated["glm_tabulation_missing"] = missing
-
-    mean_linear_error, linear_sd_error = _tabulation_error_metrics(
-        store,
-        model_id,
-        manifest,
-        estimator,
-        frame,
-        tabulated["glm_tabulated_linear_prediction"],
-        np,
-        pd,
-    )
-
-    write_dataframe_parquet(tabulated, store.artifact_path(model_id, "tabulated_predictions"))
     diagnostics = {
-        "mean_linear_error": mean_linear_error,
-        "linear_sd_error": linear_sd_error,
-        "scored_rows": int(finite_eta.sum()),
-        "tabulated_row_count": int(len(tabulated)),
-        "missing_tabulated_prediction_rows": int(missing.sum()),
         "estimated_spec_fields": estimated_specs,
         "estimated_base_fields": inferred_bases,
         "clipped_spec_fields": clipped_bounds,
@@ -1917,6 +1843,20 @@ def _build_model_tabulations(
         "warnings": warnings,
         "diagnostics": diagnostics,
     }
+    progress_callback(
+        {
+            "phase": "scoring",
+            "message": "Scoring tabulations...",
+            "model_id": model_id,
+            "scoring_rows": int(len(frame)),
+        }
+    )
+    manifest_payload["diagnostics"] = _rebuild_tabulated_predictions(
+        dataset,
+        store,
+        model_id,
+        manifest_payload,
+    )
     store.write_json(store.artifact_path(model_id, "tabulation_manifest"), manifest_payload)
     return manifest_payload
 
@@ -2255,6 +2195,82 @@ def _build_tabulations_impl(
 def _tabulation_manifest(store: GlmModelStore, model_id: str) -> dict[str, Any] | None:
     payload = store.read_json(store.artifact_path(model_id, "tabulation_manifest"), None)
     return payload if isinstance(payload, dict) else None
+
+
+def score_tabulations(
+    dataset: Dataset,
+    store: GlmModelStore,
+    model_id: str,
+) -> dict[str, Any]:
+    """Score every source row from a GLM's persisted rating tables."""
+
+    model_ref = _TabulationModelRef("glm", str(model_id), f"glm:{model_id}", str(model_id))
+    if should_isolate_glm_tabulation([model_ref]):
+        return _score_tabulations_in_subprocess(dataset, model_id)
+    return _score_tabulations_impl(dataset, store, model_id)
+
+
+def _score_tabulations_impl(
+    dataset: Dataset,
+    store: GlmModelStore,
+    model_id: str,
+) -> dict[str, Any]:
+    model_id = store.validate_model_id(model_id)
+    manifest = _tabulation_manifest(store, model_id)
+    if not manifest or manifest.get("status") != "tabulated":
+        raise ValueError("Build GLM tabulations before scoring them.")
+    manifest["diagnostics"] = _rebuild_tabulated_predictions(
+        dataset,
+        store,
+        model_id,
+        manifest,
+    )
+    store.write_json(store.artifact_path(model_id, "tabulation_manifest"), manifest)
+    dataset.reload()
+    return manifest
+
+
+def _score_tabulations_in_subprocess(dataset: Dataset, model_id: str) -> dict[str, Any]:
+    with tempfile.TemporaryDirectory(prefix="lucidum-glm-tabulation-score-") as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        request_path = tmp_path / "request.json"
+        response_path = tmp_path / "response.json"
+        request_path.write_text(
+            json.dumps(
+                {
+                    "operation": "score",
+                    "dataset_path": str(dataset.path),
+                    "payload": {"model_id": model_id},
+                }
+            ),
+            encoding="utf-8",
+        )
+        completed = subprocess.run(
+            [sys.executable, "-m", "py_lucidum.tools.glm.tabulation_worker", str(request_path), str(response_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+            env={
+                **os.environ,
+                "PY_LUCIDUM_SKIP_LIGHTGBM_PRELOAD": "1",
+                "PY_LUCIDUM_GLM_TABULATION_WORKER": "1",
+            },
+        )
+        if completed.returncode != 0:
+            detail = (completed.stdout + completed.stderr).strip()
+            raise RuntimeError(
+                f"GLM tabulation scoring worker exited unexpectedly with code {completed.returncode}. {detail}".strip()
+            )
+        if not response_path.exists():
+            raise RuntimeError("GLM tabulation scoring worker exited without writing a response")
+        response = json.loads(response_path.read_text(encoding="utf-8"))
+    if not response.get("ok"):
+        raise RuntimeError(str(response.get("error") or "GLM tabulation scoring worker failed"))
+    result = response.get("result")
+    if not isinstance(result, dict):
+        raise RuntimeError("GLM tabulation scoring worker returned an invalid response")
+    dataset.reload()
+    return result
 
 
 def _tabulation_model_status(store: GlmModelStore, model: dict[str, Any]) -> dict[str, Any]:
@@ -2724,6 +2740,32 @@ def _save_workbook_atomically(workbook: Any, output_path: Path) -> None:
             temp_path.unlink()
 
 
+def _tabulation_index_summary(tables: list[dict[str, Any]], scale: str) -> dict[str, Any]:
+    columns = [
+        {"key": "number", "label": "#"},
+        {"key": "table_name", "label": "Table name"},
+        {"key": "dim", "label": "Dim"},
+        {"key": "cells", "label": "Cells"},
+        {"key": "min", "label": "Min"},
+        {"key": "max", "label": "Max"},
+        {"key": "span", "label": "Span"},
+    ]
+    rows = []
+    for fallback_index, table in enumerate(tables, start=1):
+        rows.append(
+            {
+                "number": int(table.get("index") or fallback_index),
+                "table_name": str(table.get("label") or table.get("table_id") or ""),
+                "dim": len(list(table.get("features") or [])),
+                "cells": table.get("cell_count"),
+                "min": _display_export_value(table.get("min"), scale),
+                "max": _display_export_value(table.get("max"), scale),
+                "span": _display_export_span(table.get("min"), table.get("max"), scale),
+            }
+        )
+    return {"columns": columns, "rows": rows}
+
+
 def export_tabulations(store: GlmModelStore, payload: dict[str, Any], *, gbm_store: Any = None) -> dict[str, Any]:
     model_refs = _requested_model_refs(payload)
     if len(model_refs) != 1:
@@ -2742,6 +2784,7 @@ def export_tabulations(store: GlmModelStore, payload: dict[str, Any], *, gbm_sto
     )
     if not tables:
         raise ValueError("Build model tabulations before exporting to XLSX.")
+    index_summary = _tabulation_index_summary(tables, scale)
 
     Workbook, Alignment, Border, Font, PatternFill, Side, get_column_letter = _openpyxl_dependencies()
     workbook = Workbook()
@@ -2756,15 +2799,15 @@ def export_tabulations(store: GlmModelStore, payload: dict[str, Any], *, gbm_sto
     left_aligned = Alignment(horizontal="left")
     right_aligned = Alignment(horizontal="right")
 
-    index_headers = ["#", "Table name", "Dim", "Cells", "Min", "Max", "Span"]
+    index_headers = [str(column["label"]) for column in index_summary["columns"]]
     index_sheet.append(index_headers)
     _style_header_row(index_sheet, 1, fill=header_fill, font=header_font, border=border, alignment=centered)
     index_sheet.cell(row=1, column=2).alignment = left_aligned
     index_sheet.freeze_panes = "A2"
     index_sheet.sheet_view.showGridLines = False
 
-    for table in tables:
-        table_index = int(table.get("index") or len(workbook.worksheets))
+    for table, summary_row in zip(tables, index_summary["rows"], strict=True):
+        table_index = int(summary_row["number"])
         sheet_name = str(table_index)
         worksheet = workbook.create_sheet(sheet_name)
         worksheet.sheet_view.showGridLines = False
@@ -2772,13 +2815,7 @@ def export_tabulations(store: GlmModelStore, payload: dict[str, Any], *, gbm_sto
         worksheet["A1"].hyperlink = _worksheet_hyperlink("index")
         worksheet["A1"].style = "Hyperlink"
 
-        features = list(table.get("features") or [])
-        dim = len(features)
-        cells = table.get("cell_count")
-        min_value = _display_export_value(table.get("min"), scale)
-        max_value = _display_export_value(table.get("max"), scale)
-        span = _display_export_span(table.get("min"), table.get("max"), scale)
-        index_sheet.append([table_index, table.get("label") or table.get("table_id") or "", dim, cells, min_value, max_value, span])
+        index_sheet.append([summary_row[str(column["key"])] for column in index_summary["columns"]])
         index_cell = index_sheet.cell(row=index_sheet.max_row, column=1)
         index_cell.hyperlink = _worksheet_hyperlink(sheet_name)
         index_cell.style = "Hyperlink"
@@ -2833,6 +2870,7 @@ def export_tabulations(store: GlmModelStore, payload: dict[str, Any], *, gbm_sto
         "model_ref": model_ref.ref,
         "scale": scale,
         "table_count": len(tables),
+        "index": index_summary,
     }
 
 
@@ -2842,6 +2880,7 @@ __all__ = [
     "export_tabulations",
     "rebase_tabulation",
     "reset_tabulation_rebase",
+    "score_tabulations",
     "tabulation_config",
     "tabulation_plot",
     "tabulation_table",

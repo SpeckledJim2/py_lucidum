@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import importlib.util
+import inspect
 import json
 import re
 import shutil
@@ -15,6 +16,7 @@ from typing import Any
 
 import duckdb
 
+from py_lucidum import score_glm_tabulations
 from py_lucidum.app import create_app
 from py_lucidum.core import Dataset, sql_literal
 from py_lucidum.core.features import load_features
@@ -22,6 +24,7 @@ from py_lucidum.tools.gbm.store import GbmModelStore
 from py_lucidum.tools.gbm.tabulation import build_gbm_tabulations
 from py_lucidum.tools.glm.store import GlmModelStore
 from py_lucidum.tools.glm.tabulation import build_tabulations
+from py_lucidum.tools.glm import tabulation as glm_tabulation_module
 from py_lucidum.tools.glm.overlay import stop_persistent_glm_overlay_worker
 from py_lucidum.tools.line_bar.importance import gbm_model_importance, glm_model_importance
 
@@ -32,6 +35,7 @@ GLM_SCRIPT = EXAMPLES / "01_external_glm_artifacts_demo.py"
 GBM_SCRIPT = EXAMPLES / "01_external_gbm_artifacts_demo.py"
 GLM_REPORT_SCRIPT = EXAMPLES / "02_external_glm_report_demo.py"
 GBM_REPORT_SCRIPT = EXAMPLES / "02_external_gbm_report_demo.py"
+GLM_SUMMARY_SCRIPT = EXAMPLES / "03_external_glm_summary_report_demo.py"
 GBM_SUMMARY_SCRIPT = EXAMPLES / "03_external_gbm_summary_report_demo.py"
 EXAMPLE_HELPERS = EXAMPLES / "external_model_helpers.py"
 EXPORT_ADAPTER = EXAMPLES / "lucidum_export.py"
@@ -184,7 +188,7 @@ def write_example_configs(root: Path, dataset_path: Path) -> tuple[Path, Path, P
     return glm_path, gbm_path, feature_spec_path
 
 
-def write_report_configs(root: Path) -> tuple[Path, Path, Path]:
+def write_report_configs(root: Path) -> tuple[Path, Path, Path, Path]:
     import yaml
 
     defaults = {
@@ -261,7 +265,8 @@ def write_report_configs(root: Path) -> tuple[Path, Path, Path]:
     }
     glm_path = root / "config_glm_report.yaml"
     gbm_path = root / "config_gbm_report.yaml"
-    summary_path = root / "config_gbm_summary_report.yaml"
+    glm_summary_path = root / "config_glm_summary_report.yaml"
+    gbm_summary_path = root / "config_gbm_summary_report.yaml"
     kpi_path = root / "kpi_spec.csv"
     glm_path.write_text(yaml.safe_dump(glm, sort_keys=False), encoding="utf-8")
     gbm_path.write_text(yaml.safe_dump(gbm, sort_keys=False), encoding="utf-8")
@@ -270,7 +275,20 @@ def write_report_configs(root: Path) -> tuple[Path, Path, Path]:
         "FINANCIAL,Premium per latitude,PREMIUM,LATITUDE,0,currency\n",
         encoding="utf-8",
     )
-    summary_path.write_text(
+    glm_summary_path.write_text(
+        yaml.safe_dump(
+            {
+                "build_config": "config_glm.yaml",
+                "feature_spec": "feature_spec.csv",
+                "kpi_spec": kpi_path.name,
+                "report": {"name": "model_summary", "title": "External GLM summary"},
+                "output": {"directory": "reports"},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    gbm_summary_path.write_text(
         yaml.safe_dump(
             {
                 "build_config": "config_gbm.yaml",
@@ -282,7 +300,7 @@ def write_report_configs(root: Path) -> tuple[Path, Path, Path]:
         ),
         encoding="utf-8",
     )
-    return glm_path, gbm_path, summary_path
+    return glm_path, gbm_path, glm_summary_path, gbm_summary_path
 
 
 def report_payload(path: Path) -> dict[str, Any]:
@@ -327,6 +345,13 @@ def load_model_helpers() -> Any:
 
 
 class ExternalModelExampleTests(unittest.TestCase):
+    def test_checked_in_glm_demo_uses_gamma_with_log_link(self) -> None:
+        import yaml
+
+        config = yaml.safe_load((EXAMPLES / "config_glm.yaml").read_text(encoding="utf-8"))
+        self.assertEqual(config["model"]["family"], "gamma")
+        self.assertEqual(config["model"]["link"], "log")
+
     def test_external_builders_do_not_import_py_lucidum(self) -> None:
         for script in (GLM_SCRIPT, GBM_SCRIPT, EXAMPLE_HELPERS, EXPORT_ADAPTER):
             tree = ast.parse(script.read_text(encoding="utf-8"), filename=str(script))
@@ -408,8 +433,13 @@ class ExternalModelExampleTests(unittest.TestCase):
             for step in range(1, 6):
                 self.assertIn(f"# %% {step}.", source)
 
+    def test_glm_tabulation_rescoring_does_not_call_fitted_prediction(self) -> None:
+        source = inspect.getsource(glm_tabulation_module._rebuild_tabulated_predictions)
+        self.assertNotIn(".predict(", source)
+        self.assertNotIn(".linear_predictor(", source)
+
     def test_report_scripts_keep_a_short_linear_teaching_flow(self) -> None:
-        for script in (GLM_REPORT_SCRIPT, GBM_REPORT_SCRIPT, GBM_SUMMARY_SCRIPT):
+        for script in (GLM_REPORT_SCRIPT, GBM_REPORT_SCRIPT, GLM_SUMMARY_SCRIPT, GBM_SUMMARY_SCRIPT):
             source = script.read_text(encoding="utf-8")
             tree = ast.parse(source, filename=str(script))
             self.assertFalse(
@@ -420,7 +450,11 @@ class ExternalModelExampleTests(unittest.TestCase):
                 for node in ast.walk(tree)
                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
             ]
-            if script == GBM_SUMMARY_SCRIPT:
+            if script == GLM_SUMMARY_SCRIPT:
+                self.assertEqual(calls.count("build_glm_tabulations"), 1)
+                self.assertEqual(calls.count("export_glm_tabulations"), 1)
+                self.assertEqual(calls.count("write_glm_summary_report"), 1)
+            elif script == GBM_SUMMARY_SCRIPT:
                 self.assertEqual(calls.count("gbm_evaluation_chart"), 1)
                 self.assertEqual(calls.count("write_gbm_summary_report"), 1)
             else:
@@ -428,6 +462,8 @@ class ExternalModelExampleTests(unittest.TestCase):
                 self.assertEqual(calls.count("write_echarts_report"), 1)
             for step in range(1, 4):
                 self.assertIn(f"# %% {step}.", source)
+            if script == GLM_SUMMARY_SCRIPT:
+                self.assertIn("# %% 4.", source)
             self.assertNotIn("create_app", source)
             self.assertNotIn("run_app", source)
             self.assertNotIn("__lucidum_", source)
@@ -708,12 +744,13 @@ COPY (
             # The 02 scripts name the model written by 01.  Pointing Lucidum's
             # active files elsewhere proves report generation does not silently
             # switch to whichever model happens to be active.
-            glm_report_config, gbm_report_config, gbm_summary_config = write_report_configs(root)
+            glm_report_config, gbm_report_config, glm_summary_config, gbm_summary_config = write_report_configs(root)
             glm_store.write_json(glm_store.active_path, {"model_id": "NOT-THE-REPORT-MODEL"})
             gbm_store.write_json(gbm_store.active_path, {"model_id": "NOT-THE-REPORT-MODEL"})
             try:
                 glm_report_run = run_builder(GLM_REPORT_SCRIPT, glm_report_config)
                 gbm_report_run = run_builder(GBM_REPORT_SCRIPT, gbm_report_config)
+                glm_summary_run = run_builder(GLM_SUMMARY_SCRIPT, glm_summary_config)
                 gbm_summary_run = run_builder(GBM_SUMMARY_SCRIPT, gbm_summary_config)
             finally:
                 glm_store.activate_model(GLM_MODEL_ID)
@@ -723,20 +760,77 @@ COPY (
             glm_report_path = report_dir / "motor_fixture_external_glm_validation_actual_vs_expected.html"
             gbm_report_path = report_dir / "motor_fixture_external_gbm_validation_actual_vs_expected.html"
             shap_report_path = report_dir / "motor_fixture_external_gbm_all_rows_rebased_shap.html"
-            summary_report_path = report_dir / "motor_fixture_external_gbm_model_summary.html"
+            glm_summary_report_path = report_dir / "motor_fixture_external_glm_model_summary.html"
+            gbm_summary_report_path = report_dir / "motor_fixture_external_gbm_model_summary.html"
             self.assertIn(str(glm_report_path.resolve()), glm_report_run.stdout)
             self.assertIn(str(gbm_report_path.resolve()), gbm_report_run.stdout)
             self.assertTrue(shap_report_path.is_file())
-            self.assertIn(str(summary_report_path.resolve()), gbm_summary_run.stdout)
+            self.assertIn(str(glm_summary_report_path.resolve()), glm_summary_run.stdout)
+            self.assertIn(str(gbm_summary_report_path.resolve()), gbm_summary_run.stdout)
 
             glm_report = report_payload(glm_report_path)
             gbm_report = report_payload(gbm_report_path)
             shap_report = report_payload(shap_report_path)
-            summary_report = report_payload(summary_report_path)
+            glm_summary_report = report_payload(glm_summary_report_path)
+            summary_report = report_payload(gbm_summary_report_path)
             self.assertEqual(glm_report["metadata"]["model"], str(glm_dir.resolve()))
             self.assertEqual(gbm_report["metadata"]["model"], str(gbm_dir.resolve()))
             self.assertEqual(shap_report["metadata"]["model"], str(gbm_dir.resolve()))
             self.assertEqual(summary_report["metadata"]["model"], str(gbm_dir.resolve()))
+            self.assertEqual(glm_summary_report["metadata"]["model"], str(glm_dir.resolve()))
+            self.assertEqual(
+                [row["sample"] for row in glm_summary_report["performance"]["rows"]],
+                ["Training", "Test", "Validation"],
+            )
+            self.assertEqual(glm_summary_report["performance"]["prediction_source"], "glm_prediction")
+            self.assertTrue(all(row["rmse"] != "—" for row in glm_summary_report["performance"]["rows"]))
+            self.assertTrue(glm_summary_report["coefficients"]["rows"])
+            self.assertEqual(
+                [column["label"] for column in glm_summary_report["coefficients"]["columns"]],
+                ["#", "term", "estimate", "std.error", "p.value"],
+            )
+            self.assertEqual(glm_summary_report["tabulations"]["path"], str((glm_dir / "tabulations" / f"{GLM_MODEL_ID}_tabulations_linear.xlsx").resolve()))
+            self.assertTrue((glm_dir / "tabulated_predictions.parquet").is_file())
+            self.assertTrue(Path(glm_summary_report["tabulations"]["path"]).is_file())
+            from openpyxl import load_workbook
+
+            workbook = load_workbook(glm_summary_report["tabulations"]["path"], data_only=True, read_only=True)
+            try:
+                index_rows = list(workbook["index"].iter_rows(values_only=True))
+            finally:
+                workbook.close()
+            self.assertEqual(
+                list(index_rows[0]),
+                [column["label"] for column in glm_summary_report["tabulations"]["columns"]],
+            )
+            html_index_rows = [
+                [row[column["key"]] for column in glm_summary_report["tabulations"]["columns"]]
+                for row in glm_summary_report["tabulations"]["rows"]
+            ]
+            self.assertEqual(len(index_rows) - 1, len(html_index_rows))
+            for workbook_row, html_row in zip(index_rows[1:], html_index_rows, strict=True):
+                for workbook_value, html_value in zip(workbook_row, html_row, strict=True):
+                    if isinstance(workbook_value, float) or isinstance(html_value, float):
+                        self.assertAlmostEqual(float(workbook_value), float(html_value), places=12)
+                    else:
+                        self.assertEqual(workbook_value, html_value)
+            con = duckdb.connect(database=":memory:")
+            try:
+                before_rescore = con.execute(
+                    f"SELECT * FROM read_parquet({sql_literal(str(glm_dir / 'tabulated_predictions.parquet'))}) ORDER BY __lucidum_row_id"
+                ).fetchall()
+            finally:
+                con.close()
+            rescored = score_glm_tabulations(dataset_path, model_id=GLM_MODEL_ID)
+            con = duckdb.connect(database=":memory:")
+            try:
+                after_rescore = con.execute(
+                    f"SELECT * FROM read_parquet({sql_literal(str(glm_dir / 'tabulated_predictions.parquet'))}) ORDER BY __lucidum_row_id"
+                ).fetchall()
+            finally:
+                con.close()
+            self.assertEqual(json.dumps(before_rescore), json.dumps(after_rescore))
+            self.assertEqual(rescored["model_folder"], glm_dir.resolve())
             self.assertEqual(
                 [row["sample"] for row in summary_report["performance"]["rows"]],
                 ["Training", "Test", "Validation"],

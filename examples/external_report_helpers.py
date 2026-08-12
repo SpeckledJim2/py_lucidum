@@ -191,6 +191,39 @@ def load_gbm_summary_settings(
     return settings, performance, importance, parameters
 
 
+def load_glm_summary_settings(path: Path) -> dict[str, Any]:
+    """Load the paths and labels used by the standalone GLM summary."""
+
+    report_config = _read_yaml(path)
+    build_path = _resolve(path.parent, report_config["build_config"])
+    build_config = _read_yaml(build_path)
+    dataset_config = build_config["dataset"]
+    report = dict(report_config["report"])
+    return {
+        "model_id": str(build_config["model"]["id"]),
+        "dataset_path": _resolve(build_path.parent, dataset_config["path"]),
+        "feature_spec_path": _resolve(path.parent, report_config["feature_spec"]),
+        "kpi_spec_path": _resolve(path.parent, report_config["kpi_spec"]),
+        "report_name": str(report["name"]),
+        "report_title": str(report["title"]),
+        "output_directory": _resolve(path.parent, report_config["output"]["directory"]),
+        "config_path": path,
+        "build_config_path": build_path,
+    }
+
+
+def glm_summary_header(settings: dict[str, Any], script_file: str) -> dict[str, Any]:
+    """Return the small provenance block for the standalone GLM summary."""
+
+    return {
+        "feature spec": settings["feature_spec_path"].name,
+        "KPI spec": settings["kpi_spec_path"].name,
+        "report config": settings["config_path"].name,
+        "build config": settings["build_config_path"].name,
+        "script run": Path(script_file).name,
+    }
+
+
 def gbm_summary_header(settings: dict[str, Any], script_file: str) -> dict[str, Any]:
     """Return the provenance block for the standalone GBM summary."""
 

@@ -8,12 +8,14 @@ people who do not want to build models inside the Lucidum application.
 - The export adapter writes and installs Lucidum-compatible model artifacts.
 - The `02` scripts use Lucidum as a Python chart library to create static,
   interactive ECharts reports. They do not start the Lucidum app or a server.
+- The GLM `03` script builds and scores persisted rating tables with Lucidum's
+  public Python API, exports them to XLSX, and creates a static model summary.
 - The GBM `03` script creates a single static model-summary page from the same
   externally built artifacts.
 - The installed artifacts can also be opened in Lucidum's normal model,
   prediction, tabulation, tree, evaluation, and SHAP views.
 
-The five numbered scripts are the files intended for users to read and adapt.
+The six numbered scripts are the files intended for users to read and adapt.
 The helper modules contain routine path handling and compatibility machinery.
 
 ## Install and run
@@ -29,6 +31,7 @@ Run a build before its corresponding report:
 ```bash
 python examples/01_external_glm_artifacts_demo.py
 python examples/02_external_glm_report_demo.py
+python examples/03_external_glm_summary_report_demo.py
 
 python examples/01_external_gbm_artifacts_demo.py
 python examples/02_external_gbm_report_demo.py
@@ -82,6 +85,10 @@ helper.
 The formula text may contain Python-style `#` comments. The example removes
 comments before fitting but preserves the original commented formula in the
 saved artifacts.
+
+The supplied demo uses the Gamma family with a log link. Its 03 export
+therefore selects exponential scale automatically and writes the `_exp.xlsx`
+workbook.
 
 With a denominator, the GLM fits `response_numerator / denominator` and uses
 the denominator as sample weight. It saves numerator-scale `glm_prediction`
@@ -166,9 +173,10 @@ sidecar are preserved. `replace_existing: false` rejects an existing target;
 `install: false` writes only the portable copy. Portable artifacts, installed
 sidecars, and generated reports are local ignored files.
 
-Lucidum may later add tabulations beneath the installed model. The external
-builder does not fabricate them: successful Lucidum-side tabulation proves
-that the externally saved estimator or tree table can be used normally.
+The 01 builder does not fabricate tabulations. The 03 GLM script deliberately
+adds them through the same public tabulation and scoring implementation used by
+the application, proving that the externally saved estimator remains useful
+beyond passive model discovery.
 
 ## The 02 static HTML reports
 
@@ -187,6 +195,7 @@ The supplied configs create:
 ```text
 local/external_reports/
 ├── motor_premiums_external_glm_validation_actual_vs_expected.html
+├── motor_premiums_external_glm_model_summary.html
 ├── motor_premiums_external_gbm_validation_actual_vs_expected.html
 ├── motor_premiums_external_gbm_all_rows_rebased_shap.html
 └── motor_premiums_external_gbm_model_summary.html
@@ -311,6 +320,53 @@ All three supplied reports show importance. The GLM and GBM Actual-vs-Expected
 reports retain scenario order; only the GBM rebased-SHAP report sorts by
 descending importance.
 
+## The 03 GLM tabulation and model summary
+
+`03_external_glm_summary_report_demo.py` is a linear four-section `# %%`
+example: load YAML, build and score the rating tables, export XLSX, and write
+one HTML page. It does not start the Lucidum application and always names the
+model ID in the matching 01 build YAML rather than following
+`active_model.json`.
+
+`config_glm_summary_report.yaml` contains:
+
+- `build_config`: the matching 01 GLM build YAML.
+- `feature_spec`: the Feature Specification supplying tabulation Base, min,
+  max, and banding values.
+- `kpi_spec`: the KPI Specification used for response-unit formatting.
+- `report.name` and `report.title`: the filename suffix and visible heading.
+- `output.directory`: the report folder.
+
+The combined `build_glm_tabulations(...)` call creates the formula-driven
+rating tables and immediately scores every source row from the persisted table
+Parquets. `score_glm_tabulations(...)` performs only that persisted-table
+scoring step when rating tables already exist; it does not call the fitted
+estimator's prediction method. Both operations write the normal
+`tabulations/tabulation_manifest.json`, `tabulations/*.parquet`, and
+`tabulated_predictions.parquet` artifacts in the exact model folder.
+
+`export_glm_tabulations(..., scale="auto")` inspects the fitted estimator's
+resolved link. It exports exponential values for a log link and linear values
+for all other links, including a configuration whose original `link` field was
+`auto`. The workbook is named `<model-id>_tabulations_exp.xlsx` or
+`<model-id>_tabulations_linear.xlsx`. Its first `index` worksheet and the HTML
+Tabulation summary use the same column and row values.
+
+The HTML header shows full source, model-folder, and tabulated-score paths. The
+Model performance table is intentionally based on the fitted
+`glm_prediction`, while the separately tabulated score remains available to
+Lucidum. Training, Test, and Validation are matched case-insensitively from the
+literal `SAMPLE` column. Every family shows deviance and deviance explained;
+binomial models also show weighted AUC, Gini, and log loss, while other models
+show weighted RMSE and MAE. Denominator models evaluate rates with denominator
+weights and show weighted response/prediction summaries.
+
+The coefficient table preserves `coefficients.parquet` order and the visible
+Lucidum columns `#`, `term`, `estimate`, `std.error`, and `p.value`, including
+blank inference cells for penalized models and the same p-value significance
+bands. The final section reproduces the workbook index and links to the full
+absolute XLSX path.
+
 ## The 03 GBM model summary
 
 `03_external_gbm_summary_report_demo.py` is a separate three-section `# %%`
@@ -372,6 +428,19 @@ accepts `chart_height`, whose default is 600 pixels.
 specification for one exact named model. `py_lucidum.write_gbm_summary_report`
 writes the four-section portable GBM summary page. Both functions read saved
 artifacts only and do not require a running Lucidum server.
+
+The public GLM tabulation boundary consists of:
+
+- `py_lucidum.build_glm_tabulations(dataset_path, model_id=...,
+  feature_spec_path=...)`
+- `py_lucidum.score_glm_tabulations(dataset_path, model_id=...)`
+- `py_lucidum.export_glm_tabulations(dataset_path, model_id=...,
+  scale="auto")`
+- `py_lucidum.write_glm_summary_report(...)`
+
+Build, re-score, application rebasing, and external re-scoring share the same
+persisted-table scorer. These are tabulation and reporting APIs, not a public
+API for writing a newly trained fitted model.
 
 This is a public reporting boundary, whereas `lucidum_export.py` is currently
 example compatibility machinery rather than a public model-writer API. The

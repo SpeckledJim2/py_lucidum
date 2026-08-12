@@ -9,8 +9,8 @@ model:
   id: EXTERNAL_BUILD-config-glm
   label: EXTERNAL_BUILD config GLM
   formula_path: external_glm_formula.txt
-  family: normal
-  link: auto
+  family: gamma
+  link: log
   fit_intercept: true
   regularization:
     alpha: 0.0

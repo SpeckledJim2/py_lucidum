@@ -371,9 +371,11 @@ interactive ECharts reports from them. The 01 scripts use ordinary
 `glum`/LightGBM code and do not import `py_lucidum`; their adapter writes and
 installs the current artifact format. The short 02 scripts use Lucidum only as
 a chart library and name the exact model created by the matching build YAML.
-The GBM 03 script creates a single model-summary page containing split
-performance, SHAP-preferred feature importance, saved LightGBM parameters, and
-the same Evaluation Log chart used in Lucidum.
+The GLM 03 script uses Lucidum's public tabulation engine to build rating
+tables, score the source rows, export XLSX, and create a model-summary page.
+The GBM 03 script creates a model-summary page containing split performance,
+SHAP-preferred feature importance, saved LightGBM parameters, and the same
+Evaluation Log chart used in Lucidum.
 
 From a source checkout:
 
@@ -382,6 +384,7 @@ python -m pip install -e ".[glm,gbm,examples]"
 
 python examples/01_external_glm_artifacts_demo.py
 python examples/02_external_glm_report_demo.py
+python examples/03_external_glm_summary_report_demo.py
 
 python examples/01_external_gbm_artifacts_demo.py
 python examples/02_external_gbm_report_demo.py
@@ -396,7 +399,8 @@ ordering, output location, and chart height.
 See [External model builds and HTML
 reports](docs/external-model-builds-and-reports.md) for the complete 01/02/03
 workflow, every YAML field, row-identity and installation contracts, artifact
-trees, report controls, feature-importance rules, and GBM summary calculations.
+trees, report controls, GLM tabulation/scoring APIs, feature-importance rules,
+and summary calculations.
 
 ## Filters
 
