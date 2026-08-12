@@ -114,6 +114,12 @@ def best_metrics_from_evaluation(evaluation: Any, metric_name: str, best_iterati
     return {
         "training": evaluation_metric_for_dataset(evaluation, metric_name, best_iteration, ("training", "train")),
         "test": evaluation_metric_for_dataset(evaluation, metric_name, best_iteration, ("test",)),
+        "validation": evaluation_metric_for_dataset(
+            evaluation,
+            metric_name,
+            best_iteration,
+            ("validation", "valid"),
+        ),
     }
 
 

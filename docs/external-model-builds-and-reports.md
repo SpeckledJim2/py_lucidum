@@ -8,10 +8,12 @@ people who do not want to build models inside the Lucidum application.
 - The export adapter writes and installs Lucidum-compatible model artifacts.
 - The `02` scripts use Lucidum as a Python chart library to create static,
   interactive ECharts reports. They do not start the Lucidum app or a server.
+- The GBM `03` script creates a single static model-summary page from the same
+  externally built artifacts.
 - The installed artifacts can also be opened in Lucidum's normal model,
   prediction, tabulation, tree, evaluation, and SHAP views.
 
-The four numbered scripts are the files intended for users to read and adapt.
+The five numbered scripts are the files intended for users to read and adapt.
 The helper modules contain routine path handling and compatibility machinery.
 
 ## Install and run
@@ -30,6 +32,7 @@ python examples/02_external_glm_report_demo.py
 
 python examples/01_external_gbm_artifacts_demo.py
 python examples/02_external_gbm_report_demo.py
+python examples/03_external_gbm_summary_report_demo.py
 ```
 
 Each script accepts one optional YAML path. With no argument, it uses its
@@ -185,7 +188,8 @@ The supplied configs create:
 local/external_reports/
 ├── motor_premiums_external_glm_validation_actual_vs_expected.html
 ├── motor_premiums_external_gbm_validation_actual_vs_expected.html
-└── motor_premiums_external_gbm_all_rows_rebased_shap.html
+├── motor_premiums_external_gbm_all_rows_rebased_shap.html
+└── motor_premiums_external_gbm_model_summary.html
 ```
 
 Each header puts the full source path and installed model-folder path on their
@@ -307,6 +311,55 @@ All three supplied reports show importance. The GLM and GBM Actual-vs-Expected
 reports retain scenario order; only the GBM rebased-SHAP report sorts by
 descending importance.
 
+## The 03 GBM model summary
+
+`03_external_gbm_summary_report_demo.py` is a separate three-section `# %%`
+example: load the YAML and saved results, create the Evaluation Log chart, and
+write one HTML file. It does not start Lucidum and it always reads the exact
+model named by `config_gbm.yaml`, even when a different model is active.
+
+`config_gbm_summary_report.yaml` contains:
+
+- `build_config`: the matching 01 GBM build YAML.
+- `kpi_spec`: the KPI Specification used to format Actual and prediction.
+- `report.name` and `report.title`: the filename suffix and visible heading.
+- `output.directory` and `output.chart_height`: the report folder and
+  Evaluation Log height; height defaults to 600 pixels.
+
+Relative paths resolve from the summary YAML. The KPI row must exactly match
+the build's `response_numerator` and denominator. The supplied PREMIUM build
+therefore displays Actual and prediction as whole-pound currency values. A
+missing exact match stops with a clear error rather than silently choosing a
+different format.
+
+The Model performance table shows Training, Test, and Validation. It includes
+only rows joined to a saved prediction with a finite response and, when a
+denominator is configured, a finite positive denominator. Without a
+denominator, Actual and prediction are average row values. With one, they are
+numerator sums divided by the denominator sum and the table also shows that
+sum. Training and Test show the configured LightGBM metric at the saved best
+iteration. After the single all-row scoring pass, the build calculates the
+same configured metric from the already-created Validation predictions and
+saves it as one point at the best iteration. Validation is never passed to
+training or early stopping, and it does not create a second prediction pass.
+Older models without this saved point continue to show `—`. When the configured
+metric is MAPE, performance cells and evaluation-chart values are displayed as
+percentages while the saved metric data remains in LightGBM's original decimal
+form.
+
+The Feature importance table contains every saved model feature, not just a
+report scenario. When saved SHAP values are available, it shows rank, feature,
+mean absolute SHAP formatted as a percentage, and share of total whole-model
+SHAP importance. Otherwise the complete table shows LightGBM gain and its share
+of total gain. Model parameters are read from the LightGBM-compatible
+`parameters.json` and retain their exact parameter names.
+
+The Model evaluation chart uses the same ECharts option builder as Lucidum's
+Features and Parameters screen. It shows the full saved train/test history and
+one Validation marker at the best iteration, together with the metric, test
+result, legend, and hover tooltips. The static report intentionally has no
+tail-zoom or recalculation controls.
+
 ## Direct reporting API
 
 `py_lucidum.line_bar_chart(...)` returns one serializable Lucidum Line/Bar
@@ -314,6 +367,11 @@ chart specification. `py_lucidum.write_echarts_report(...)` combines chart
 specifications into a self-contained report, and `report_filename(...)`
 creates the standard understandable output name. `write_echarts_report` also
 accepts `chart_height`, whose default is 600 pixels.
+
+`py_lucidum.gbm_evaluation_chart(...)` returns the saved Evaluation Log chart
+specification for one exact named model. `py_lucidum.write_gbm_summary_report`
+writes the four-section portable GBM summary page. Both functions read saved
+artifacts only and do not require a running Lucidum server.
 
 This is a public reporting boundary, whereas `lucidum_export.py` is currently
 example compatibility machinery rather than a public model-writer API. The

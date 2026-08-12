@@ -251,6 +251,126 @@ def require_columns(data: pd.DataFrame, names: list[str]) -> None:
         raise ValueError(f"Missing columns: {', '.join(missing)}")
 
 
+def evaluate_validation_metric(
+    *,
+    actual: Any,
+    prediction: Any,
+    parameters: dict[str, Any],
+    evaluation: dict[str, dict[str, list[float | None]]],
+    best_iteration: int,
+) -> str | None:
+    """Calculate one Validation metric from predictions already made.
+
+    LightGBM evaluates its own metric definition, but it does not score the
+    feature data again.  This keeps the result exact for whichever LightGBM
+    metric is configured without adding Validation to fitting or early
+    stopping.
+    """
+
+    metric = str(parameters.get("metric") or "").strip().lower()
+    metric_model = None
+    try:
+        import lightgbm as lgb
+
+        actual_values = np.asarray(actual, dtype="float64")
+        prediction_values = np.asarray(prediction, dtype="float64")
+        if actual_values.shape != prediction_values.shape or actual_values.size == 0:
+            raise ValueError("Validation actuals and predictions must have the same non-zero length")
+        if not bool(np.isfinite(actual_values).all() and np.isfinite(prediction_values).all()):
+            raise ValueError("Validation actuals and predictions must be finite")
+
+        raw_prediction = _prediction_to_raw_score(
+            prediction_values,
+            str(parameters.get("objective") or "regression").strip().lower(),
+            parameters,
+        )
+        metric_data = lgb.Dataset(
+            np.arange(actual_values.size, dtype="float64").reshape(-1, 1),
+            label=actual_values,
+            init_score=raw_prediction,
+            free_raw_data=False,
+            params={"min_data_in_leaf": 1, "min_data_in_bin": 1, "verbosity": -1},
+        )
+        metric_model = lgb.Booster(
+            params=_metric_parameters(parameters),
+            train_set=metric_data,
+        )
+        results = metric_model.eval_train()
+        selected = next(
+            (
+                result
+                for result in results
+                if str(result[1] if len(result) > 1 else "").strip().lower()
+                == metric
+            ),
+            None,
+        )
+        if selected is None:
+            raise ValueError(f"LightGBM returned no {metric} result")
+
+        value = float(selected[2])
+        if not np.isfinite(value):
+            raise ValueError(f"LightGBM returned a non-finite {metric} result")
+
+        values: list[float | None] = [None] * max(0, int(best_iteration) - 1)
+        values.append(value)
+        evaluation.setdefault("validation", {})[str(selected[1])] = values
+        return None
+    except Exception as exc:
+        return f"Validation {metric} metric could not be calculated: {exc}"
+    finally:
+        free_dataset = getattr(metric_model, "free_dataset", None)
+        if callable(free_dataset):
+            free_dataset()
+
+
+def _prediction_to_raw_score(
+    prediction: np.ndarray,
+    objective: str,
+    parameters: dict[str, Any],
+) -> np.ndarray:
+    """Undo LightGBM's objective transform for metric-only evaluation."""
+
+    if objective in {"poisson", "gamma", "tweedie"}:
+        if not bool((prediction > 0).all()):
+            raise ValueError(f"{objective} predictions must be positive")
+        return np.log(prediction)
+    if objective in {"binary", "cross_entropy"}:
+        if not bool(((prediction > 0) & (prediction < 1)).all()):
+            raise ValueError(f"{objective} predictions must be between zero and one")
+        sigmoid = float(parameters.get("sigmoid", 1.0) or 1.0)
+        return np.log(prediction / (1.0 - prediction)) / sigmoid
+    if objective == "cross_entropy_lambda":
+        if not bool((prediction > 0).all()):
+            raise ValueError("cross_entropy_lambda predictions must be positive")
+        raw = np.empty_like(prediction)
+        large = prediction > 20
+        raw[large] = prediction[large] + np.log1p(-np.exp(-prediction[large]))
+        raw[~large] = np.log(np.expm1(prediction[~large]))
+        return raw
+    return prediction
+
+
+def _metric_parameters(parameters: dict[str, Any]) -> dict[str, Any]:
+    """Keep only settings which change LightGBM's metric calculation."""
+
+    names = {
+        "objective",
+        "metric",
+        "sigmoid",
+        "alpha",
+        "fair_c",
+        "tweedie_variance_power",
+    }
+    return {
+        **{name: value for name, value in parameters.items() if name in names},
+        "boost_from_average": False,
+        "min_data_in_leaf": 1,
+        "min_data_in_bin": 1,
+        "verbosity": -1,
+    }
+
+
 def _running_as_script(script_path: Path) -> bool:
     import sys
 

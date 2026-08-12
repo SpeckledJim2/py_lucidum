@@ -20,10 +20,10 @@ training:
   early_stopping_rounds: 20
   shap_rows: 10000
   parameters:
-    objective: regression
-    metric: l2
-    learning_rate: 0.08
-    num_leaves: 3
+    objective: gamma
+    metric: mape
+    learning_rate: 0.1
+    num_leaves: 5
     min_data_in_leaf: 40
     feature_fraction: 1.0
     bagging_fraction: 1.0

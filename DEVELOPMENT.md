@@ -54,8 +54,10 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
   - `py_lucidum.run_app(...)`
   - `py_lucidum.demo_dataset_path()`
   - `py_lucidum.extract_lightgbm_interaction_group(...)`
+  - `py_lucidum.gbm_evaluation_chart(...)`
   - `py_lucidum.line_bar_chart(...)`
   - `py_lucidum.write_echarts_report(...)`
+  - `py_lucidum.write_gbm_summary_report(...)`
   - `py_lucidum.report_filename(...)`
   - `py_lucidum.app.create_app(...)`
 - External compatibility examples:
@@ -65,6 +67,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
   - `examples/01_external_gbm_artifacts_demo.py [config-path]`
   - `examples/02_external_glm_report_demo.py [config-path]`
   - `examples/02_external_gbm_report_demo.py [config-path]`
+  - `examples/03_external_gbm_summary_report_demo.py [config-path]`
   - The two executable examples are linear `# %%` scripts whose numbered
     load, prepare, fit, predict, and save sections are the user-facing surface.
   - `examples/external_model_helpers.py` contains only shared CLI, YAML,
@@ -77,9 +80,17 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
   - The 02 report scripts do import the public reporting functions. They name
     the exact model ID from the 01 config, do not start the app, and write
     self-contained static-data HTML with the shared Line/Bar renderer.
+  - The 03 GBM summary script names the exact model ID from the 01 config and
+    writes eligible split performance, KPI-formatted Actual/prediction values,
+    SHAP-preferred whole-model importance, parameters, and saved evaluation
+    history without following `active_model.json`.
   - `static/app/line-bar-chart.js` owns one-feature ECharts option generation
     for both the normal app and standalone reports. Keep it free of DOM and app
     state dependencies; report-only presentation choices are passed as options.
+  - `static/app/gbm-evaluation-chart-options.js` owns import-free Evaluation
+    Log ECharts option generation for both the GBM tool and standalone reports.
+    The app wrapper retains tail zoom and clipboard behavior; reports use the
+    full saved history without controls.
 - HTTP:
   - `GET /api/schema`
   - `POST /api/dataset-viewer/table`
@@ -297,9 +308,19 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
   offset scoring. Do not restore obsolete `feature_config.json` or training-log
   artifacts.
 - Keep the external build/report user contract in
-  `docs/external-model-builds-and-reports.md`. The 02 report helpers must load
-  the exact GLM or GBM model ID named by the matching 01 YAML, regardless of
-  the current `active_model.json` marker.
+  `docs/external-model-builds-and-reports.md`. The 02 and 03 report helpers must
+  load the exact GLM or GBM model ID named by the matching 01 YAML, regardless
+  of the current `active_model.json` marker.
+- The 03 GBM summary counts only rows joined to a saved prediction with a
+  finite Actual and, when configured, a finite positive Weight. Average-row
+  Actual/prediction values are means; weighted values are numerator sums over
+  Weight sum. Formatting requires an exact KPI Actual/Weight match. Training
+  and test metrics come from the saved primary metric at `best_iteration`.
+  Validation uses one post-scoring metric point calculated from the existing
+  all-row predictions; it is never a training or early-stopping dataset and
+  never has a full history. Older models without that point return
+  `validation: null`. Its importance table follows the same whole-model
+  SHAP-to-Gain rule as Line/Bar.
 - External report importance must reuse Line/Bar's model-wide ranked rows. GLM
   uses weighted mean absolute centred linear-predictor contribution. GBM uses
   mean-absolute SHAP for every feature when saved SHAP importance is available,

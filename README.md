@@ -365,12 +365,15 @@ py_lucidum.run_app(app, host="127.0.0.1", port=8000, open_browser=True)
 
 ## External model builds and HTML reports
 
-The checked-in examples provide a YAML-controlled 01 → 02 workflow for
+The checked-in examples provide a YAML-controlled 01 → 02 → 03 workflow for
 building GLM or GBM models outside the Lucidum application and creating static,
 interactive ECharts reports from them. The 01 scripts use ordinary
 `glum`/LightGBM code and do not import `py_lucidum`; their adapter writes and
 installs the current artifact format. The short 02 scripts use Lucidum only as
 a chart library and name the exact model created by the matching build YAML.
+The GBM 03 script creates a single model-summary page containing split
+performance, SHAP-preferred feature importance, saved LightGBM parameters, and
+the same Evaluation Log chart used in Lucidum.
 
 From a source checkout:
 
@@ -382,6 +385,7 @@ python examples/02_external_glm_report_demo.py
 
 python examples/01_external_gbm_artifacts_demo.py
 python examples/02_external_gbm_report_demo.py
+python examples/03_external_gbm_summary_report_demo.py
 ```
 
 The supplied reports include GLM and GBM validation Actual-vs-Expected charts
@@ -390,9 +394,9 @@ control sample rows, chart presentation, model-wide importance titles and
 ordering, output location, and chart height.
 
 See [External model builds and HTML
-reports](docs/external-model-builds-and-reports.md) for the complete 01/02
+reports](docs/external-model-builds-and-reports.md) for the complete 01/02/03
 workflow, every YAML field, row-identity and installation contracts, artifact
-trees, report controls, and feature-importance rules.
+trees, report controls, feature-importance rules, and GBM summary calculations.
 
 ## Filters
 
@@ -535,9 +539,9 @@ Saved `shap_summary.parquet` contains one row per trained feature with `feature`
 
 When feature interaction constraint groups are selected during training, saved `shap_values.parquet` files also include one grouped SHAP contribution column per selected grouping, named like `POSTCODE_INTERACTION_GROUP`. These grouped columns and the active model's prediction column are available in the Line and Bar Actual chooser under separate Dataset, Model predictions, and SHAP values sections.
 
-If the source dataset has a `SAMPLE` column, GBM trains on `training`, early-stops on `test`, and scores `validation` as a holdout. If `SAMPLE` is missing, the tool can create one reusable generated 60/20/20 sidecar split under the current dataset workspace in `models/gbm/`; for durable modelling, add a proper `SAMPLE` column to the original Parquet file. Models are saved under the same dataset-version workspace.
+If the source dataset has a `SAMPLE` column, GBM trains on `training`, early-stops on `test`, and scores `validation` as a holdout. After scoring all rows once, Lucidum calculates the configured LightGBM metric from the saved Validation predictions and records one Validation point at the best iteration; Validation never affects fitting or early stopping. If `SAMPLE` is missing, the tool can create one reusable generated 60/20/20 sidecar split under the current dataset workspace in `models/gbm/`; for durable modelling, add a proper `SAMPLE` column to the original Parquet file. Models are saved under the same dataset-version workspace.
 
-During training, the app shows live iteration and train/test metric progress and updates the evaluation plot while the background job runs; grid-search progress includes the current model number. The Evaluation Log keeps its live x-axis fixed to the configured iteration count, then uses the exact completed tree count and a tail-focused y-axis view so later training progress remains readable after a steep initial drop. Use the borderless `Zoom tail` toggle to switch between the full history and a focused tail view, or the adjacent copy icon to place the chart image on the clipboard. Long evaluation histories are sampled only for browser rendering; saved `evaluation.parquet` artifacts remain complete.
+During training, the app shows live iteration and train/test metric progress and updates the evaluation plot while the background job runs; grid-search progress includes the current model number. The Evaluation Log keeps its live x-axis fixed to the configured iteration count, then uses the exact completed tree count and a tail-focused y-axis view so later training progress remains readable after a steep initial drop. Completed models add only one Validation marker at the best iteration, not a Validation curve. Use the borderless `Zoom tail` toggle to switch between the full history and a focused tail view, or the adjacent copy icon to place the chart image on the clipboard. Long evaluation histories are sampled only for browser rendering; saved `evaluation.parquet` artifacts remain complete.
 
 ### Saved feature context
 

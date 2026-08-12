@@ -6,7 +6,17 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from py_lucidum import line_bar_chart, report_filename, write_echarts_report
+import duckdb
+
+from py_lucidum import (
+    gbm_evaluation_chart,
+    line_bar_chart,
+    report_filename,
+    write_echarts_report,
+    write_gbm_summary_report,
+)
+from py_lucidum.core import Dataset, sql_literal
+from py_lucidum.tools.gbm.store import GbmModelStore
 
 
 class ReportingTests(unittest.TestCase):
@@ -114,6 +124,109 @@ class ReportingTests(unittest.TestCase):
                     expected="E",
                     content="shap_only",
                 )
+
+    def test_named_gbm_evaluation_chart_does_not_follow_active_model(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            dataset_path = root / "data.csv"
+            dataset_path.write_text("X,ACTUAL,SAMPLE\n1,10,training\n2,20,test\n", encoding="utf-8")
+            dataset = Dataset(dataset_path)
+            store = GbmModelStore(dataset_path, dataset=dataset)
+            model_id = "named-model"
+            model_dir = store.model_dir(model_id)
+            model_dir.mkdir(parents=True)
+            store.write_json(store.artifact_path(model_id, "manifest"), {
+                "model_id": model_id,
+                "label": "Named model",
+                "best_iteration": 2,
+            })
+            store.write_json(store.artifact_path(model_id, "parameters"), {"metric": "l2"})
+            store.write_json(store.artifact_path(model_id, "features"), ["X"])
+            store.write_json(store.active_path, {"model_id": "different-model"})
+            con = duckdb.connect(database=":memory:")
+            try:
+                con.execute(
+                    f"""
+COPY (
+  SELECT 'training' AS dataset, 'l2' AS metric, 1 AS iteration, 12.0 AS value
+  UNION ALL SELECT 'training', 'l2', 2, 8.0
+  UNION ALL SELECT 'test', 'l2', 1, 14.0
+  UNION ALL SELECT 'test', 'l2', 2, 9.0
+) TO {sql_literal(str(store.artifact_path(model_id, 'evaluation')))} (FORMAT PARQUET)
+"""
+                )
+            finally:
+                con.close()
+                dataset.con.close()
+
+            chart = gbm_evaluation_chart(dataset_path, model_id=model_id)
+
+            self.assertEqual(chart["kind"], "gbm_evaluation")
+            self.assertEqual(chart["metadata"]["model_id"], model_id)
+            self.assertEqual(chart["data"]["evaluation"]["training"]["l2"], [12.0, 8.0])
+            self.assertEqual(chart["data"]["evaluation"]["test"]["l2"], [14.0, 9.0])
+
+            store.artifact_path(model_id, "evaluation").unlink()
+            with self.assertRaisesRegex(ValueError, "Rebuild the model"):
+                gbm_evaluation_chart(dataset_path, model_id=model_id)
+
+    def test_gbm_summary_is_written_as_self_contained_html(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            output_path = Path(tmp_dir) / "summary.html"
+            evaluation_chart = {
+                "kind": "gbm_evaluation",
+                "title": "Model evaluation chart",
+                "data": {
+                    "manifest": {"best_iteration": 2},
+                    "parameters": {"early_stopping_rounds": 2},
+                    "metric": "l2",
+                    "evaluation": {
+                        "training": {"l2": [12.0, 8.0]},
+                        "test": {"l2": [14.0, 9.0]},
+                    },
+                },
+            }
+            result = write_gbm_summary_report(
+                output_path,
+                title="GBM model summary",
+                metadata={"source parquet": "/tmp/data.parquet", "model": "/tmp/model"},
+                performance={
+                    "columns": [
+                        {"key": "sample", "label": "Sample"},
+                        {"key": "actual", "label": "Actual response"},
+                    ],
+                    "rows": [
+                        {"sample": "Training", "actual": "£100"},
+                        {"sample": "Test", "actual": "£101"},
+                        {"sample": "Validation", "actual": "£99"},
+                    ],
+                    "metric": "l2",
+                    "best_iteration": 2,
+                },
+                feature_importance={
+                    "measure": "Mean absolute SHAP",
+                    "columns": [
+                        {"key": "rank", "label": "Rank"},
+                        {"key": "feature", "label": "Feature"},
+                        {"key": "share", "label": "Share"},
+                    ],
+                    "rows": [{"rank": 1, "feature": "AGE", "share": "100.0%"}],
+                },
+                parameters={"learning_rate": 0.1, "num_leaves": 3},
+                evaluation_chart=evaluation_chart,
+            )
+
+            self.assertEqual(result, output_path.resolve())
+            document = output_path.read_text(encoding="utf-8")
+            self.assertIn('data-summary-section="performance"', document)
+            self.assertIn('data-summary-section="feature-importance"', document)
+            self.assertIn('data-summary-section="parameters"', document)
+            self.assertIn('data-summary-section="evaluation"', document)
+            self.assertIn("Mean absolute SHAP", document)
+            self.assertIn("£100", document)
+            self.assertIn("function gbmEvaluationChartOption", document)
+            self.assertNotIn("Zoom tail", document)
+            self.assertNotIn("<script src=", document)
 
 
 if __name__ == "__main__":

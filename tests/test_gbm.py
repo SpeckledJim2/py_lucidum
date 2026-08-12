@@ -29,7 +29,7 @@ from py_lucidum.tools.gbm import tabulation as gbm_tabulation
 from py_lucidum.tools.gbm.store import GbmModelStore, GbmSourceProvider
 from py_lucidum.tools.gbm.tabulation import build_gbm_tabulations
 from py_lucidum.tools.gbm.trees import ebm_gain_summary, tree_detail, tree_summary
-from py_lucidum.tools.gbm.training import MissingGbmDependency, feature_config_with_mean_abs_shap, gbm_dependencies, gbm_training_dependencies, lightgbm_interaction_constraints, lightgbm_pair_interaction_constraints, lightgbm_progress_payload, normalise_feature_scenario, polars_feature_frame, predict_response_values, shap_dataframes, shap_interaction_group_columns, shap_row_limit, should_use_offset_init_score, train_model, tree_dataframe, training_projection_columns, training_select_sql, write_dataframe_parquet
+from py_lucidum.tools.gbm.training import MissingGbmDependency, append_holdout_evaluation, feature_config_with_mean_abs_shap, gbm_dependencies, gbm_training_dependencies, lightgbm_interaction_constraints, lightgbm_pair_interaction_constraints, lightgbm_progress_payload, normalise_feature_scenario, polars_feature_frame, predict_response_values, shap_dataframes, shap_interaction_group_columns, shap_row_limit, should_use_offset_init_score, train_model, tree_dataframe, training_projection_columns, training_select_sql, write_dataframe_parquet
 from py_lucidum.tools.gbm.validation import DEFAULT_TWEEDIE_VARIANCE_POWER, GBM_METRICS, GBM_OBJECTIVES, available_feature_interaction_groupings, categorical_distinct_counts, default_parameters, ebm_available, feature_interaction_constraint_groups, feature_rows, normalise_feature_grouping_map, normalise_feature_interaction_features, normalise_feature_interaction_groupings, normalise_feature_interaction_pairs, normalise_parameters, validate_request
 from py_lucidum.tools.glm.store import GlmModelStore
 from py_lucidum.tools.glm.tabulation import export_tabulations, tabulation_config, tabulation_plot, tabulation_table
@@ -2870,7 +2870,15 @@ COPY (
                 "early_stopping_rounds": 25,
             },
         )
-        write_gbm_evaluation(store, "m1", {"training": {"gamma": [7.4, 7.3, 7.2]}, "test": {"gamma": [7.5, 7.35, 7.25]}})
+        write_gbm_evaluation(
+            store,
+            "m1",
+            {
+                "training": {"gamma": [7.4, 7.3, 7.2]},
+                "test": {"gamma": [7.5, 7.35, 7.25]},
+                "validation": {"gamma": [None, None, 7.4]},
+            },
+        )
         write_gbm_evaluation(store, "m2", {"train": {"poisson": [1.4, 1.2, 1.1]}})
         app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
 
@@ -2887,10 +2895,19 @@ COPY (
         self.assertEqual(models["m1"]["parameters"]["num_iterations"], 77)
         self.assertEqual(models["m1"]["objective"], "gamma")
         self.assertEqual(models["m1"]["metric"], "gamma")
-        self.assertEqual(models["m1"]["best_metrics"], {"training": 7.2, "test": 7.25})
-        self.assertEqual(models["m2"]["best_metrics"], {"training": 1.2, "test": None})
+        self.assertEqual(
+            models["m1"]["best_metrics"],
+            {"training": 7.2, "test": 7.25, "validation": 7.4},
+        )
+        self.assertEqual(
+            models["m2"]["best_metrics"],
+            {"training": 1.2, "test": None, "validation": None},
+        )
         self.assertEqual(models["m3"]["parameters"], {"objective": "gamma", "metric": "gamma"})
-        self.assertEqual(models["m3"]["best_metrics"], {"training": None, "test": None})
+        self.assertEqual(
+            models["m3"]["best_metrics"],
+            {"training": None, "test": None, "validation": None},
+        )
         self.assertEqual(config_models["m1"]["best_metrics"], models["m1"]["best_metrics"])
 
     def test_activate_model_response_uses_activated_model_parameters(self) -> None:
@@ -4005,6 +4022,254 @@ FROM read_parquet({sql_literal(str(store.artifact_path(result['model_id'], 'tree
         self.assertNotIn("BadText", "\n".join(guarded.sql))
         self.assertTrue(any("__lucidum_row_id" in sql for sql in guarded.sql))
 
+    def test_validation_metric_failure_returns_a_model_warning(self) -> None:
+        class FakeLightGbm:
+            @staticmethod
+            def Dataset(*_args: Any, **_kwargs: Any) -> Any:
+                raise RuntimeError("evaluation failed")
+
+        try:
+            import numpy as np
+        except ImportError as exc:
+            self.skipTest(str(exc))
+
+        warning = append_holdout_evaluation(
+            lgb=FakeLightGbm(),
+            np=np,
+            response=np.array([1.0]),
+            prediction=np.array([1.5]),
+            validation_mask=np.array([True]),
+            parameters={"objective": "regression", "metric": "l2"},
+            evaluation_result={},
+            best_iteration=2,
+            metric_name="l2",
+        )
+
+        self.assertIn("Validation l2 metric could not be calculated", str(warning))
+
+    def test_validation_metric_from_predictions_matches_lightgbm_metric_families(self) -> None:
+        try:
+            import lightgbm as lgb
+            import numpy as np
+        except ImportError as exc:
+            self.skipTest(str(exc))
+
+        rng = np.random.default_rng(42)
+        feature_data = rng.normal(size=(120, 3))
+        cases = [
+            ("regression", "l1", np.abs(rng.normal(2, 1, 120)), {}),
+            ("regression", "l2", np.abs(rng.normal(2, 1, 120)), {}),
+            ("regression", "rmse", np.abs(rng.normal(2, 1, 120)), {}),
+            ("quantile", "quantile", rng.normal(size=120), {"alpha": 0.7}),
+            ("regression", "mape", np.abs(rng.normal(2, 1, 120)) + 0.1, {}),
+            ("huber", "huber", rng.normal(size=120), {"alpha": 0.7}),
+            ("fair", "fair", rng.normal(size=120), {"fair_c": 0.3}),
+            ("poisson", "poisson", rng.poisson(2, 120).astype(float), {}),
+            ("gamma", "gamma", rng.gamma(2, 1, 120), {}),
+            ("gamma", "gamma_deviance", rng.gamma(2, 1, 120), {}),
+            ("tweedie", "tweedie", rng.gamma(2, 1, 120), {"tweedie_variance_power": 1.4}),
+            ("binary", "auc", rng.integers(0, 2, 120).astype(float), {}),
+            ("binary", "average_precision", rng.integers(0, 2, 120).astype(float), {}),
+            ("binary", "binary_logloss", rng.integers(0, 2, 120).astype(float), {"sigmoid": 2.0}),
+            ("binary", "binary_error", rng.integers(0, 2, 120).astype(float), {}),
+            ("cross_entropy", "cross_entropy", rng.uniform(0.02, 0.98, 120), {}),
+            ("cross_entropy", "kullback_leibler", rng.uniform(0.02, 0.98, 120), {}),
+            ("cross_entropy_lambda", "cross_entropy_lambda", rng.uniform(0.02, 0.98, 120), {}),
+            ("regression", "r2", rng.normal(size=120), {}),
+        ]
+        train_rows = np.arange(80)
+        validation_rows = np.arange(80, 120)
+
+        for objective_name, metric_name, response, extra_parameters in cases:
+            with self.subTest(metric=metric_name):
+                parameters = {
+                    "objective": objective_name,
+                    "metric": metric_name,
+                    "verbosity": -1,
+                    "num_threads": 1,
+                    "seed": 7,
+                    **extra_parameters,
+                }
+                training_data = lgb.Dataset(
+                    feature_data[train_rows],
+                    label=response[train_rows],
+                )
+                validation_data = lgb.Dataset(
+                    feature_data[validation_rows],
+                    label=response[validation_rows],
+                    reference=training_data,
+                )
+                history: dict[str, dict[str, list[float]]] = {}
+                model = lgb.train(
+                    parameters,
+                    training_data,
+                    num_boost_round=4,
+                    valid_sets=[validation_data],
+                    valid_names=["validation"],
+                    callbacks=[lgb.record_evaluation(history), lgb.log_evaluation(period=0)],
+                )
+                prediction = model.predict(feature_data[validation_rows], num_iteration=4)
+                evaluation: dict[str, dict[str, list[float | None]]] = {}
+
+                warning = append_holdout_evaluation(
+                    lgb=lgb,
+                    np=np,
+                    response=response[validation_rows],
+                    prediction=prediction,
+                    validation_mask=np.ones(validation_rows.size, dtype=bool),
+                    parameters=parameters,
+                    evaluation_result=evaluation,
+                    best_iteration=4,
+                    metric_name=metric_name,
+                )
+
+                self.assertIsNone(warning)
+                self.assertAlmostEqual(
+                    evaluation["validation"][metric_name][3],
+                    history["validation"][metric_name][3],
+                    places=12,
+                )
+
+    def test_validation_metric_uses_saved_predictions_with_offset_or_init_score(self) -> None:
+        try:
+            import lightgbm  # noqa: F401
+        except ImportError as exc:
+            self.skipTest(str(exc))
+
+        for use_init_score in (False, True):
+            with self.subTest(use_init_score=use_init_score):
+                suffix = "init" if use_init_score else "offset"
+                data_path = self.root / f"validation_metric_{suffix}.csv"
+                rows = ["actualNumerator,denominator,Baseline,x,SAMPLE"]
+                for index in range(90):
+                    sample = "training" if index < 60 else "test" if index < 75 else "validation"
+                    denominator = 5 + (index % 4)
+                    x = (index % 15) / 5
+                    response = denominator * (2 + (0.3 * x))
+                    baseline = response * (0.95 + ((index % 3) * 0.02))
+                    rows.append(f"{response},{denominator},{baseline},{x},{sample}")
+                data_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+                dataset = Dataset(data_path)
+                store = GbmModelStore(data_path)
+                parameters = default_parameters() + [
+                    {"name": "objective", "value": "poisson"},
+                    {"name": "metric", "value": "l2"},
+                    {"name": "num_iterations", "value": 8},
+                    {"name": "early_stopping_rounds", "value": 0},
+                    {"name": "num_leaves", "value": 3},
+                    {"name": "min_data_in_leaf", "value": 2},
+                    {"name": "learning_rate", "value": 0.1},
+                    {"name": "num_threads", "value": 1},
+                ]
+                if use_init_score:
+                    parameters.append({"name": "init_score", "value": "Baseline"})
+                result = train_model(
+                    dataset,
+                    store,
+                    {
+                        "label": suffix,
+                        "response": "actualNumerator",
+                        "offset": "denominator",
+                        "features": [{"name": "x", "include": True}],
+                        "parameters": parameters,
+                        "sample_column": "SAMPLE",
+                        "shap_rows": "0",
+                    },
+                )
+                expected = dataset.con.execute(
+                    f"""
+WITH source AS (
+  SELECT ROW_NUMBER() OVER ()::BIGINT AS __lucidum_row_id, *
+  FROM read_csv_auto({sql_literal(str(data_path))})
+)
+SELECT AVG(POW(source.actualNumerator - prediction.gbm_prediction, 2))
+FROM source
+INNER JOIN read_parquet({sql_literal(str(store.artifact_path(result['model_id'], 'predictions')))}) prediction
+  USING (__lucidum_row_id)
+WHERE LOWER(source.SAMPLE) = 'validation'
+"""
+                ).fetchone()[0]
+
+                self.assertAlmostEqual(result["best_metrics"]["validation"], expected, places=5)
+                validation_history = store.read_evaluation(result["model_id"])["validation"]["l2"]
+                self.assertEqual(sum(value is not None for value in validation_history), 1)
+                dataset.con.close()
+
+    def test_validation_metric_is_recorded_once_without_affecting_early_stopping(self) -> None:
+        try:
+            import lightgbm  # noqa: F401
+        except ImportError as exc:
+            self.skipTest(str(exc))
+
+        def build(name: str, validation_shift: float) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+            data_path = self.root / f"validation_metric_{name}.csv"
+            rows = ["actualNumerator,x,SAMPLE"]
+            for index in range(140):
+                sample = "training" if index < 80 else "test" if index < 120 else "validation"
+                x = (index % 40) / 10
+                response = 20 + 3 * x + math.sin(x)
+                if sample == "validation":
+                    response += validation_shift
+                rows.append(f"{response},{x},{sample}")
+            data_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+            dataset = Dataset(data_path)
+            store = GbmModelStore(data_path)
+            parameters = default_parameters() + [
+                {"name": "objective", "value": "regression"},
+                {"name": "metric", "value": "l2"},
+                {"name": "num_iterations", "value": 60},
+                {"name": "early_stopping_rounds", "value": 5},
+                {"name": "num_leaves", "value": 4},
+                {"name": "min_data_in_leaf", "value": 2},
+                {"name": "learning_rate", "value": 0.1},
+                {"name": "seed", "value": 13},
+                {"name": "num_threads", "value": 1},
+            ]
+            result = train_model(
+                dataset,
+                store,
+                {
+                    "label": name,
+                    "response": "actualNumerator",
+                    "offset": "__none__",
+                    "features": [{"name": "x", "include": True}],
+                    "parameters": parameters,
+                    "sample_column": "SAMPLE",
+                    "shap_rows": "0",
+                },
+            )
+            evaluation = store.read_evaluation(result["model_id"])
+            manifest = store.manifest(result["model_id"])
+            dataset.con.close()
+            return result, evaluation, manifest
+
+        baseline, baseline_evaluation, baseline_manifest = build("baseline", 0)
+        shifted, shifted_evaluation, shifted_manifest = build("shifted", 100)
+
+        self.assertEqual(baseline["best_iteration"], shifted["best_iteration"])
+        self.assertEqual(baseline_evaluation["training"], shifted_evaluation["training"])
+        self.assertEqual(baseline_evaluation["test"], shifted_evaluation["test"])
+        for result, evaluation, manifest in (
+            (baseline, baseline_evaluation, baseline_manifest),
+            (shifted, shifted_evaluation, shifted_manifest),
+        ):
+            validation_values = evaluation["validation"]["l2"]
+            self.assertEqual(sum(value is not None for value in validation_values), 1)
+            self.assertIsNotNone(validation_values[result["best_iteration"] - 1])
+            self.assertEqual(
+                result["best_metrics"]["validation"],
+                validation_values[result["best_iteration"] - 1],
+            )
+            self.assertFalse(
+                any("Validation l2 metric could not be calculated" in warning for warning in manifest["warnings"])
+            )
+        self.assertNotEqual(
+            baseline["best_metrics"]["validation"],
+            shifted["best_metrics"]["validation"],
+        )
+
     def test_ebm_training_switches_leaf_stages_and_persists_mode(self) -> None:
         try:
             import lightgbm as lgb
@@ -4594,7 +4859,10 @@ COPY (
         self.assertNotIn("artifact_path", models[model_id]["init_score"])
         self.assertNotIn("artifact_path", detail["manifest"]["init_score"])
         self.assertNotIn("artifact_path", config_models[model_id]["init_score"])
-        self.assertEqual(models[model_id]["best_metrics"], {"training": 1.5, "test": 1.75})
+        self.assertEqual(
+            models[model_id]["best_metrics"],
+            {"training": 1.5, "test": 1.75, "validation": None},
+        )
         detail_features = {row["name"]: row for row in detail["features"]}
         self.assertEqual(detail_features["Age"]["monotonicity"], "Increasing")
         self.assertEqual(detail_features["Segment"]["monotonicity"], "Decreasing")
@@ -5523,7 +5791,10 @@ COPY (
         self.assertEqual(prediction_source["training_mode"], "normal")
         self.assertEqual(prediction_source["best_iteration"], 7)
         self.assertEqual(prediction_source["best_metrics"], models["m1"]["best_metrics"])
-        self.assertEqual(prediction_source["best_metrics"], {"training": 3.0, "test": 3.5})
+        self.assertEqual(
+            prediction_source["best_metrics"],
+            {"training": 3.0, "test": 3.5, "validation": None},
+        )
         prediction_columns = [column["name"] for column in prediction_source["columns"]]
         self.assertNotIn("__lucidum_row_id", prediction_columns)
         self.assertIn("Age", prediction_columns)

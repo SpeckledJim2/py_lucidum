@@ -180,6 +180,55 @@ def line_bar_chart(
         dataset.con.close()
 
 
+def gbm_evaluation_chart(
+    dataset_path: str | Path,
+    *,
+    model_id: str,
+    title: str = "Model evaluation",
+) -> dict[str, Any]:
+    """Return the saved Evaluation Log for one exact GBM as a chart spec."""
+
+    path = Path(dataset_path).expanduser().resolve()
+    model_id = str(model_id or "").strip()
+    if not model_id:
+        raise ValueError("Choose a GBM model ID")
+
+    from py_lucidum.tools.gbm.store import GbmModelStore
+
+    dataset = Dataset(path)
+    try:
+        store = GbmModelStore(path, dataset=dataset)
+        detail = store.model_detail(model_id)
+        evaluation = detail.get("evaluation")
+        has_values = any(
+            isinstance(values, list) and values
+            for metrics in (evaluation or {}).values()
+            if isinstance(metrics, Mapping)
+            for values in metrics.values()
+        )
+        if not has_values:
+            raise ValueError(
+                f"GBM model '{model_id}' has no saved evaluation history. "
+                "Rebuild the model before creating this report."
+            )
+        return {
+            "kind": "gbm_evaluation",
+            "title": str(title),
+            "data": {
+                "manifest": detail["manifest"],
+                "parameters": detail["parameters"],
+                "metric": detail["metric"],
+                "evaluation": evaluation,
+            },
+            "metadata": {
+                "model_id": model_id,
+                "model_folder": str(store.model_dir(model_id).resolve()),
+            },
+        }
+    finally:
+        dataset.con.close()
+
+
 def write_echarts_report(
     charts: Iterable[Mapping[str, Any]],
     output_path: str | Path,
@@ -217,6 +266,67 @@ def write_echarts_report(
         title=str(title),
         report_metadata=report_metadata,
         charts=chart_list,
+        payload=payload,
+        echarts_source=echarts_source,
+        renderer_source=renderer_source,
+        chart_height=chart_height,
+    )
+    temporary = output.with_name(f".{output.name}.tmp-{uuid4().hex}")
+    try:
+        temporary.write_text(document, encoding="utf-8")
+        temporary.replace(output)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    return output
+
+
+def write_gbm_summary_report(
+    output_path: str | Path,
+    *,
+    title: str,
+    performance: Mapping[str, Any],
+    feature_importance: Mapping[str, Any],
+    parameters: Mapping[str, Any],
+    evaluation_chart: Mapping[str, Any],
+    metadata: Mapping[str, Any] | None = None,
+    chart_height: int = DEFAULT_REPORT_CHART_HEIGHT,
+) -> Path:
+    """Write a portable GBM model-summary HTML document."""
+
+    if evaluation_chart.get("kind") != "gbm_evaluation":
+        raise ValueError("evaluation_chart must come from gbm_evaluation_chart()")
+    performance_rows = list(performance.get("rows") or [])
+    importance_rows = list(feature_importance.get("rows") or [])
+    if not performance_rows:
+        raise ValueError("The GBM summary needs performance rows")
+    if not importance_rows:
+        raise ValueError("The GBM summary needs feature importance rows")
+    chart_height = int(chart_height)
+    if chart_height < 200:
+        raise ValueError("chart_height must be at least 200 pixels")
+
+    output = Path(output_path).expanduser().resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    package_root = Path(__file__).resolve().parent
+    echarts_source = (package_root / "static" / "vendor" / "echarts" / "echarts.min.js").read_text(
+        encoding="utf-8"
+    )
+    renderer_source = (
+        package_root / "static" / "app" / "gbm-evaluation-chart-options.js"
+    ).read_text(encoding="utf-8")
+    report_metadata = _report_metadata(metadata)
+    payload = {
+        "title": str(title),
+        "metadata": report_metadata,
+        "performance": dict(performance),
+        "feature_importance": dict(feature_importance),
+        "parameters": dict(parameters),
+        "evaluation_chart": dict(evaluation_chart),
+    }
+    document = _gbm_summary_document(
+        title=str(title),
+        report_metadata=report_metadata,
         payload=payload,
         echarts_source=echarts_source,
         renderer_source=renderer_source,
@@ -573,6 +683,197 @@ def _report_document(
 """
 
 
+def _gbm_summary_document(
+    *,
+    title: str,
+    report_metadata: Mapping[str, Any],
+    payload: Mapping[str, Any],
+    echarts_source: str,
+    renderer_source: str,
+    chart_height: int,
+) -> str:
+    full_width_metadata = {"source parquet", "model"}
+    provenance_html = _metadata_items(report_metadata, include=full_width_metadata)
+    metadata_html = _metadata_items(report_metadata, exclude=full_width_metadata)
+    performance = payload["performance"]
+    importance = payload["feature_importance"]
+    parameters = payload["parameters"]
+    performance_table = _summary_table_html(
+        list(performance.get("columns") or []),
+        list(performance.get("rows") or []),
+        table_class="performance-table",
+    )
+    importance_table = _summary_table_html(
+        list(importance.get("columns") or []),
+        list(importance.get("rows") or []),
+        table_class="importance-table",
+    )
+    parameter_table = _summary_table_html(
+        [{"key": "parameter", "label": "Parameter"}, {"key": "value", "label": "Value"}],
+        [
+            {"parameter": str(name), "value": _parameter_display(value)}
+            for name, value in parameters.items()
+        ],
+        table_class="parameter-table",
+    )
+    importance_measure = str(importance.get("measure") or "")
+    best_iteration = performance.get("best_iteration")
+    metric = str(performance.get("metric") or "")
+    metric_detail = ""
+    if metric:
+        metric_detail = f"Metric: {metric}"
+        if best_iteration:
+            metric_detail += f" at best iteration {int(best_iteration):,}"
+    safe_echarts = echarts_source.replace("</script", "<\\/script")
+    safe_renderer = renderer_source.replace("</script", "<\\/script")
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{html.escape(title)}</title>
+  <style>
+    :root {{ color-scheme: light; --page: #f5f7fa; --panel: #ffffff; --text: #243447; --muted: #64748b; --line: #d9e0e8; --accent: #2563eb; }}
+    * {{ box-sizing: border-box; }}
+    body {{ margin: 0; background: var(--page); color: var(--text); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }}
+    main {{ width: min(1500px, 100%); margin: 0 auto; padding: 24px; }}
+    .report-header, .summary-card {{ background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06); }}
+    .report-header {{ padding: 20px 24px; margin-bottom: 20px; }}
+    h1 {{ margin: 0 0 16px; font-size: 24px; }}
+    h2 {{ margin: 0; padding: 18px 20px 0; font-size: 18px; }}
+    dl {{ margin: 0; }}
+    dl div {{ min-width: 0; }}
+    .report-provenance {{ display: grid; gap: 10px; margin-bottom: 14px; }}
+    .report-metadata-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px 24px; padding-top: 14px; border-top: 1px solid var(--line); }}
+    dt {{ color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }}
+    dd {{ margin: 2px 0 0; overflow-wrap: anywhere; font-size: 13px; }}
+    .summary-card {{ margin: 0 0 20px; overflow: hidden; }}
+    .section-detail {{ margin: 5px 20px 0; color: var(--muted); font-size: 12px; }}
+    .table-wrap {{ padding: 16px 20px 20px; overflow-x: auto; }}
+    .summary-table {{ width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }}
+    .summary-table th {{ padding: 9px 12px; border-bottom: 2px solid var(--line); color: var(--muted); font-size: 11px; letter-spacing: .04em; text-align: right; text-transform: uppercase; white-space: nowrap; }}
+    .summary-table td {{ padding: 9px 12px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }}
+    .summary-table tbody tr:last-child td {{ border-bottom: 0; }}
+    .summary-table th:first-child, .summary-table td:first-child {{ text-align: left; }}
+    .importance-table th:nth-child(2), .importance-table td:nth-child(2), .parameter-table th, .parameter-table td {{ text-align: left; }}
+    .importance-table td:nth-child(2) {{ font-weight: 600; }}
+    .parameter-table td:first-child {{ width: 34%; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }}
+    .parameter-table td:last-child {{ white-space: normal; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }}
+    .report-chart {{ width: 100%; height: {chart_height}px; }}
+    .chart-warning {{ margin: 0 20px 16px; color: #9a6700; font-size: 12px; }}
+    @media (max-width: 700px) {{ main {{ padding: 10px; }} .table-wrap {{ padding-inline: 10px; }} }}
+    @media print {{ body {{ background: white; }} main {{ width: 100%; padding: 0; }} .report-header, .summary-card {{ break-inside: avoid; border-color: #bbb; box-shadow: none; }} }}
+  </style>
+  <script>{safe_echarts}</script>
+</head>
+<body>
+  <main>
+    <header class="report-header">
+      <h1>{html.escape(title)}</h1>
+      <dl class="report-provenance">{provenance_html}</dl>
+      <dl class="report-metadata-grid">{metadata_html}</dl>
+    </header>
+    <section class="summary-card" data-summary-section="performance">
+      <h2>Model performance</h2>
+      <p class="section-detail">{html.escape(metric_detail)}</p>
+      <div class="table-wrap">{performance_table}</div>
+    </section>
+    <section class="summary-card" data-summary-section="feature-importance">
+      <h2>Feature importance</h2>
+      <p class="section-detail">Importance measure: {html.escape(importance_measure)}</p>
+      <div class="table-wrap">{importance_table}</div>
+    </section>
+    <section class="summary-card" data-summary-section="parameters">
+      <h2>Model parameters</h2>
+      <div class="table-wrap">{parameter_table}</div>
+    </section>
+    <section class="summary-card" data-summary-section="evaluation">
+      <h2>{html.escape(str(payload['evaluation_chart'].get('title') or 'Model evaluation'))}</h2>
+      <div id="gbm-summary-evaluation-chart" class="report-chart" role="img" aria-label="GBM model evaluation chart"></div>
+      <p class="chart-warning" hidden></p>
+    </section>
+  </main>
+  <script id="lucidum-report-data" type="application/json">{_json_for_script(payload)}</script>
+  <script type="module">
+{safe_renderer}
+    const report = JSON.parse(document.getElementById("lucidum-report-data").textContent);
+    const target = document.getElementById("gbm-summary-evaluation-chart");
+    const option = gbmEvaluationChartOption(report.evaluation_chart.data, {{ viewMode: "all" }});
+    if (option) {{
+      const chart = echarts.init(target);
+      chart.setOption(option, true);
+      const resize = () => chart.resize();
+      if (typeof ResizeObserver === "function") new ResizeObserver(resize).observe(document.querySelector("main"));
+      window.addEventListener("resize", resize);
+    }} else {{
+      const warning = target.closest(".summary-card").querySelector(".chart-warning");
+      warning.textContent = "No evaluation history is available.";
+      warning.hidden = false;
+    }}
+  </script>
+</body>
+</html>
+"""
+
+
+def _report_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
+    run_time = datetime.now().astimezone()
+    timezone_name = run_time.tzname() or run_time.strftime("%z")
+    generated_at = f"{run_time.day} {run_time.strftime('%b %Y, %H:%M')} {timezone_name}"
+    return {**dict(metadata or {}), "time run": generated_at, "Lucidum version": __version__}
+
+
+def _metadata_items(
+    metadata: Mapping[str, Any],
+    *,
+    include: set[str] | None = None,
+    exclude: set[str] | None = None,
+) -> str:
+    include = {value.casefold() for value in include or set()}
+    exclude = {value.casefold() for value in exclude or set()}
+    items = []
+    for key, value in metadata.items():
+        normalised = str(key).strip().casefold()
+        if include and normalised not in include:
+            continue
+        if normalised in exclude or value is None or value == "" or value == []:
+            continue
+        items.append(
+            f"<div><dt>{html.escape(_metadata_label(key))}</dt>"
+            f"<dd>{html.escape(_display_value(value))}</dd></div>"
+        )
+    return "".join(items)
+
+
+def _summary_table_html(
+    columns: Sequence[Mapping[str, Any]],
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    table_class: str,
+) -> str:
+    headings = "".join(f"<th scope=\"col\">{html.escape(str(column['label']))}</th>" for column in columns)
+    body = "".join(
+        "<tr>"
+        + "".join(
+            f"<td>{html.escape(_display_value(row.get(str(column['key']), '—')))}</td>"
+            for column in columns
+        )
+        + "</tr>"
+        for row in rows
+    )
+    return f'<table class="summary-table {html.escape(table_class)}"><thead><tr>{headings}</tr></thead><tbody>{body}</tbody></table>'
+
+
+def _parameter_display(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (Mapping, list, tuple)):
+        return json.dumps(value, ensure_ascii=False, separators=(", ", ": "))
+    return str(value)
+
+
 def _display_value(value: Any) -> str:
     if isinstance(value, (list, tuple, set)):
         return ", ".join(str(item) for item in value)
@@ -598,4 +899,10 @@ def _base_label(metadata: Mapping[str, Any]) -> str:
     return f"Base: {feature} = {base}" if base and feature else ""
 
 
-__all__ = ["line_bar_chart", "report_filename", "write_echarts_report"]
+__all__ = [
+    "gbm_evaluation_chart",
+    "line_bar_chart",
+    "report_filename",
+    "write_echarts_report",
+    "write_gbm_summary_report",
+]

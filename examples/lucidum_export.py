@@ -202,9 +202,10 @@ def save_gbm_for_lucidum(
     data: pd.DataFrame,
     feature_data: pd.DataFrame,
     model: Any,
-    evaluation: dict[str, dict[str, list[float]]],
+    evaluation: dict[str, dict[str, list[float | None]]],
     predictions: pd.Series,
     started: float,
+    warnings: list[str] | None = None,
 ) -> dict[str, Any]:
     """Create the GBM files used by Lucidum's saved-model views."""
 
@@ -332,7 +333,7 @@ def save_gbm_for_lucidum(
         "sample_source": "dataset",
         "shap_rows": int(len(shap_values)),
         "timings": {"training_seconds": round(time.perf_counter() - started, 3)},
-        "warnings": [],
+        "warnings": [str(warning) for warning in warnings or [] if str(warning).strip()],
         "feature_scenario": {
             "name": str(features_config["scenario_column"]),
             "features": feature_names,
@@ -499,11 +500,15 @@ def glm_diagnostics(
 # ---------------------------------------------------------------------------
 
 
-def gbm_evaluation_frame(evaluation: dict[str, dict[str, list[float]]]) -> pd.DataFrame:
+def gbm_evaluation_frame(
+    evaluation: dict[str, dict[str, list[float | None]]],
+) -> pd.DataFrame:
     rows = []
     for dataset_name, metrics in evaluation.items():
         for metric_name, values in metrics.items():
             for iteration, value in enumerate(values, start=1):
+                if json_number(value) is None:
+                    continue
                 rows.append(
                     {
                         "dataset": dataset_name,

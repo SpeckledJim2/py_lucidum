@@ -595,6 +595,7 @@ def train_model(
     validation = validate_request(dataset, payload, generated_sample_path=store.generated_sample_path)
     if not validation.ok:
         raise ValueError("; ".join(validation.errors))
+    build_warnings = list(validation.warnings)
     timings["validation_seconds"] = elapsed_seconds(validation_started)
     create_interaction_group_models = bool_parameter(payload, "create_feature_interaction_group_models")
 
@@ -846,7 +847,6 @@ def train_model(
     active_init_score = init_score_linear if use_supplied_init_score else log_offset if use_offset_init_score else None
     train_init = active_init_score[train_mask] if active_init_score is not None else None
     valid_init = active_init_score[test_mask] if active_init_score is not None and bool(test_mask.any()) else None
-    validation_init = active_init_score[validation_mask] if active_init_score is not None and bool(validation_mask.any()) else None
     timings["matrix_prep_seconds"] = elapsed_seconds(matrix_prep_started)
 
     emit_preparing_progress(
@@ -886,7 +886,7 @@ def train_model(
         lightgbm_dataset.construct()
     timings["dataset_construct_seconds"] = elapsed_seconds(dataset_construct_started)
 
-    evaluation_result: dict[str, dict[str, list[float]]] = {}
+    evaluation_result: dict[str, dict[str, list[float | None]]] = {}
     ebm_controller: EbmStageController | None = None
     if training_mode == "ebm":
         ebm_controller = EbmStageController(
@@ -937,19 +937,6 @@ def train_model(
         or getattr(booster, "best_iteration", 0)
         or num_boost_round
     )
-    append_holdout_evaluation(
-        lgb=lgb,
-        pl=pl,
-        booster=booster,
-        feature_frame=feature_frame,
-        response=response_values,
-        validation_mask=validation_mask,
-        feature_names=feature_names,
-        categorical_features=categorical_features,
-        validation_init=validation_init,
-        train_set=train_set,
-        evaluation_result=evaluation_result,
-    )
     emit_progress(
         progress_callback,
         phase_progress_payload(
@@ -988,6 +975,19 @@ def train_model(
         rate[valid_rate] = prediction_array[valid_rate] / offset_array[valid_rate]
         prediction_data["gbm_prediction_rate"] = rate
     predictions = pl.DataFrame(prediction_data)
+    validation_warning = append_holdout_evaluation(
+        lgb=lgb,
+        np=np,
+        response=response_values,
+        prediction=prediction,
+        validation_mask=validation_mask,
+        parameters=params,
+        evaluation_result=evaluation_result,
+        best_iteration=best_iteration,
+        metric_name=selected_metric,
+    )
+    if validation_warning:
+        build_warnings.append(validation_warning)
     saved_init_score_frame = (
         init_score_dataframe(pl, work_frame, init_score_linear, init_score_prediction)
         if use_supplied_init_score and init_score_linear is not None and init_score_prediction is not None
@@ -1106,7 +1106,7 @@ def train_model(
         "sample_source": sample_source,
         "shap_rows": shap_written_rows,
         "timings": {},
-        "warnings": validation.warnings,
+        "warnings": build_warnings,
     }
     if feature_scenario:
         manifest["feature_scenario"] = feature_scenario
@@ -1318,42 +1318,117 @@ def lightgbm_progress_callback(
 def append_holdout_evaluation(
     *,
     lgb: Any,
-    pl: Any,
-    booster: Any,
-    feature_frame: Any,
+    np: Any,
     response: Any,
+    prediction: Any,
     validation_mask: Any,
-    feature_names: list[str],
-    categorical_features: list[str],
-    validation_init: Any,
-    train_set: Any,
-    evaluation_result: dict[str, dict[str, list[float]]],
-) -> None:
+    parameters: dict[str, Any],
+    evaluation_result: dict[str, dict[str, list[float | None]]],
+    best_iteration: int,
+    metric_name: str,
+) -> str | None:
     if not bool(validation_mask.any()):
-        return
-    validation_set = lgb.Dataset(
-        arrow_rows(feature_frame, validation_mask, pl),
-        label=response[validation_mask],
-        feature_name=feature_names,
-        categorical_feature=categorical_features,
-        init_score=validation_init,
-        reference=train_set,
-        params=train_set.get_params(),
-        free_raw_data=True,
-    )
+        return None
+    metric_booster = None
     try:
-        results = booster.eval(validation_set, name="validation")
-    except Exception:
-        return
-    for item in results or []:
-        if len(item) < 3:
-            continue
-        dataset_name = str(item[0])
-        metric_name = str(item[1])
-        value = json_safe_number(item[2])
+        actual_values = np.asarray(response[validation_mask], dtype="float64")
+        prediction_values = np.asarray(prediction[validation_mask], dtype="float64")
+        if actual_values.shape != prediction_values.shape or actual_values.size == 0:
+            raise ValueError("Validation actuals and predictions must have the same non-zero length")
+        if not bool(np.isfinite(actual_values).all() and np.isfinite(prediction_values).all()):
+            raise ValueError("Validation actuals and predictions must be finite")
+
+        raw_prediction = prediction_to_raw_score(
+            np,
+            prediction_values,
+            str(parameters.get("objective") or "regression").strip().lower(),
+            parameters,
+        )
+        validation_set = lgb.Dataset(
+            np.arange(actual_values.size, dtype="float64").reshape(-1, 1),
+            label=actual_values,
+            init_score=raw_prediction,
+            free_raw_data=False,
+            params={"min_data_in_leaf": 1, "min_data_in_bin": 1, "verbosity": -1},
+        )
+        metric_booster = lgb.Booster(
+            params=metric_evaluation_parameters(parameters),
+            train_set=validation_set,
+        )
+        results = metric_booster.eval_train()
+        requested_metric = str(metric_name or "").strip().lower()
+        selected = next(
+            (
+                item
+                for item in results or []
+                if len(item) >= 3 and str(item[1]).strip().lower() == requested_metric
+            ),
+            None,
+        )
+        if selected is None:
+            raise ValueError(f"LightGBM returned no {metric_name} result")
+        value = json_safe_number(selected[2])
         if value is None:
-            continue
-        evaluation_result.setdefault(dataset_name, {}).setdefault(metric_name, []).append(value)
+            raise ValueError(f"LightGBM returned a non-finite {metric_name} result")
+        values: list[float | None] = [None] * max(0, int(best_iteration) - 1)
+        values.append(value)
+        evaluation_result.setdefault("validation", {})[str(selected[1])] = values
+        return None
+    except Exception as exc:
+        return f"Validation {metric_name} metric could not be calculated: {exc}"
+    finally:
+        free_dataset = getattr(metric_booster, "free_dataset", None)
+        if callable(free_dataset):
+            free_dataset()
+
+
+def prediction_to_raw_score(
+    np: Any,
+    prediction: Any,
+    objective_name: str,
+    parameters: dict[str, Any],
+) -> Any:
+    """Undo LightGBM's objective transform for metric-only evaluation."""
+
+    values = np.asarray(prediction, dtype="float64")
+    if objective_name in {"poisson", "gamma", "tweedie"}:
+        if not bool((values > 0).all()):
+            raise ValueError(f"{objective_name} predictions must be positive")
+        return np.log(values)
+    if objective_name in {"binary", "cross_entropy"}:
+        if not bool(((values > 0) & (values < 1)).all()):
+            raise ValueError(f"{objective_name} predictions must be between zero and one")
+        sigmoid = float(parameters.get("sigmoid", 1.0) or 1.0)
+        return np.log(values / (1.0 - values)) / sigmoid
+    if objective_name == "cross_entropy_lambda":
+        if not bool((values > 0).all()):
+            raise ValueError("cross_entropy_lambda predictions must be positive")
+        raw = np.empty_like(values)
+        large = values > 20
+        raw[large] = values[large] + np.log1p(-np.exp(-values[large]))
+        raw[~large] = np.log(np.expm1(values[~large]))
+        return raw
+    return values
+
+
+def metric_evaluation_parameters(parameters: dict[str, Any]) -> dict[str, Any]:
+    """Keep only settings which change LightGBM's metric calculation."""
+
+    names = {
+        "objective",
+        "metric",
+        "sigmoid",
+        "alpha",
+        "fair_c",
+        "tweedie_variance_power",
+    }
+    return {
+        **{name: value for name, value in parameters.items() if name in names},
+        "boost_from_average": False,
+        "min_data_in_leaf": 1,
+        "min_data_in_bin": 1,
+        "verbosity": -1,
+    }
 
 
 def lightgbm_progress_payload(
@@ -1472,11 +1547,16 @@ def format_progress_value(value: Any) -> str:
     return f"{number:.6g}"
 
 
-def evaluation_dataframe(pd: Any, evaluation_result: dict[str, dict[str, list[float]]]) -> Any:
+def evaluation_dataframe(
+    pd: Any,
+    evaluation_result: dict[str, dict[str, list[float | None]]],
+) -> Any:
     rows: list[dict[str, Any]] = []
     for dataset_name, metrics in evaluation_result.items():
         for metric_name, values in metrics.items():
             for iteration, value in enumerate(values, start=1):
+                if json_safe_number(value) is None:
+                    continue
                 rows.append(
                     {
                         "dataset": dataset_name,

@@ -32,6 +32,7 @@ GLM_SCRIPT = EXAMPLES / "01_external_glm_artifacts_demo.py"
 GBM_SCRIPT = EXAMPLES / "01_external_gbm_artifacts_demo.py"
 GLM_REPORT_SCRIPT = EXAMPLES / "02_external_glm_report_demo.py"
 GBM_REPORT_SCRIPT = EXAMPLES / "02_external_gbm_report_demo.py"
+GBM_SUMMARY_SCRIPT = EXAMPLES / "03_external_gbm_summary_report_demo.py"
 EXAMPLE_HELPERS = EXAMPLES / "external_model_helpers.py"
 EXPORT_ADAPTER = EXAMPLES / "lucidum_export.py"
 REPORT_HELPERS = EXAMPLES / "external_report_helpers.py"
@@ -183,7 +184,7 @@ def write_example_configs(root: Path, dataset_path: Path) -> tuple[Path, Path, P
     return glm_path, gbm_path, feature_spec_path
 
 
-def write_report_configs(root: Path) -> tuple[Path, Path]:
+def write_report_configs(root: Path) -> tuple[Path, Path, Path]:
     import yaml
 
     defaults = {
@@ -260,9 +261,28 @@ def write_report_configs(root: Path) -> tuple[Path, Path]:
     }
     glm_path = root / "config_glm_report.yaml"
     gbm_path = root / "config_gbm_report.yaml"
+    summary_path = root / "config_gbm_summary_report.yaml"
+    kpi_path = root / "kpi_spec.csv"
     glm_path.write_text(yaml.safe_dump(glm, sort_keys=False), encoding="utf-8")
     gbm_path.write_text(yaml.safe_dump(gbm, sort_keys=False), encoding="utf-8")
-    return glm_path, gbm_path
+    kpi_path.write_text(
+        "group,name,actual,denominator,decimals,format\n"
+        "FINANCIAL,Premium per latitude,PREMIUM,LATITUDE,0,currency\n",
+        encoding="utf-8",
+    )
+    summary_path.write_text(
+        yaml.safe_dump(
+            {
+                "build_config": "config_gbm.yaml",
+                "kpi_spec": kpi_path.name,
+                "report": {"name": "model_summary", "title": "External GBM summary"},
+                "output": {"directory": "reports", "chart_height": 600},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    return glm_path, gbm_path, summary_path
 
 
 def report_payload(path: Path) -> dict[str, Any]:
@@ -297,6 +317,15 @@ def load_report_helpers() -> Any:
     return module
 
 
+def load_model_helpers() -> Any:
+    spec = importlib.util.spec_from_file_location("external_model_helpers_for_tests", EXAMPLE_HELPERS)
+    if spec is None or spec.loader is None:
+        raise AssertionError(f"Could not load {EXAMPLE_HELPERS}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 class ExternalModelExampleTests(unittest.TestCase):
     def test_external_builders_do_not_import_py_lucidum(self) -> None:
         for script in (GLM_SCRIPT, GBM_SCRIPT, EXAMPLE_HELPERS, EXPORT_ADAPTER):
@@ -314,6 +343,49 @@ class ExternalModelExampleTests(unittest.TestCase):
                 any(name == "py_lucidum" or name.startswith("py_lucidum.") for name in imported),
                 f"{script.name} must remain independent of py_lucidum",
             )
+
+    def test_external_validation_metric_is_sparse_and_failures_become_warnings(self) -> None:
+        helpers = load_model_helpers()
+        try:
+            import lightgbm  # noqa: F401
+        except ImportError as exc:
+            self.skipTest(str(exc))
+
+        evaluation: dict[str, dict[str, list[float | None]]] = {}
+        warning = helpers.evaluate_validation_metric(
+            actual=[1.0, 2.0],
+            prediction=[1.5, 2.5],
+            parameters={"objective": "regression", "metric": "l2"},
+            evaluation=evaluation,
+            best_iteration=2,
+        )
+
+        self.assertIsNone(warning)
+        self.assertEqual(evaluation, {"validation": {"l2": [None, 0.25]}})
+
+        mape_evaluation: dict[str, dict[str, list[float | None]]] = {}
+        warning = helpers.evaluate_validation_metric(
+            actual=[10.0, 20.0],
+            prediction=[12.0, 18.0],
+            parameters={"objective": "gamma", "metric": "mape"},
+            evaluation=mape_evaluation,
+            best_iteration=3,
+        )
+
+        self.assertIsNone(warning)
+        self.assertAlmostEqual(mape_evaluation["validation"]["mape"][2], 0.15)
+
+        failed_evaluation: dict[str, dict[str, list[float | None]]] = {}
+        warning = helpers.evaluate_validation_metric(
+            actual=[1.0],
+            prediction=[float("nan")],
+            parameters={"objective": "regression", "metric": "l2"},
+            evaluation=failed_evaluation,
+            best_iteration=2,
+        )
+
+        self.assertIn("Validation l2 metric could not be calculated", str(warning))
+        self.assertEqual(failed_evaluation, {})
 
     def test_training_scripts_keep_one_clear_lucidum_handoff(self) -> None:
         expected_calls = {
@@ -337,7 +409,7 @@ class ExternalModelExampleTests(unittest.TestCase):
                 self.assertIn(f"# %% {step}.", source)
 
     def test_report_scripts_keep_a_short_linear_teaching_flow(self) -> None:
-        for script in (GLM_REPORT_SCRIPT, GBM_REPORT_SCRIPT):
+        for script in (GLM_REPORT_SCRIPT, GBM_REPORT_SCRIPT, GBM_SUMMARY_SCRIPT):
             source = script.read_text(encoding="utf-8")
             tree = ast.parse(source, filename=str(script))
             self.assertFalse(
@@ -348,12 +420,17 @@ class ExternalModelExampleTests(unittest.TestCase):
                 for node in ast.walk(tree)
                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
             ]
-            self.assertEqual(calls.count("line_bar_chart"), 1)
-            self.assertEqual(calls.count("write_echarts_report"), 1)
+            if script == GBM_SUMMARY_SCRIPT:
+                self.assertEqual(calls.count("gbm_evaluation_chart"), 1)
+                self.assertEqual(calls.count("write_gbm_summary_report"), 1)
+            else:
+                self.assertEqual(calls.count("line_bar_chart"), 1)
+                self.assertEqual(calls.count("write_echarts_report"), 1)
             for step in range(1, 4):
                 self.assertIn(f"# %% {step}.", source)
             self.assertNotIn("create_app", source)
             self.assertNotIn("run_app", source)
+            self.assertNotIn("__lucidum_", source)
 
     def test_report_importance_percentages_titles_and_order_are_model_wide(self) -> None:
         helpers = load_report_helpers()
@@ -417,6 +494,33 @@ class ExternalModelExampleTests(unittest.TestCase):
             helpers._importance_measure({"metric": "gain"}),
             "LightGBM gain",
         )
+        summary_importance = helpers._summary_importance(
+            {"metric": "gain", "rows": importance["rows"]},
+            "named-model",
+        )
+        self.assertEqual(summary_importance["measure"], "LightGBM gain")
+        self.assertEqual(summary_importance["columns"][2]["label"], "Gain")
+        self.assertEqual(summary_importance["rows"][0]["importance"], "3")
+        self.assertEqual(
+            [row["share"] for row in summary_importance["rows"]],
+            ["60.0%", "20.0%", "20.0%", "0.0%"],
+        )
+        shap_summary = helpers._summary_importance(
+            {
+                "metric": "mean_abs_shap",
+                "rows": [
+                    {"feature": "A", "importance": 0.203403, "rank": 1},
+                    {"feature": "B", "importance": 0.178406, "rank": 2},
+                ],
+            },
+            "named-model",
+        )
+        self.assertEqual(shap_summary["columns"][2]["label"], "SHAP")
+        self.assertEqual(
+            [row["importance"] for row in shap_summary["rows"]],
+            ["20.3%", "17.8%"],
+        )
+        self.assertEqual(shap_summary["rows"][0]["raw_importance"], 0.203403)
         self.assertFalse(helpers._report_boolean({}, "show_feature_importance"))
 
     def test_report_importance_handles_all_zero_and_missing_artifacts(self) -> None:
@@ -436,8 +540,106 @@ class ExternalModelExampleTests(unittest.TestCase):
         )
 
         self.assertEqual([row["importance_percent"] for row in features], [0.0, 0.0])
+        zero_summary = helpers._summary_importance(
+            {
+                "metric": "mean_abs_shap",
+                "rows": [
+                    {"feature": "A", "importance": 0.0, "rank": 1},
+                    {"feature": "B", "importance": 0.0, "rank": 2},
+                ],
+            },
+            "zero-model",
+        )
+        self.assertEqual([row["share"] for row in zero_summary["rows"]], ["0.0%", "0.0%"])
         with self.assertRaisesRegex(ValueError, "Rebuild the model"):
             helpers._add_feature_importance([], {"rows": []}, "gbm", "empty-model")
+
+    def test_gbm_summary_uses_eligible_weighted_and_average_row_semantics(self) -> None:
+        helpers = load_report_helpers()
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            dataset_path = root / "summary.csv"
+            prediction_path = root / "predictions.parquet"
+            dataset_path.write_text(
+                "ACTUAL,WEIGHT,SAMPLE\n"
+                "100,1,training\n"
+                "300,3,training\n"
+                "999,0,training\n"
+                "200,2,test\n"
+                "400,4,validation\n",
+                encoding="utf-8",
+            )
+            con = duckdb.connect(database=":memory:")
+            try:
+                con.execute(
+                    f"""
+COPY (
+  SELECT * FROM (VALUES
+    (1, 110.0), (2, 330.0), (3, 999.0), (4, 220.0), (5, 440.0)
+  ) predictions(__lucidum_row_id, gbm_prediction)
+) TO {sql_literal(str(prediction_path))} (FORMAT PARQUET)
+"""
+                )
+            finally:
+                con.close()
+            dataset = Dataset(dataset_path)
+            try:
+                common = {
+                    "response_numerator": "ACTUAL",
+                    "sample_column": "SAMPLE",
+                    "training_value": "training",
+                    "early_stopping_value": "test",
+                    "holdout_value": "validation",
+                }
+                weighted = helpers._gbm_performance(
+                    dataset,
+                    prediction_path,
+                    {**common, "denominator": "WEIGHT"},
+                    {"training": 1.25, "test": 1.5},
+                    {"format": "currency", "decimals": 0},
+                    best_iteration=2,
+                    metric="l2",
+                )
+                average = helpers._gbm_performance(
+                    dataset,
+                    prediction_path,
+                    {**common, "denominator": None},
+                    {"training": 1.25, "test": 1.5},
+                    {"format": "currency", "decimals": 0},
+                    best_iteration=2,
+                    metric="l2",
+                )
+                mape = helpers._gbm_performance(
+                    dataset,
+                    prediction_path,
+                    {**common, "denominator": None},
+                    {"training": 0.1254, "test": 0.206, "validation": 0.181},
+                    {"format": "currency", "decimals": 0},
+                    best_iteration=2,
+                    metric="mape",
+                )
+            finally:
+                dataset.con.close()
+
+            self.assertEqual(weighted["rows"][0]["rows"], "2")
+            self.assertEqual(weighted["rows"][0]["weight"], "4")
+            self.assertEqual(weighted["rows"][0]["actual"], "£100")
+            self.assertEqual(weighted["rows"][0]["prediction"], "£110")
+            self.assertEqual(average["rows"][0]["rows"], "3")
+            self.assertEqual(average["rows"][0]["actual"], "£466")
+            self.assertEqual(average["rows"][2]["metric"], "—")
+            self.assertEqual(mape["rows"][0]["metric"], "12.5%")
+            self.assertEqual(mape["rows"][1]["metric"], "20.6%")
+            self.assertEqual(mape["rows"][2]["metric"], "18.1%")
+
+    def test_gbm_summary_requires_an_exact_kpi_match(self) -> None:
+        helpers = load_report_helpers()
+        path = Path("kpi_spec.csv")
+        kpis = [{"actual": "PREMIUM", "denominator": "__none__", "format": "currency", "decimals": 0}]
+
+        self.assertEqual(helpers._summary_kpi(kpis, "PREMIUM", None, path), kpis[0])
+        with self.assertRaisesRegex(ValueError, "no row for Actual"):
+            helpers._summary_kpi(kpis, "PREMIUM", "EXPOSURE", path)
 
     @unittest.skipUnless(HAS_EXAMPLE_DEPENDENCIES, "external-model example dependencies are not installed")
     def test_external_configs_fail_closed_for_unknown_keys_and_unsafe_ids(self) -> None:
@@ -506,12 +708,13 @@ class ExternalModelExampleTests(unittest.TestCase):
             # The 02 scripts name the model written by 01.  Pointing Lucidum's
             # active files elsewhere proves report generation does not silently
             # switch to whichever model happens to be active.
-            glm_report_config, gbm_report_config = write_report_configs(root)
+            glm_report_config, gbm_report_config, gbm_summary_config = write_report_configs(root)
             glm_store.write_json(glm_store.active_path, {"model_id": "NOT-THE-REPORT-MODEL"})
             gbm_store.write_json(gbm_store.active_path, {"model_id": "NOT-THE-REPORT-MODEL"})
             try:
                 glm_report_run = run_builder(GLM_REPORT_SCRIPT, glm_report_config)
                 gbm_report_run = run_builder(GBM_REPORT_SCRIPT, gbm_report_config)
+                gbm_summary_run = run_builder(GBM_SUMMARY_SCRIPT, gbm_summary_config)
             finally:
                 glm_store.activate_model(GLM_MODEL_ID)
                 gbm_store.activate_model(GBM_MODEL_ID)
@@ -520,16 +723,39 @@ class ExternalModelExampleTests(unittest.TestCase):
             glm_report_path = report_dir / "motor_fixture_external_glm_validation_actual_vs_expected.html"
             gbm_report_path = report_dir / "motor_fixture_external_gbm_validation_actual_vs_expected.html"
             shap_report_path = report_dir / "motor_fixture_external_gbm_all_rows_rebased_shap.html"
+            summary_report_path = report_dir / "motor_fixture_external_gbm_model_summary.html"
             self.assertIn(str(glm_report_path.resolve()), glm_report_run.stdout)
             self.assertIn(str(gbm_report_path.resolve()), gbm_report_run.stdout)
             self.assertTrue(shap_report_path.is_file())
+            self.assertIn(str(summary_report_path.resolve()), gbm_summary_run.stdout)
 
             glm_report = report_payload(glm_report_path)
             gbm_report = report_payload(gbm_report_path)
             shap_report = report_payload(shap_report_path)
+            summary_report = report_payload(summary_report_path)
             self.assertEqual(glm_report["metadata"]["model"], str(glm_dir.resolve()))
             self.assertEqual(gbm_report["metadata"]["model"], str(gbm_dir.resolve()))
             self.assertEqual(shap_report["metadata"]["model"], str(gbm_dir.resolve()))
+            self.assertEqual(summary_report["metadata"]["model"], str(gbm_dir.resolve()))
+            self.assertEqual(
+                [row["sample"] for row in summary_report["performance"]["rows"]],
+                ["Training", "Test", "Validation"],
+            )
+            self.assertTrue(
+                all(row["actual"].startswith("£") for row in summary_report["performance"]["rows"])
+            )
+            self.assertNotEqual(summary_report["performance"]["rows"][2]["metric"], "—")
+            self.assertEqual(summary_report["feature_importance"]["measure"], "Mean absolute SHAP")
+            self.assertEqual(
+                [row["rank"] for row in summary_report["feature_importance"]["rows"]],
+                list(range(1, len(summary_report["feature_importance"]["rows"]) + 1)),
+            )
+            self.assertIn("learning_rate", summary_report["parameters"])
+            self.assertEqual(summary_report["evaluation_chart"]["data"]["metric"], "poisson")
+            self.assertTrue(summary_report["evaluation_chart"]["data"]["evaluation"]["training"])
+            validation_history = summary_report["evaluation_chart"]["data"]["evaluation"]["validation"]["poisson"]
+            self.assertEqual(sum(value is not None for value in validation_history), 1)
+            self.assertIsNotNone(validation_history[summary_report["performance"]["best_iteration"] - 1])
             self.assertEqual(
                 glm_report["metadata"]["importance measure"],
                 "Weighted mean absolute centred linear-predictor contribution",

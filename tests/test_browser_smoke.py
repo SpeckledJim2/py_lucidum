@@ -520,6 +520,9 @@ output:
 
             glm_report_config = root / "config_glm_report.yaml"
             gbm_report_config = root / "config_gbm_report.yaml"
+            gbm_summary_config = root / "config_gbm_summary_report.yaml"
+            kpi_spec_path = root / "kpi_spec.csv"
+            shutil.copyfile(repo_root / "specs" / "kpi_spec.csv", kpi_spec_path)
             report_defaults = """chart_defaults:
   banding: 0
   quantiles: 0
@@ -587,9 +590,22 @@ reports:
 {report_defaults}""",
                 encoding="utf-8",
             )
+            gbm_summary_config.write_text(
+                f"""build_config: {gbm_config.name}
+kpi_spec: {kpi_spec_path.name}
+report:
+  name: model_summary
+  title: External GBM summary
+output:
+  directory: reports
+  chart_height: 600
+""",
+                encoding="utf-8",
+            )
             for script, config in (
                 (repo_root / "examples" / "02_external_glm_report_demo.py", glm_report_config),
                 (repo_root / "examples" / "02_external_gbm_report_demo.py", gbm_report_config),
+                (repo_root / "examples" / "03_external_gbm_summary_report_demo.py", gbm_summary_config),
             ):
                 subprocess.run(
                     [sys.executable, str(script), str(config)],
@@ -601,6 +617,7 @@ reports:
                 )
 
             report_dir = root / "reports"
+            summary_report_path = report_dir / "motor_fixture_external_gbm_model_summary.html"
             report_checks = [
                 (
                     report_dir / "motor_fixture_external_glm_validation_actual_vs_expected.html",
@@ -774,6 +791,58 @@ reports:
                             )
                             self.assertTrue(required_series.issubset(series_names), series_names)
                             self.assertTrue(forbidden_series.isdisjoint(series_names), series_names)
+
+                        page.goto(summary_report_path.as_uri(), wait_until="domcontentloaded")
+                        page.locator("#gbm-summary-evaluation-chart canvas").wait_for(timeout=15_000)
+                        self.assertEqual(page.locator(".summary-card").count(), 4)
+                        performance_rows = page.locator(".performance-table tbody tr")
+                        self.assertEqual(performance_rows.count(), 3)
+                        self.assertEqual(
+                            performance_rows.locator("td:first-child").all_inner_texts(),
+                            ["Training", "Test", "Validation"],
+                        )
+                        self.assertTrue(
+                            all(
+                                "£" in value
+                                for value in page.locator(".performance-table tbody tr td:nth-child(3)").all_inner_texts()
+                            )
+                        )
+                        self.assertNotEqual(
+                            performance_rows.nth(2).locator("td:last-child").inner_text(),
+                            "—",
+                        )
+                        self.assertEqual(
+                            page.locator('[data-summary-section="feature-importance"] .section-detail').inner_text(),
+                            "Importance measure: Mean absolute SHAP",
+                        )
+                        self.assertIn(
+                            "learning_rate",
+                            page.locator(".parameter-table").inner_text(),
+                        )
+                        evaluation = page.evaluate(
+                            """
+                            () => {
+                              const chart = window.echarts.getInstanceByDom(
+                                document.querySelector("#gbm-summary-evaluation-chart")
+                              );
+                              const option = chart?.getOption() || {};
+                              return {
+                                series: (option.series || []).map((item) => ({
+                                  name: item.name,
+                                  points: (item.data || []).filter(
+                                    (point) => point?.[1] != null && Number.isFinite(Number(point[1]))
+                                  ).length,
+                                })),
+                                tooltip: option.tooltip?.[0]?.trigger || "",
+                              };
+                            }
+                            """
+                        )
+                        series_points = {item["name"]: item["points"] for item in evaluation["series"]}
+                        self.assertEqual(set(series_points), {"train", "test", "validation"})
+                        self.assertEqual(series_points["validation"], 1)
+                        self.assertEqual(evaluation["tooltip"], "axis")
+                        self.assertNotIn("Zoom tail", page.locator("body").inner_text())
                         self.assertEqual(page_errors, [])
                     finally:
                         browser.close()

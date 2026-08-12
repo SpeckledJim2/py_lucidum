@@ -2681,6 +2681,37 @@ if (message !== GBM_PARAMETER_GRID_COPY_ERROR) throw new Error("grid-search copy
 """
         self.run_node_script(script)
 
+    def test_gbm_mape_evaluation_values_are_formatted_as_percentages(self) -> None:
+        module = Path("src/py_lucidum/static/app/gbm-evaluation-chart-options.js").resolve().as_uri()
+        script = f"""
+import {{ gbmEvaluationChartOption }} from "{module}";
+
+const mape = gbmEvaluationChartOption({{
+  metric: "mape",
+  manifest: {{ best_iteration: 2 }},
+  evaluation: {{
+    training: {{ mape: [0.4, 0.1254] }},
+    test: {{ mape: [0.5, 0.206] }},
+  }},
+}});
+if (mape.title.text !== "evaluation metric: mape, test metric: 20.6%, best iteration: 2") {{
+  throw new Error(`MAPE title was not formatted as a percentage: ${{mape.title.text}}`);
+}}
+if (mape.yAxis.axisLabel.formatter(0.1254) !== "12.5%") throw new Error("MAPE axis was not formatted as a percentage");
+const tooltip = mape.tooltip.formatter([{{ axisValue: 2, seriesIndex: 1, seriesName: "test", value: [2, 0.206] }}]);
+if (!tooltip.includes("20.6%")) throw new Error(`MAPE tooltip was not formatted as a percentage: ${{tooltip}}`);
+
+const l2 = gbmEvaluationChartOption({{
+  metric: "l2",
+  manifest: {{ best_iteration: 1 }},
+  evaluation: {{ test: {{ l2: [0.206] }} }},
+}});
+if (l2.title.text.includes("%") || l2.yAxis.axisLabel.formatter(0.206).includes("%")) {{
+  throw new Error("non-MAPE metric was formatted as a percentage");
+}}
+"""
+        self.run_node_script(script)
+
     def test_dataset_viewer_sanitizes_tabulator_column_definitions(self) -> None:
         dataset_viewer = (
             Path(__file__).resolve().parents[1]

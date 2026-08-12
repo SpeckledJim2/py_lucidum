@@ -1,0 +1,10 @@
+build_config: config_gbm.yaml
+kpi_spec: ../specs/kpi_spec.csv
+
+report:
+  name: model_summary
+  title: External GBM - model summary
+
+output:
+  directory: ../local/external_reports
+  chart_height: 600

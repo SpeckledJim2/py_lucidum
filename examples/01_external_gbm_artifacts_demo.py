@@ -15,6 +15,7 @@ import pandas as pd
 
 from external_model_helpers import (
     config_path_from_command_line,
+    evaluate_validation_metric,
     load_config,
     prepare_feature_data,
     read_table,
@@ -161,6 +162,17 @@ else:
         num_iteration=best_iteration,
     )
 
+# Use the predictions just made to calculate the configured metric on
+# Validation.  This adds one point to the saved Evaluation Log without making
+# another prediction or allowing Validation to affect early stopping.
+validation_warning = evaluate_validation_metric(
+    actual=response.loc[holdout_mask],
+    prediction=predictions.loc[holdout_mask],
+    parameters=parameters,
+    evaluation=evaluation,
+    best_iteration=best_iteration,
+)
+
 
 # %% 5. Save the fitted model for Lucidum
 
@@ -175,6 +187,7 @@ result = save_gbm_for_lucidum(
     evaluation=evaluation,
     predictions=predictions,
     started=started,
+    warnings=[validation_warning] if validation_warning else [],
 )
 
 print(f"GBM model id: {result['model_id']}")
