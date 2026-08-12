@@ -11,6 +11,7 @@ from py_lucidum import line_bar_chart, report_filename, write_echarts_report
 
 from external_report_helpers import (
     config_path_from_command_line,
+    features_for_report,
     load_report_settings,
     report_header,
 )
@@ -29,7 +30,7 @@ prepared_reports = []
 for report in settings["reports"]:
     charts = []
 
-    for feature in report_features:
+    for feature in features_for_report(report_features, report):
         chart = line_bar_chart(
             settings["dataset_path"],
             x=feature["name"],
@@ -46,7 +47,7 @@ for report in settings["reports"]:
             transform=report["transform"],
             partial_dependence=report["partial_dependence"],
             feature_spec=settings["feature_spec_path"],
-            title=feature["name"],
+            title=feature["title"],
         )
         charts.append(chart)
 

@@ -551,6 +551,8 @@ reports:
     partial_dependence: glm
     transform: none
     sigma: 2
+    show_feature_importance: true
+    sort_by_feature_importance: false
 {report_defaults}""",
                 encoding="utf-8",
             )
@@ -571,6 +573,8 @@ reports:
     partial_dependence: none
     transform: none
     sigma: 2
+    show_feature_importance: true
+    sort_by_feature_importance: false
   - name: all_rows_rebased_shap
     title: External GBM rebased SHAP
     sample_values: all
@@ -578,6 +582,8 @@ reports:
     partial_dependence: shap
     transform: one
     sigma: 0
+    show_feature_importance: true
+    sort_by_feature_importance: true
 {report_defaults}""",
                 encoding="utf-8",
             )
@@ -600,16 +606,25 @@ reports:
                     report_dir / "motor_fixture_external_glm_validation_actual_vs_expected.html",
                     {"Actual", "GLM prediction", "Row count", "GLM", "sigma"},
                     set(),
+                    "ANNUAL_MILEAGE",
+                    False,
+                    "Weighted mean absolute centred linear-predictor contribution",
                 ),
                 (
                     report_dir / "motor_fixture_external_gbm_validation_actual_vs_expected.html",
                     {"Actual", "GBM prediction", "Row count", "sigma"},
                     {"SHAP median"},
+                    "ANNUAL_MILEAGE",
+                    False,
+                    "Mean absolute SHAP",
                 ),
                 (
                     report_dir / "motor_fixture_external_gbm_all_rows_rebased_shap.html",
                     {"SHAP median", "SHAP Min-Max"},
                     {"Actual", "GBM prediction", "Weight", "Row count", "sigma"},
+                    "",
+                    True,
+                    "Mean absolute SHAP",
                 ),
             ]
 
@@ -717,13 +732,38 @@ reports:
                         page.get_by_role("tab", name="Stacked SHAP", exact=True).click()
                         page.locator("#gbmStackedShapChart canvas").wait_for(timeout=15_000)
 
-                        for report_path, required_series, forbidden_series in report_checks:
+                        for (
+                            report_path,
+                            required_series,
+                            forbidden_series,
+                            first_feature,
+                            first_is_ranked,
+                            importance_measure,
+                        ) in report_checks:
                             page.goto(report_path.as_uri(), wait_until="domcontentloaded")
                             page.locator(".report-chart canvas").first.wait_for(timeout=15_000)
                             self.assertEqual(page.locator(".chart-card").count(), 16)
                             self.assertIn("SOURCE PARQUET", page.locator(".report-header").inner_text())
                             self.assertIn("MODEL", page.locator(".report-provenance").inner_text())
                             self.assertIn(str(root.resolve()), page.locator(".report-provenance").inner_text())
+                            self.assertEqual(
+                                page.locator(".report-metadata-footer dd").inner_text(),
+                                importance_measure,
+                            )
+                            chart_headings = page.locator(".chart-card h2").all_inner_texts()
+                            self.assertTrue(
+                                all("Importance" in heading or "Not in model" in heading for heading in chart_headings),
+                                chart_headings,
+                            )
+                            if first_is_ranked:
+                                visible_ranks = [
+                                    int(match.group(1))
+                                    for heading in chart_headings
+                                    if (match := re.search(r"\(Rank (\d+),", heading))
+                                ]
+                                self.assertEqual(visible_ranks, list(range(1, len(chart_headings) + 1)))
+                            else:
+                                self.assertTrue(chart_headings[0].startswith(first_feature), chart_headings[0])
                             series_names = set(
                                 page.evaluate(
                                     """

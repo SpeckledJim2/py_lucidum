@@ -44,6 +44,7 @@ class ReportingTests(unittest.TestCase):
                     "expected": "BENCHMARK",
                     "SAMPLE_ROWS": "validation",
                     "script run": "example.py",
+                    "importance measure": "Mean absolute SHAP",
                 },
             )
 
@@ -55,11 +56,14 @@ class ReportingTests(unittest.TestCase):
             self.assertIn("height: 600px", document)
             self.assertIn('class="report-provenance"', document)
             self.assertIn('class="report-metadata-grid"', document)
+            self.assertIn('class="report-metadata-footer"', document)
             report_header = re.search(r'<header class="report-header">(.*?)</header>', document, re.DOTALL).group(1)
             self.assertLess(report_header.index("Source Parquet"), report_header.index("Model"))
             self.assertLess(report_header.index("Response"), report_header.index("Weight"))
             self.assertLess(report_header.index("Weight"), report_header.index("Expected"))
             self.assertLess(report_header.index("Expected"), report_header.index("SAMPLE_ROWS"))
+            self.assertLess(report_header.index("SAMPLE_ROWS"), report_header.index("Importance Measure"))
+            self.assertIn("Mean absolute SHAP", report_header)
             self.assertIn(str(root / ".lucidum" / "models" / "example-model"), document)
             self.assertNotIn("<script src=", document)
             self.assertNotIn("lineBarControlStrip", document)
@@ -71,6 +75,10 @@ class ReportingTests(unittest.TestCase):
             )
             self.assertIsNotNone(match)
             payload = json.loads(match.group(1))
+            self.assertRegex(
+                payload["metadata"]["time run"],
+                r"^\d{1,2} [A-Z][a-z]{2} \d{4}, \d{2}:\d{2} .+$",
+            )
             self.assertEqual(payload["charts"][0]["metadata"]["sample_values"], ["validation"])
             self.assertEqual(payload["charts"][0]["metadata"]["selected_rows"], 2)
             self.assertEqual(payload["charts"][0]["presentation"]["content"], "actual_expected")
@@ -89,7 +97,9 @@ class ReportingTests(unittest.TestCase):
 
             write_echarts_report([chart], output_path, title="Height", chart_height=800)
 
-            self.assertIn("height: 800px", output_path.read_text(encoding="utf-8"))
+            document = output_path.read_text(encoding="utf-8")
+            self.assertIn("height: 800px", document)
+            self.assertNotIn('class="report-metadata-footer"', document)
 
     def test_shap_only_requires_a_named_shap_model(self) -> None:
         with TemporaryDirectory() as tmp_dir:

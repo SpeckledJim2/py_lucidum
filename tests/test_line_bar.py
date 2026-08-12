@@ -28,6 +28,7 @@ from py_lucidum.tools.glm.training import MissingGlmDependency, glm_dependencies
 from py_lucidum.tools.line_bar import query as line_bar_query
 from py_lucidum.tools.line_bar import two_feature as two_feature_query
 from py_lucidum.tools.line_bar.favourites import LineBarFavouriteStore
+from py_lucidum.tools.line_bar.importance import gbm_model_importance, glm_model_importance, ranked_rows
 from py_lucidum.tools.line_bar.model_ratio import RATIO_COLUMN, RATIO_KIND
 from py_lucidum.tools.line_bar.query import apply_transform, chart, mixed_relation_sql, normalise_quantile_count, table
 
@@ -2243,6 +2244,67 @@ COPY (
         self.assertEqual(payload["models"]["glm"]["metric_label"], "GLM eta MAD")
         self.assertEqual([row["feature"] for row in payload["models"]["glm"]["rows"]], ["UseofVan", "YoungestDriverAge"])
         self.assertIn("Gross.Weight", [row["name"] for row in payload["dataset_features"]])
+
+    def test_named_feature_importance_uses_shap_for_the_whole_gbm(self) -> None:
+        store = self.write_active_gbm_importance_model()
+
+        payload = gbm_model_importance(store, "importance-gbm")
+
+        self.assertEqual(payload["metric"], "mean_abs_shap")
+        self.assertEqual(
+            [(row["feature"], row["importance"], row["rank"]) for row in payload["rows"]],
+            [("YoungestDriverAge", 2.5, 1), ("UseofVan", 0.5, 2)],
+        )
+
+    def test_named_gbm_feature_importance_falls_back_to_gain(self) -> None:
+        store = self.write_active_gbm_importance_model(with_shap=False)
+
+        payload = gbm_model_importance(store, "importance-gbm")
+
+        self.assertEqual(payload["metric"], "gain")
+        self.assertEqual(
+            [(row["feature"], row["importance"], row["rank"]) for row in payload["rows"]],
+            [("UseofVan", 3.0, 1), ("YoungestDriverAge", 2.0, 2)],
+        )
+
+    def test_named_glm_feature_importance_does_not_depend_on_active_model(self) -> None:
+        store = self.write_active_glm_importance_model()
+        store.write_json(store.active_path, {"model_id": "another-model"})
+
+        payload = glm_model_importance(store, "importance-glm")
+
+        self.assertEqual(payload["metric"], "weighted_mean_abs_centered_linear_predictor_contribution")
+        self.assertEqual(
+            [(row["feature"], row["importance"], row["rank"]) for row in payload["rows"]],
+            [("UseofVan", 0.75, 1), ("YoungestDriverAge", 0.25, 2)],
+        )
+
+    def test_feature_importance_ties_use_case_insensitive_feature_order(self) -> None:
+        rows = ranked_rows(
+            [
+                {"feature": "zebra", "importance": 1.0},
+                {"feature": "Alpha", "importance": 1.0},
+            ]
+        )
+
+        self.assertEqual(
+            [(row["feature"], row["rank"]) for row in rows],
+            [("Alpha", 1), ("zebra", 2)],
+        )
+
+    def test_named_feature_importance_reports_missing_artifacts(self) -> None:
+        gbm_store = self.write_active_gbm_importance_model(with_shap=False)
+        glm_store = self.write_active_glm_importance_model()
+        gbm_store.artifact_path("importance-gbm", "feature_config").unlink()
+        glm_store.artifact_path("importance-glm", "feature_importance").unlink()
+
+        gbm_payload = gbm_model_importance(gbm_store, "importance-gbm")
+        glm_payload = glm_model_importance(glm_store, "importance-glm")
+
+        self.assertFalse(gbm_payload["rows"])
+        self.assertFalse(glm_payload["rows"])
+        self.assertIn("Rebuild the model", gbm_payload["message"])
+        self.assertIn("Rebuild the model", glm_payload["message"])
 
     def test_feature_importance_endpoint_reports_missing_active_models(self) -> None:
         app = create_app(self.data_path, token="", tools=["gbm", "glm", "line_bar"], use_saved_filters=False, use_kpis=False)

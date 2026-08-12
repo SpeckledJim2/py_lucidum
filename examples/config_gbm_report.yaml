@@ -30,6 +30,8 @@ reports:
     partial_dependence: none
     transform: none
     sigma: 2
+    show_feature_importance: true
+    sort_by_feature_importance: false
 
   - name: all_rows_rebased_shap
     title: External GBM - all rows rebased SHAP
@@ -38,6 +40,8 @@ reports:
     partial_dependence: shap
     transform: one
     sigma: 0
+    show_feature_importance: true
+    sort_by_feature_importance: true
 
 output:
   directory: ../local/external_reports

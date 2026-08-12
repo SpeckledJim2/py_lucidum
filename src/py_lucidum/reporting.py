@@ -5,7 +5,7 @@ import json
 import math
 import re
 from collections.abc import Iterable, Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -204,7 +204,9 @@ def write_echarts_report(
     package_root = Path(__file__).resolve().parent
     echarts_source = (package_root / "static" / "vendor" / "echarts" / "echarts.min.js").read_text(encoding="utf-8")
     renderer_source = (package_root / "static" / "app" / "line-bar-chart.js").read_text(encoding="utf-8")
-    generated_at = datetime.now(UTC).isoformat(timespec="seconds")
+    run_time = datetime.now().astimezone()
+    timezone_name = run_time.tzname() or run_time.strftime("%z")
+    generated_at = f"{run_time.day} {run_time.strftime('%b %Y, %H:%M')} {timezone_name}"
     report_metadata = {**dict(metadata or {}), "time run": generated_at, "Lucidum version": __version__}
     payload = {
         "title": str(title),
@@ -458,6 +460,7 @@ def _report_document(
     chart_height: int,
 ) -> str:
     full_width_metadata = {"source parquet", "model"}
+    footer_metadata = {"importance measure"}
     provenance_html = "".join(
         f"<div><dt>{html.escape(_metadata_label(key))}</dt><dd>{html.escape(_display_value(value))}</dd></div>"
         for key, value in report_metadata.items()
@@ -467,9 +470,16 @@ def _report_document(
     metadata_html = "".join(
         f"<div><dt>{html.escape(_metadata_label(key))}</dt><dd>{html.escape(_display_value(value))}</dd></div>"
         for key, value in report_metadata.items()
-        if str(key).strip().lower() not in full_width_metadata
+        if str(key).strip().lower() not in full_width_metadata | footer_metadata
         and value is not None and value != "" and value != []
     )
+    footer_html = "".join(
+        f"<div><dt>{html.escape(_metadata_label(key))}</dt><dd>{html.escape(_display_value(value))}</dd></div>"
+        for key, value in report_metadata.items()
+        if str(key).strip().lower() in footer_metadata
+        and value is not None and value != "" and value != []
+    )
+    footer_section = f'<dl class="report-metadata-footer">{footer_html}</dl>' if footer_html else ""
     cards = []
     for index, chart in enumerate(charts):
         chart_metadata = chart.get("metadata") if isinstance(chart.get("metadata"), Mapping) else {}
@@ -512,6 +522,7 @@ def _report_document(
     .report-provenance {{ display: grid; gap: 10px; margin-bottom: 14px; }}
     .report-provenance div {{ width: 100%; }}
     .report-metadata-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px 24px; padding-top: 14px; border-top: 1px solid var(--line); }}
+    .report-metadata-footer {{ margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }}
     dt {{ color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }}
     dd {{ margin: 2px 0 0; overflow-wrap: anywhere; font-size: 13px; }}
     .chart-card {{ margin: 0 0 20px; overflow: hidden; }}
@@ -529,6 +540,7 @@ def _report_document(
       <h1>{html.escape(title)}</h1>
       <dl class="report-provenance">{provenance_html}</dl>
       <dl class="report-metadata-grid">{metadata_html}</dl>
+      {footer_section}
     </header>
     {''.join(cards)}
   </main>

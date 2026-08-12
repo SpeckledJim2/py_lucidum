@@ -30,6 +30,8 @@ reports:
     partial_dependence: glm
     transform: none
     sigma: 2
+    show_feature_importance: true
+    sort_by_feature_importance: false
 
 output:
   directory: ../local/external_reports

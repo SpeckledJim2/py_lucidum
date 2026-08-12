@@ -41,13 +41,31 @@ def active_gbm_importance(store: Any) -> dict[str, Any]:
     if not model_id:
         return empty_model_payload("No active GBM is available.")
     try:
-        manifest = store.manifest(model_id)
+        return gbm_model_importance(store, model_id, description="Active GBM")
     except Exception:
         return empty_model_payload("No active GBM is available.", model_id=model_id)
 
+
+def gbm_model_importance(store: Any, model_id: str, *, description: str | None = None) -> dict[str, Any]:
+    """Return Lucidum's ranked importance rows for one named GBM."""
+
+    description = description or f"GBM model '{model_id}'"
+    manifest = store.manifest(model_id)
     feature_config = getattr(store, "model_feature_config", None)
-    if callable(feature_config):
-        feature_rows = feature_config(model_id)
+    try:
+        feature_config_path = store.artifact_path(model_id, "feature_config")
+        saved_feature_rows = (
+            store.read_parquet_records(feature_config_path)
+            if feature_config_path.exists()
+            else []
+        )
+    except Exception:
+        saved_feature_rows = []
+    if saved_feature_rows and callable(feature_config):
+        try:
+            feature_rows = feature_config(model_id)
+        except Exception:
+            feature_rows = []
     else:
         feature_rows = []
 
@@ -89,7 +107,7 @@ def active_gbm_importance(store: Any) -> dict[str, Any]:
             metric=metric,
             metric_label=metric_label,
             rows=[],
-            message="Active GBM has no saved feature importances.",
+            message=f"{description} has no saved feature importances. Rebuild the model to calculate them.",
         )
     return model_payload(
         model_id=model_id,
@@ -107,10 +125,16 @@ def active_glm_importance(store: Any) -> dict[str, Any]:
     if not model_id:
         return empty_model_payload("No active GLM is available.")
     try:
-        manifest = store.manifest(model_id)
+        return glm_model_importance(store, model_id, description="Active GLM")
     except Exception:
         return empty_model_payload("No active GLM is available.", model_id=model_id)
 
+
+def glm_model_importance(store: Any, model_id: str, *, description: str | None = None) -> dict[str, Any]:
+    """Return Lucidum's ranked importance rows for one named GLM."""
+
+    description = description or f"GLM model '{model_id}'"
+    manifest = store.manifest(model_id)
     rows = read_glm_importance_rows(store, model_id, manifest)
     metric = GLM_IMPORTANCE_METRIC
     metric_label = GLM_IMPORTANCE_LABEL
@@ -121,7 +145,7 @@ def active_glm_importance(store: Any) -> dict[str, Any]:
             metric=metric,
             metric_label=metric_label,
             rows=[],
-            message="Rebuild the active GLM to calculate feature importances.",
+            message=f"{description} has no saved feature importances. Rebuild the model to calculate them.",
         )
     return model_payload(
         model_id=model_id,
@@ -186,7 +210,13 @@ def safe_active_model_id(store: Any) -> str:
 
 
 def ranked_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    ranked = sorted(rows, key=lambda row: (-float(row.get("importance") or 0.0), str(row.get("feature") or "").lower()))
+    ranked = sorted(
+        rows,
+        key=lambda row: (
+            -float(row.get("importance") or 0.0),
+            str(row.get("feature") or "").casefold(),
+        ),
+    )
     return [{**row, "rank": index + 1} for index, row in enumerate(ranked)]
 
 

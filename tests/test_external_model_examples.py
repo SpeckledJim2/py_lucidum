@@ -23,6 +23,7 @@ from py_lucidum.tools.gbm.tabulation import build_gbm_tabulations
 from py_lucidum.tools.glm.store import GlmModelStore
 from py_lucidum.tools.glm.tabulation import build_tabulations
 from py_lucidum.tools.glm.overlay import stop_persistent_glm_overlay_worker
+from py_lucidum.tools.line_bar.importance import gbm_model_importance, glm_model_importance
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -219,6 +220,8 @@ def write_report_configs(root: Path) -> tuple[Path, Path]:
                 "partial_dependence": "glm",
                 "transform": "none",
                 "sigma": 2,
+                "show_feature_importance": True,
+                "sort_by_feature_importance": False,
             }
         ],
     }
@@ -239,6 +242,8 @@ def write_report_configs(root: Path) -> tuple[Path, Path]:
                 "partial_dependence": "none",
                 "transform": "none",
                 "sigma": 2,
+                "show_feature_importance": True,
+                "sort_by_feature_importance": False,
             },
             {
                 "name": "all_rows_rebased_shap",
@@ -248,6 +253,8 @@ def write_report_configs(root: Path) -> tuple[Path, Path]:
                 "partial_dependence": "shap",
                 "transform": "one",
                 "sigma": 0,
+                "show_feature_importance": True,
+                "sort_by_feature_importance": True,
             },
         ],
     }
@@ -279,6 +286,15 @@ def run_builder(script: Path, config: Path) -> subprocess.CompletedProcess[str]:
         text=True,
         timeout=120,
     )
+
+
+def load_report_helpers() -> Any:
+    spec = importlib.util.spec_from_file_location("external_report_helpers_for_tests", REPORT_HELPERS)
+    if spec is None or spec.loader is None:
+        raise AssertionError(f"Could not load {REPORT_HELPERS}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 class ExternalModelExampleTests(unittest.TestCase):
@@ -338,6 +354,90 @@ class ExternalModelExampleTests(unittest.TestCase):
                 self.assertIn(f"# %% {step}.", source)
             self.assertNotIn("create_app", source)
             self.assertNotIn("run_app", source)
+
+    def test_report_importance_percentages_titles_and_order_are_model_wide(self) -> None:
+        helpers = load_report_helpers()
+        features = [
+            {"name": "Missing Z", "controls": {}},
+            {"name": "Charlie", "controls": {}},
+            {"name": "Beta", "controls": {}},
+            {"name": "missing A", "controls": {}},
+            {"name": "alpha", "controls": {}},
+            {"name": "Zero", "controls": {}},
+        ]
+        importance = {
+            "rows": [
+                {"feature": "Beta", "importance": 3.0, "rank": 1},
+                {"feature": "alpha", "importance": 1.0, "rank": 2},
+                {"feature": "Charlie", "importance": 1.0, "rank": 3},
+                {"feature": "Zero", "importance": 0.0, "rank": 4},
+            ]
+        }
+
+        helpers._add_feature_importance(features, importance, "gbm", "named-model")
+        prepared = helpers.features_for_report(
+            features,
+            {"show_feature_importance": True, "sort_by_feature_importance": True},
+        )
+
+        self.assertEqual(
+            [row["name"] for row in prepared],
+            ["Beta", "alpha", "Charlie", "Zero", "missing A", "Missing Z"],
+        )
+        self.assertEqual(prepared[0]["title"], "Beta (Rank 1, Importance 60.0%)")
+        self.assertEqual(prepared[1]["title"], "alpha (Rank 2, Importance 20.0%)")
+        self.assertEqual(prepared[2]["title"], "Charlie (Rank 3, Importance 20.0%)")
+        self.assertEqual(prepared[3]["title"], "Zero (Rank 4, Importance 0.0%)")
+        self.assertEqual(prepared[4]["title"], "missing A (Not in model)")
+        sorted_without_titles = helpers.features_for_report(
+            features,
+            {"show_feature_importance": False, "sort_by_feature_importance": True},
+        )
+        self.assertEqual(
+            [row["name"] for row in sorted_without_titles],
+            ["Beta", "alpha", "Charlie", "Zero", "missing A", "Missing Z"],
+        )
+        self.assertEqual(
+            [row["title"] for row in sorted_without_titles],
+            ["Beta", "alpha", "Charlie", "Zero", "missing A", "Missing Z"],
+        )
+        displayed_in_scenario_order = helpers.features_for_report(
+            features,
+            {"show_feature_importance": True, "sort_by_feature_importance": False},
+        )
+        self.assertEqual(
+            [row["name"] for row in displayed_in_scenario_order],
+            ["Missing Z", "Charlie", "Beta", "missing A", "alpha", "Zero"],
+        )
+        self.assertEqual(
+            helpers._importance_measure({"metric": "mean_abs_shap"}),
+            "Mean absolute SHAP",
+        )
+        self.assertEqual(
+            helpers._importance_measure({"metric": "gain"}),
+            "LightGBM gain",
+        )
+        self.assertFalse(helpers._report_boolean({}, "show_feature_importance"))
+
+    def test_report_importance_handles_all_zero_and_missing_artifacts(self) -> None:
+        helpers = load_report_helpers()
+        features = [{"name": "A", "controls": {}}, {"name": "B", "controls": {}}]
+
+        helpers._add_feature_importance(
+            features,
+            {
+                "rows": [
+                    {"feature": "A", "importance": 0.0, "rank": 1},
+                    {"feature": "B", "importance": 0.0, "rank": 2},
+                ]
+            },
+            "glm",
+            "zero-model",
+        )
+
+        self.assertEqual([row["importance_percent"] for row in features], [0.0, 0.0])
+        with self.assertRaisesRegex(ValueError, "Rebuild the model"):
+            helpers._add_feature_importance([], {"rows": []}, "gbm", "empty-model")
 
     @unittest.skipUnless(HAS_EXAMPLE_DEPENDENCIES, "external-model example dependencies are not installed")
     def test_external_configs_fail_closed_for_unknown_keys_and_unsafe_ids(self) -> None:
@@ -430,18 +530,84 @@ class ExternalModelExampleTests(unittest.TestCase):
             self.assertEqual(glm_report["metadata"]["model"], str(glm_dir.resolve()))
             self.assertEqual(gbm_report["metadata"]["model"], str(gbm_dir.resolve()))
             self.assertEqual(shap_report["metadata"]["model"], str(gbm_dir.resolve()))
+            self.assertEqual(
+                glm_report["metadata"]["importance measure"],
+                "Weighted mean absolute centred linear-predictor contribution",
+            )
+            self.assertEqual(gbm_report["metadata"]["importance measure"], "Mean absolute SHAP")
+            self.assertEqual(shap_report["metadata"]["importance measure"], "Mean absolute SHAP")
             self.assertEqual(len(glm_report["charts"]), 16)
             self.assertEqual(len(gbm_report["charts"]), 16)
             self.assertEqual(len(shap_report["charts"]), 16)
+            scenario_order = [
+                "ANNUAL_MILEAGE", "CAR_VALUE", "DRIVER_AGE", "FUEL_TYPE",
+                "LICENCE_TYPE", "MAKE", "NCD_YEARS", "OVERNIGHT_LOCATION",
+                "POSTCODE_AREA", "POSTCODE_CATEGORY", "PRIOR_CLAIMS",
+                "VEHICLE_AGE", "VEHICLE_CATEGORY", "VEHICLE_USAGE",
+                "YEARS_LICENCE_HELD", "YEARS_OWNED_VEHICLE",
+            ]
             self.assertEqual(
                 [chart["metadata"]["feature"] for chart in glm_report["charts"]],
-                [
-                    "ANNUAL_MILEAGE", "CAR_VALUE", "DRIVER_AGE", "FUEL_TYPE",
-                    "LICENCE_TYPE", "MAKE", "NCD_YEARS", "OVERNIGHT_LOCATION",
-                    "POSTCODE_AREA", "POSTCODE_CATEGORY", "PRIOR_CLAIMS",
-                    "VEHICLE_AGE", "VEHICLE_CATEGORY", "VEHICLE_USAGE",
-                    "YEARS_LICENCE_HELD", "YEARS_OWNED_VEHICLE",
-                ],
+                scenario_order,
+            )
+            self.assertEqual(
+                [chart["metadata"]["feature"] for chart in gbm_report["charts"]],
+                scenario_order,
+            )
+
+            glm_importance = glm_model_importance(glm_store, GLM_MODEL_ID)
+            gbm_importance = gbm_model_importance(gbm_store, GBM_MODEL_ID)
+            glm_rows = {row["feature"]: row for row in glm_importance["rows"]}
+            gbm_rows = {row["feature"]: row for row in gbm_importance["rows"]}
+            glm_total = sum(max(0.0, row["importance"]) for row in glm_importance["rows"])
+            gbm_total = sum(max(0.0, row["importance"]) for row in gbm_importance["rows"])
+            expected_glm_titles = {
+                feature: (
+                    f"{feature} (Rank {glm_rows[feature]['rank']}, "
+                    f"Importance {max(0.0, glm_rows[feature]['importance']) / glm_total * 100:.1f}%)"
+                    if feature in glm_rows
+                    else f"{feature} (Not in model)"
+                )
+                for feature in scenario_order
+            }
+            expected_gbm_titles = {
+                feature: (
+                    f"{feature} (Rank {gbm_rows[feature]['rank']}, "
+                    f"Importance {max(0.0, gbm_rows[feature]['importance']) / gbm_total * 100:.1f}%)"
+                    if feature in gbm_rows
+                    else f"{feature} (Not in model)"
+                )
+                for feature in scenario_order
+            }
+            self.assertEqual(
+                [chart["title"] for chart in glm_report["charts"]],
+                [expected_glm_titles[feature] for feature in scenario_order],
+            )
+            self.assertEqual(
+                [chart["title"] for chart in gbm_report["charts"]],
+                [expected_gbm_titles[feature] for feature in scenario_order],
+            )
+            self.assertEqual(
+                expected_glm_titles["MAKE"],
+                "MAKE (Not in model)",
+            )
+
+            gbm_rank = {row["feature"]: row["rank"] for row in gbm_importance["rows"]}
+            shap_order = sorted(
+                scenario_order,
+                key=lambda feature: (
+                    0 if feature in gbm_rank else 1,
+                    gbm_rank.get(feature, 0),
+                    feature.casefold(),
+                ),
+            )
+            self.assertEqual(
+                [chart["metadata"]["feature"] for chart in shap_report["charts"]],
+                shap_order,
+            )
+            self.assertEqual(
+                [chart["title"] for chart in shap_report["charts"]],
+                [expected_gbm_titles[feature] for feature in shap_order],
             )
             for chart_spec in glm_report["charts"]:
                 self.assertEqual(chart_spec["metadata"]["sample_values"], ["validation"])

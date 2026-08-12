@@ -363,156 +363,20 @@ app = create_app(
 py_lucidum.run_app(app, host="127.0.0.1", port=8000, open_browser=True)
 ```
 
-## External GLM and GBM builds
+## External model builds and HTML reports
 
-The checked-in examples show how a separate Python pipeline can train a model,
-write Lucidum's current artifact format, and install the result without
-importing `py_lucidum`. Start with the two training scripts and their YAML
-files. Each script is a linear, numbered `# %%` example: load, prepare, fit,
-predict, then make one save call. The sections can be run from top to bottom as
-a normal script or sent to a Python console one at a time from an editor that
-supports Python cells.
+The checked-in examples provide a YAML-controlled 01 → 02 workflow for
+building GLM or GBM models outside the Lucidum application and creating static,
+interactive ECharts reports from them. The 01 scripts use ordinary
+`glum`/LightGBM code and do not import `py_lucidum`; their adapter writes and
+installs the current artifact format. The short 02 scripts use Lucidum only as
+a chart library and name the exact model created by the matching build YAML.
 
-Routine command-line, YAML, and data-loading code is kept in
-`examples/external_model_helpers.py`. Lucidum's file-format and installation
-machinery is isolated in `examples/lucidum_export.py`; most users should not
-need to read or modify either helper. These are compatibility examples rather
-than a public writer API: external Python performs the fit and prediction,
-then the adapter creates the artifacts. Lucidum discovers the installed files
-and supplies its normal model navigator, coefficients, evaluation, tree, SHAP,
-tabulation, and Line/Bar views.
-
-From a source checkout, install the modelling and YAML dependencies together:
+From a source checkout:
 
 ```bash
 python -m pip install -e ".[glm,gbm,examples]"
-python examples/01_external_glm_artifacts_demo.py
-python examples/01_external_gbm_artifacts_demo.py
-lucidum datasets/motor_premiums.parquet --tools line-bar,glm,gbm \
-  --features specs/feature_spec.csv
-```
 
-Each script accepts one optional argument: the path to its YAML config. With no
-argument it uses `examples/config_glm.yaml` or `examples/config_gbm.yaml`.
-Paths inside a config resolve from that config file's directory, so builds do
-not depend on the shell's current directory. The supplied configs install and
-activate `EXTERNAL_BUILD-config-glm` and `EXTERNAL_BUILD-config-gbm` and replace
-only that exact ID on subsequent runs.
-
-The GLM config fields are:
-
-- `dataset.path`: one CSV or Parquet file.
-- `dataset.response_numerator`: numeric response/numerator column.
-- `dataset.denominator`: a numeric exposure/weight column, or `null` for
-  average-row modelling.
-- `dataset.sample_column` and `dataset.training_value`: the mandatory physical
-  sample column and value used for fitting.
-- `model.formula_path`: a text file containing only the Formulaic RHS, without
-  `response ~`. Python-style `#` comments are removed for fitting while the
-  original commented formula is retained in the saved model artifacts.
-- `model.family`, `model.link`, and `model.fit_intercept`: direct `glum`
-  settings.
-- `model.regularization.alpha`, `l1_ratio`, and `scale_predictors`: the manual
-  regularization settings.
-- `model.id` and `model.label`: the sidecar folder ID and display label.
-- `output.portable_root`, `install`, and `replace_existing`: portable output
-  location and installation policy.
-
-When a denominator is configured, the GLM fits
-`response_numerator / denominator` with the denominator as sample weight. It
-writes numerator-scale `glm_prediction` and rate-scale `glm_prediction_rate`.
-With `denominator: null`, `glm_prediction` is the direct average-row prediction
-and no rate column is needed.
-
-The GBM config uses the same dataset, model identity, and output fields, plus:
-
-- `dataset.training_value`, `early_stopping_value`, and `holdout_value`: three
-  distinct values in the mandatory sample column.
-- `features.spec_path` and `features.scenario_column`: a Feature Specification
-  CSV and the scenario column to read. Rows whose scenario value is `feature`,
-  case-insensitively, define the ordered input feature set.
-- `training.parameters`: the dictionary passed to `lightgbm.train`, including
-  objective, metric, seed, and normal LightGBM parameters.
-- `training.num_boost_round`, `early_stopping_rounds`, and `shap_rows`: the
-  training cap, stopping patience, and deterministic saved SHAP sample size;
-  `shap_rows` also accepts `all`.
-
-For Poisson, Gamma, and Tweedie objectives with a denominator, the GBM uses
-`log(denominator)` as the LightGBM initial score and adds that offset back when
-scoring. It writes numerator-scale `gbm_prediction` and
-`gbm_prediction_rate = gbm_prediction / denominator`.
-
-Both builders assign one-based `__lucidum_row_id` over the complete source file
-before sample or denominator filtering. They train on the configured sample
-rows and score every eligible row while retaining those original IDs. This is
-the join key Lucidum uses to attach compact predictions and SHAP values to the
-source dataset; an external pipeline must not reset or renumber it after
-filtering.
-
-Portable output has this shape:
-
-```text
-<portable_root>/
-├── lucidum_artifacts.json
-├── glm/<model-id>/
-│   ├── manifest.json
-│   ├── formula.txt
-│   ├── estimator.pkl
-│   ├── coefficients.parquet
-│   ├── feature_importance.parquet
-│   ├── predictions.parquet
-│   └── diagnostics.json
-└── gbm/<model-id>/
-    ├── manifest.json
-    ├── parameters.json
-    ├── features.json
-    ├── feature_config.parquet
-    ├── model.txt
-    ├── predictions.parquet
-    ├── evaluation.parquet
-    ├── tree_table.parquet
-    ├── shap_values.parquet
-    └── shap_summary.parquet
-```
-
-Installation independently reproduces Lucidum workspace-signature version 1
-and copies the model to:
-
-```text
-<dataset-directory>/.lucidum/datasets/<dataset-slug>/<signature>/models/
-├── glm/<model-id>/...
-├── glm/active_model.json
-├── gbm/<model-id>/...
-└── gbm/active_model.json
-```
-
-The builders stage complete directories, atomically swap only the configured
-`<model-id>` folder, and then update that model type's active marker. They do
-not delete the surrounding sidecar or other model IDs. `replace_existing:
-false` rejects an existing target; `install: false` leaves only the portable
-copy. Because the workspace signature includes file size, modification time,
-row count, and ordered schema, changing or rewriting the dataset creates a new
-workspace and requires rebuilding or reinstalling artifacts for that version.
-
-The generated portable output and `.lucidum` sidecars are local artifacts and
-remain ignored by Git. Lucidum-created tabulations are written later beneath
-the installed model folder; they demonstrate that the external estimator or
-tree table is functional, but are intentionally not fabricated by these
-training examples.
-
-## External Line/Bar HTML reports
-
-The matching 02 examples use Lucidum as a Python chart library without
-starting the Lucidum app or a web server. They read the model IDs and dataset
-settings used by the 01 builds, create the same interactive ECharts Line/Bar
-charts, and write portable HTML files containing their data, renderer, and
-vendored ECharts code. The chart data is fixed when the script runs, so there
-is no control strip or in-page recalculation; legends, hover tooltips, and zoom
-remain interactive.
-
-Run the 01 build before its 02 report:
-
-```bash
 python examples/01_external_glm_artifacts_demo.py
 python examples/02_external_glm_report_demo.py
 
@@ -520,55 +384,15 @@ python examples/01_external_gbm_artifacts_demo.py
 python examples/02_external_gbm_report_demo.py
 ```
 
-The supplied configs write three ignored local files beneath
-`local/external_reports/`:
+The supplied reports include GLM and GBM validation Actual-vs-Expected charts
+and an all-row rebased GBM SHAP report. YAML and Feature Specification columns
+control sample rows, chart presentation, model-wide importance titles and
+ordering, output location, and chart height.
 
-```text
-motor_premiums_external_glm_validation_actual_vs_expected.html
-motor_premiums_external_gbm_validation_actual_vs_expected.html
-motor_premiums_external_gbm_all_rows_rebased_shap.html
-```
-
-Each report header shows the complete source-Parquet path and installed model
-folder on separate full-width rows. Response, Weight, Expected, SAMPLE rows,
-and the remaining run details appear in the compact grid below them.
-
-Both 02 scripts are linear `# %%` examples: load settings, loop over features,
-then write HTML. `examples/external_report_helpers.py` contains the routine
-YAML/path and blank-value fallback handling. The report YAML fields are:
-
-- `build_config`: the matching 01 YAML. Its exact dataset path, response,
-  denominator, SAMPLE column, model ID, and model label are reused.
-- `features.spec_path` and `features.scenario_column`: the Feature
-  Specification and the scenario selecting the report pages. The demo's
-  `report_demo` scenario selects every Feature Specification row except
-  `LATITUDE`, `LONGITUDE`, and `POSTCODE_SECTOR`.
-- `chart.expected`, `expected_label`, and `expected_source`: the Expected line
-  column and whether it comes from the dataset, GLM artifacts, or GBM
-  artifacts. Other numeric columns are allowed.
-- `chart_defaults`: fallbacks for blank `chart_*` cells in the Feature
-  Specification.
-- each `reports` row: a readable name/title, SAMPLE values (a list or `all`),
-  `chart_content` (`actual_expected` or `shap_only`), `partial_dependence`
-  (`none`, `glm`, or `shap`), transform, and `sigma`. The supplied Actual vs
-  Expected reports use sigma `2`; the SHAP-only report uses `0`.
-- `output.directory`: where the self-contained HTML files are written.
-- `output.chart_height`: chart height in pixels. The default is `600`.
-
-The GLM demo uses validation rows and displays its GLM partial-dependence line.
-The GBM demo first uses validation rows for Actual vs Expected, then uses all
-rows for SHAP ribbons plus the median. The SHAP-only report hides Actual,
-Expected, and Weight and uses `transform: one` to rebase each feature at its
-Feature Specification `Base`. It uses the SHAP values saved by the named 01
-GBM build; it does not recalculate SHAP values or follow Lucidum's active-model
-marker.
-
-For direct Python use, `py_lucidum.line_bar_chart(...)` returns one chart
-specification and `py_lucidum.write_echarts_report(...)` combines any number of
-those charts into a self-contained report. Its optional `chart_height`
-parameter has the same `600px` default as the examples. The current writer supports
-Line/Bar charts; its chart-spec boundary deliberately leaves room for future
-SHAP chart types.
+See [External model builds and HTML
+reports](docs/external-model-builds-and-reports.md) for the complete 01/02
+workflow, every YAML field, row-identity and installation contracts, artifact
+trees, report controls, and feature-importance rules.
 
 ## Filters
 

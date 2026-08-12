@@ -59,6 +59,8 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
   - `py_lucidum.report_filename(...)`
   - `py_lucidum.app.create_app(...)`
 - External compatibility examples:
+  - User workflow and YAML contract:
+    `docs/external-model-builds-and-reports.md`.
   - `examples/01_external_glm_artifacts_demo.py [config-path]`
   - `examples/01_external_gbm_artifacts_demo.py [config-path]`
   - `examples/02_external_glm_report_demo.py [config-path]`
@@ -294,6 +296,20 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
   decoded categorical threshold labels, denominator eligibility, and log-link
   offset scoring. Do not restore obsolete `feature_config.json` or training-log
   artifacts.
+- Keep the external build/report user contract in
+  `docs/external-model-builds-and-reports.md`. The 02 report helpers must load
+  the exact GLM or GBM model ID named by the matching 01 YAML, regardless of
+  the current `active_model.json` marker.
+- External report importance must reuse Line/Bar's model-wide ranked rows. GLM
+  uses weighted mean absolute centred linear-predictor contribution. GBM uses
+  mean-absolute SHAP for every feature when saved SHAP importance is available,
+  otherwise gain for every feature; never mix the measures by feature.
+  Percentages divide by total whole-model importance, not the report scenario
+  or SAMPLE subset. Zero values retain their model-wide rank, ties use
+  case-insensitive feature order, and scenario-only features sort last
+  alphabetically. Missing or empty artifacts must tell the user to rebuild the
+  exact named model. When either report importance option is enabled, finish
+  the header with the human-readable measure selected for that whole model.
 
 - GLM and GBM are opt-in tools and are not part of the default user-facing tool set. `--tools all` enables them with every other tool in the built-in registry order. Explicit modelling selections preserve the supplied order and must also include `line-bar` because GLM/GBM context-menu actions open Line/Bar charts. GLM and GBM do not imply each other; request both when cross-model tabulation or comparison workflows are needed.
 - The shared header application-status badge times GLM and GBM builds from the user's click through all post-training work and separately times GLM tabulation through row scoring. It returns to untimed `Ready` only after the final client refresh. Phase changes reuse the operation's original `performance.now()` timestamp; other badge uses remain untimed, and the changing elapsed text is hidden from live-region announcements.
