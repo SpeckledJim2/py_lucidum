@@ -9,7 +9,8 @@ model:
   id: EXTERNAL_BUILD-config-glm
   label: EXTERNAL_BUILD config GLM
   formula_path: external_glm_formula.txt
-  family: gamma
+  family: tweedie
+  family_parameter: 1.2
   link: log
   fit_intercept: true
   regularization:
@@ -18,6 +19,6 @@ model:
     scale_predictors: false
 
 output:
-  portable_root: ../local/external_model_artifacts
-  install: true
+  model_results_root: ../local/external_model_results
+  install_in_lucidum: true
   replace_existing: true

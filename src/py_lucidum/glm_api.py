@@ -15,12 +15,13 @@ def build_glm_tabulations(
     *,
     model_id: str,
     feature_spec_path: str | Path,
+    model_folder: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Build GLM rating tables and score the source rows from those tables."""
+    """Build GLM rating tables and score rows, optionally in an explicit model folder."""
 
     from py_lucidum.tools.glm.tabulation import build_tabulations
 
-    dataset, store = _dataset_and_store(dataset_path)
+    dataset, store = _dataset_and_store(dataset_path, model_id, model_folder)
     try:
         result = build_tabulations(
             dataset,
@@ -44,12 +45,13 @@ def score_glm_tabulations(
     dataset_path: str | Path,
     *,
     model_id: str,
+    model_folder: str | Path | None = None,
 ) -> dict[str, Any]:
     """Re-score source rows from existing GLM rating tables."""
 
     from py_lucidum.tools.glm.tabulation import score_tabulations
 
-    dataset, store = _dataset_and_store(dataset_path)
+    dataset, store = _dataset_and_store(dataset_path, model_id, model_folder)
     try:
         manifest = score_tabulations(dataset, store, model_id)
         return _tabulation_result(store, model_id, manifest)
@@ -62,12 +64,13 @@ def export_glm_tabulations(
     *,
     model_id: str,
     scale: str = "auto",
+    model_folder: str | Path | None = None,
 ) -> dict[str, Any]:
     """Export GLM rating tables to XLSX and return its index worksheet values."""
 
     from py_lucidum.tools.glm.tabulation import export_tabulations
 
-    dataset, store = _dataset_and_store(dataset_path)
+    dataset, store = _dataset_and_store(dataset_path, model_id, model_folder)
     try:
         resolved_scale = _resolved_export_scale(store, model_id, scale)
         result = export_tabulations(
@@ -79,9 +82,23 @@ def export_glm_tabulations(
         dataset.con.close()
 
 
-def _dataset_and_store(dataset_path: str | Path) -> tuple[Dataset, GlmModelStore]:
+def _dataset_and_store(
+    dataset_path: str | Path,
+    model_id: str,
+    model_folder: str | Path | None,
+) -> tuple[Dataset, GlmModelStore]:
     dataset = Dataset(dataset_path)
-    return dataset, GlmModelStore(dataset.path, dataset=dataset)
+    if model_folder is None:
+        return dataset, GlmModelStore(dataset.path, dataset=dataset)
+    folder = Path(model_folder).expanduser().resolve()
+    store = GlmModelStore(dataset.path, dataset=dataset, model_root=folder.parent)
+    if store.model_dir(model_id).resolve() != folder:
+        dataset.con.close()
+        raise ValueError(f"model_folder must be the folder for GLM model {model_id!r}")
+    if not folder.is_dir():
+        dataset.con.close()
+        raise ValueError(f"GLM model folder does not exist: {folder}")
+    return dataset, store
 
 
 def _tabulation_result(

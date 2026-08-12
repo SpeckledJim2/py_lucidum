@@ -2057,6 +2057,7 @@ def build_tabulations_in_subprocess(
     *,
     progress_callback: ProgressCallback | None = None,
     gbm_available: bool = False,
+    model_root: str | Path | None = None,
 ) -> dict[str, Any]:
     progress = progress_callback or (lambda _progress: None)
     progress({"phase": "tabulating", "message": "Tabulating GLM..."})
@@ -2073,6 +2074,7 @@ def build_tabulations_in_subprocess(
                     "payload": payload,
                     "feature_spec": feature_spec,
                     "gbm_available": gbm_available,
+                    "model_root": str(model_root) if model_root is not None else None,
                     "progress_path": str(progress_path),
                 },
                 default=str,
@@ -2142,6 +2144,7 @@ def build_tabulations(
             feature_spec,
             progress_callback=progress,
             gbm_available=gbm_store is not None,
+            model_root=store.root,
         )
     return _build_tabulations_impl(dataset, store, payload, feature_spec, progress_callback=progress, gbm_store=gbm_store)
 
@@ -2206,7 +2209,7 @@ def score_tabulations(
 
     model_ref = _TabulationModelRef("glm", str(model_id), f"glm:{model_id}", str(model_id))
     if should_isolate_glm_tabulation([model_ref]):
-        return _score_tabulations_in_subprocess(dataset, model_id)
+        return _score_tabulations_in_subprocess(dataset, model_id, model_root=store.root)
     return _score_tabulations_impl(dataset, store, model_id)
 
 
@@ -2230,7 +2233,12 @@ def _score_tabulations_impl(
     return manifest
 
 
-def _score_tabulations_in_subprocess(dataset: Dataset, model_id: str) -> dict[str, Any]:
+def _score_tabulations_in_subprocess(
+    dataset: Dataset,
+    model_id: str,
+    *,
+    model_root: str | Path | None = None,
+) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="lucidum-glm-tabulation-score-") as tmp_dir:
         tmp_path = Path(tmp_dir)
         request_path = tmp_path / "request.json"
@@ -2240,6 +2248,7 @@ def _score_tabulations_in_subprocess(dataset: Dataset, model_id: str) -> dict[st
                 {
                     "operation": "score",
                     "dataset_path": str(dataset.path),
+                    "model_root": str(model_root) if model_root is not None else None,
                     "payload": {"model_id": model_id},
                 }
             ),

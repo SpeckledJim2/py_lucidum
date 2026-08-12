@@ -38,7 +38,8 @@ GBM_REPORT_SCRIPT = EXAMPLES / "02_external_gbm_report_demo.py"
 GLM_SUMMARY_SCRIPT = EXAMPLES / "03_external_glm_summary_report_demo.py"
 GBM_SUMMARY_SCRIPT = EXAMPLES / "03_external_gbm_summary_report_demo.py"
 EXAMPLE_HELPERS = EXAMPLES / "external_model_helpers.py"
-EXPORT_ADAPTER = EXAMPLES / "lucidum_export.py"
+MODEL_RESULTS_WRITER = EXAMPLES / "external_model_results.py"
+LUCIDUM_INSTALLER = EXAMPLES / "lucidum_install.py"
 REPORT_HELPERS = EXAMPLES / "external_report_helpers.py"
 GLM_MODEL_ID = "EXTERNAL_BUILD-config-glm"
 GBM_MODEL_ID = "EXTERNAL_BUILD-config-gbm"
@@ -125,7 +126,12 @@ COPY (
         con.close()
 
 
-def write_example_configs(root: Path, dataset_path: Path) -> tuple[Path, Path, Path]:
+def write_example_configs(
+    root: Path,
+    dataset_path: Path,
+    *,
+    install_in_lucidum: bool = True,
+) -> tuple[Path, Path, Path]:
     import yaml
 
     formula_path = root / "formula.txt"
@@ -149,14 +155,18 @@ def write_example_configs(root: Path, dataset_path: Path) -> tuple[Path, Path, P
             "fit_intercept": True,
             "regularization": {"alpha": 0.0, "l1_ratio": 0.0, "scale_predictors": False},
         },
-        "output": {"portable_root": "portable", "install": True, "replace_existing": True},
+        "output": {
+            "model_results_root": "model_results",
+            "install_in_lucidum": install_in_lucidum,
+            "replace_existing": True,
+        },
     }
     gbm_config = {
         "dataset": {
             **common_dataset,
             "training_value": "training",
             "early_stopping_value": "test",
-            "holdout_value": "validation",
+            "validation_value": "validation",
         },
         "features": {"spec_path": feature_spec_path.name, "scenario_column": "report_demo"},
         "model": {"id": GBM_MODEL_ID, "label": "External integration GBM"},
@@ -179,7 +189,11 @@ def write_example_configs(root: Path, dataset_path: Path) -> tuple[Path, Path, P
                 "verbosity": -1,
             },
         },
-        "output": {"portable_root": "portable", "install": True, "replace_existing": True},
+        "output": {
+            "model_results_root": "model_results",
+            "install_in_lucidum": install_in_lucidum,
+            "replace_existing": True,
+        },
     }
     glm_path = root / "config_glm.yaml"
     gbm_path = root / "config_gbm.yaml"
@@ -344,25 +358,47 @@ def load_model_helpers() -> Any:
     return module
 
 
-def load_export_adapter() -> Any:
-    spec = importlib.util.spec_from_file_location("lucidum_export_for_tests", EXPORT_ADAPTER)
+def load_model_results_writer() -> Any:
+    spec = importlib.util.spec_from_file_location(
+        "external_model_results_for_tests",
+        MODEL_RESULTS_WRITER,
+    )
     if spec is None or spec.loader is None:
-        raise AssertionError(f"Could not load {EXPORT_ADAPTER}")
+        raise AssertionError(f"Could not load {MODEL_RESULTS_WRITER}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_lucidum_installer() -> Any:
+    spec = importlib.util.spec_from_file_location(
+        "lucidum_install_for_tests",
+        LUCIDUM_INSTALLER,
+    )
+    if spec is None or spec.loader is None:
+        raise AssertionError(f"Could not load {LUCIDUM_INSTALLER}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
 class ExternalModelExampleTests(unittest.TestCase):
-    def test_checked_in_glm_demo_uses_gamma_with_log_link(self) -> None:
+    def test_checked_in_glm_demo_uses_tweedie_1_2_with_log_link(self) -> None:
         import yaml
 
         config = yaml.safe_load((EXAMPLES / "config_glm.yaml").read_text(encoding="utf-8"))
-        self.assertEqual(config["model"]["family"], "gamma")
+        self.assertEqual(config["model"]["family"], "tweedie")
+        self.assertEqual(config["model"]["family_parameter"], 1.2)
         self.assertEqual(config["model"]["link"], "log")
 
     def test_external_builders_do_not_import_py_lucidum(self) -> None:
-        for script in (GLM_SCRIPT, GBM_SCRIPT, EXAMPLE_HELPERS, EXPORT_ADAPTER):
+        for script in (
+            GLM_SCRIPT,
+            GBM_SCRIPT,
+            EXAMPLE_HELPERS,
+            MODEL_RESULTS_WRITER,
+            LUCIDUM_INSTALLER,
+        ):
             tree = ast.parse(script.read_text(encoding="utf-8"), filename=str(script))
             imported = {
                 alias.name
@@ -382,7 +418,7 @@ class ExternalModelExampleTests(unittest.TestCase):
         import numpy as np
         import pandas as pd
 
-        adapter = load_export_adapter()
+        adapter = load_model_results_writer()
 
         for statistic_column in ("t_value", "z_value"):
             with self.subTest(statistic_column=statistic_column):
@@ -431,7 +467,7 @@ class ExternalModelExampleTests(unittest.TestCase):
     def test_external_glm_penalized_coefficients_keep_inference_blank(self) -> None:
         import numpy as np
 
-        adapter = load_export_adapter()
+        adapter = load_model_results_writer()
 
         class PenalizedModel:
             feature_names_ = ["Age"]
@@ -460,7 +496,7 @@ class ExternalModelExampleTests(unittest.TestCase):
     def test_external_glm_inference_failure_saves_blank_rows_with_warning(self) -> None:
         import numpy as np
 
-        adapter = load_export_adapter()
+        adapter = load_model_results_writer()
 
         class FailedInferenceModel:
             covariance_matrix_ = np.eye(2)
@@ -527,12 +563,12 @@ class ExternalModelExampleTests(unittest.TestCase):
         self.assertIn("Validation l2 metric could not be calculated", str(warning))
         self.assertEqual(failed_evaluation, {})
 
-    def test_training_scripts_keep_one_clear_lucidum_handoff(self) -> None:
+    def test_training_scripts_keep_one_neutral_save_and_one_optional_install(self) -> None:
         expected_calls = {
-            GLM_SCRIPT: "save_glm_for_lucidum",
-            GBM_SCRIPT: "save_gbm_for_lucidum",
+            GLM_SCRIPT: "save_glm_model_results",
+            GBM_SCRIPT: "save_gbm_model_results",
         }
-        for script, expected_call in expected_calls.items():
+        for script, expected_save_call in expected_calls.items():
             source = script.read_text(encoding="utf-8")
             tree = ast.parse(source, filename=str(script))
             calls = [
@@ -540,12 +576,11 @@ class ExternalModelExampleTests(unittest.TestCase):
                 for node in ast.walk(tree)
                 if isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Name)
-                and node.func.id.startswith("save_")
-                and node.func.id.endswith("_for_lucidum")
             ]
-            self.assertEqual(calls, [expected_call])
+            self.assertEqual(calls.count(expected_save_call), 1)
+            self.assertEqual(calls.count("install_model_in_lucidum"), 1)
             self.assertNotIn("__lucidum_", source)
-            for step in range(1, 6):
+            for step in range(1, 7):
                 self.assertIn(f"# %% {step}.", source)
 
     def test_glm_tabulation_rescoring_does_not_call_fitted_prediction(self) -> None:
@@ -740,7 +775,7 @@ COPY (
                     "sample_column": "SAMPLE",
                     "training_value": "training",
                     "early_stopping_value": "test",
-                    "holdout_value": "validation",
+                    "validation_value": "validation",
                 }
                 weighted = helpers._gbm_performance(
                     dataset,
@@ -827,32 +862,43 @@ COPY (
             self.assertIn("model.id must contain only", unsafe.stderr)
 
     @unittest.skipUnless(HAS_EXAMPLE_DEPENDENCIES, "external-model example dependencies are not installed")
-    def test_external_artifacts_install_and_work_through_lucidum(self) -> None:
+    def test_external_results_report_without_sidecar_then_install_and_work_in_lucidum(self) -> None:
         self.addCleanup(stop_persistent_glm_overlay_worker)
         with TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
             dataset_path = root / "motor_fixture.parquet"
             row_count = write_reduced_dataset(ROOT / "datasets" / "motor_premiums.parquet", dataset_path)
             self.assertEqual(row_count, 1050)
-            glm_config, gbm_config, feature_spec_path = write_example_configs(root, dataset_path)
+            glm_config, gbm_config, feature_spec_path = write_example_configs(
+                root,
+                dataset_path,
+                install_in_lucidum=False,
+            )
 
             glm_run = run_builder(GLM_SCRIPT, glm_config)
             gbm_run = run_builder(GBM_SCRIPT, gbm_config)
             self.assertIn(GLM_MODEL_ID, glm_run.stdout)
             self.assertIn(GBM_MODEL_ID, gbm_run.stdout)
+            self.assertFalse((root / ".lucidum").exists())
 
             dataset = Dataset(dataset_path)
-            glm_store = GlmModelStore(dataset_path, dataset=dataset)
-            gbm_store = GbmModelStore(dataset_path, dataset=dataset)
+            model_results_root = root / "model_results"
+            glm_store = GlmModelStore(
+                dataset_path,
+                dataset=dataset,
+                model_root=model_results_root / "glm",
+            )
+            gbm_store = GbmModelStore(
+                dataset_path,
+                dataset=dataset,
+                model_root=model_results_root / "gbm",
+            )
             glm_dir = glm_store.model_dir(GLM_MODEL_ID)
             gbm_dir = gbm_store.model_dir(GBM_MODEL_ID)
 
-            # If the builders reproduced workspace-signature v1 incorrectly,
-            # the current stores would point at different, empty directories.
             self.assertTrue(REQUIRED_GLM_FILES.issubset({path.name for path in glm_dir.iterdir()}))
             self.assertTrue(REQUIRED_GBM_FILES.issubset({path.name for path in gbm_dir.iterdir()}))
-            self.assertEqual(glm_store.active_model_id(), GLM_MODEL_ID)
-            self.assertEqual(gbm_store.active_model_id(), GBM_MODEL_ID)
+            self.assertFalse((model_results_root / "lucidum_artifacts.json").exists())
             self.assertNotIn("feature_config.json", {path.name for path in gbm_dir.iterdir()})
             self.assertNotIn("training_log.json", {path.name for path in gbm_dir.iterdir()})
 
@@ -888,20 +934,16 @@ FROM read_parquet({sql_literal(str(glm_dir / 'coefficients.parquet'))})
             self.assertTrue(coefficient_inference)
             self.assertTrue(all(value is not None for row in coefficient_inference for value in row))
 
-            # The 02 scripts name the model written by 01.  Pointing Lucidum's
-            # active files elsewhere proves report generation does not silently
-            # switch to whichever model happens to be active.
+            # Point the result roots' optional active markers elsewhere to
+            # prove reporting resolves the exact authoritative model folder.
             glm_report_config, gbm_report_config, glm_summary_config, gbm_summary_config = write_report_configs(root)
             glm_store.write_json(glm_store.active_path, {"model_id": "NOT-THE-REPORT-MODEL"})
             gbm_store.write_json(gbm_store.active_path, {"model_id": "NOT-THE-REPORT-MODEL"})
-            try:
-                glm_report_run = run_builder(GLM_REPORT_SCRIPT, glm_report_config)
-                gbm_report_run = run_builder(GBM_REPORT_SCRIPT, gbm_report_config)
-                glm_summary_run = run_builder(GLM_SUMMARY_SCRIPT, glm_summary_config)
-                gbm_summary_run = run_builder(GBM_SUMMARY_SCRIPT, gbm_summary_config)
-            finally:
-                glm_store.activate_model(GLM_MODEL_ID)
-                gbm_store.activate_model(GBM_MODEL_ID)
+            glm_report_run = run_builder(GLM_REPORT_SCRIPT, glm_report_config)
+            gbm_report_run = run_builder(GBM_REPORT_SCRIPT, gbm_report_config)
+            glm_summary_run = run_builder(GLM_SUMMARY_SCRIPT, glm_summary_config)
+            gbm_summary_run = run_builder(GBM_SUMMARY_SCRIPT, gbm_summary_config)
+            self.assertFalse((root / ".lucidum").exists())
 
             report_dir = root / "reports"
             glm_report_path = report_dir / "motor_fixture_external_glm_validation_actual_vs_expected.html"
@@ -977,7 +1019,11 @@ FROM read_parquet({sql_literal(str(glm_dir / 'coefficients.parquet'))})
                 ).fetchall()
             finally:
                 con.close()
-            rescored = score_glm_tabulations(dataset_path, model_id=GLM_MODEL_ID)
+            rescored = score_glm_tabulations(
+                dataset_path,
+                model_id=GLM_MODEL_ID,
+                model_folder=glm_dir,
+            )
             con = duckdb.connect(database=":memory:")
             try:
                 after_rescore = con.execute(
@@ -1012,13 +1058,13 @@ FROM read_parquet({sql_literal(str(glm_dir / 'coefficients.parquet'))})
             )
             self.assertEqual(gbm_report["metadata"]["importance measure"], "Mean absolute SHAP")
             self.assertEqual(shap_report["metadata"]["importance measure"], "Mean absolute SHAP")
-            self.assertEqual(len(glm_report["charts"]), 16)
-            self.assertEqual(len(gbm_report["charts"]), 16)
-            self.assertEqual(len(shap_report["charts"]), 16)
+            self.assertEqual(len(glm_report["charts"]), 14)
+            self.assertEqual(len(gbm_report["charts"]), 14)
+            self.assertEqual(len(shap_report["charts"]), 14)
             scenario_order = [
                 "ANNUAL_MILEAGE", "CAR_VALUE", "DRIVER_AGE", "FUEL_TYPE",
-                "LICENCE_TYPE", "MAKE", "NCD_YEARS", "OVERNIGHT_LOCATION",
-                "POSTCODE_AREA", "POSTCODE_CATEGORY", "PRIOR_CLAIMS",
+                "LICENCE_TYPE", "NCD_YEARS", "OVERNIGHT_LOCATION",
+                "POSTCODE_CATEGORY", "PRIOR_CLAIMS",
                 "VEHICLE_AGE", "VEHICLE_CATEGORY", "VEHICLE_USAGE",
                 "YEARS_LICENCE_HELD", "YEARS_OWNED_VEHICLE",
             ]
@@ -1063,11 +1109,6 @@ FROM read_parquet({sql_literal(str(glm_dir / 'coefficients.parquet'))})
                 [chart["title"] for chart in gbm_report["charts"]],
                 [expected_gbm_titles[feature] for feature in scenario_order],
             )
-            self.assertEqual(
-                expected_glm_titles["MAKE"],
-                "MAKE (Not in model)",
-            )
-
             gbm_rank = {row["feature"]: row["rank"] for row in gbm_importance["rows"]}
             shap_order = sorted(
                 scenario_order,
@@ -1111,23 +1152,54 @@ FROM read_parquet({sql_literal(str(glm_dir / 'coefficients.parquet'))})
                 self.assertEqual(overlay["transform"]["reference"], "base")
                 self.assertTrue(overlay["rows"])
 
-            portable_index = json.loads((root / "portable" / "lucidum_artifacts.json").read_text(encoding="utf-8"))
-            self.assertEqual(portable_index["version"], 1)
-            portable_models = {
-                (row["model_type"], row["model_id"]): row for row in portable_index["models"]
-            }
-            self.assertEqual(portable_models[("glm", GLM_MODEL_ID)]["relative_path"], f"glm/{GLM_MODEL_ID}")
-            self.assertEqual(portable_models[("gbm", GBM_MODEL_ID)]["relative_path"], f"gbm/{GBM_MODEL_ID}")
-            self.assertNotIn("path", portable_models[("glm", GLM_MODEL_ID)]["dataset"])
-            self.assertNotIn("path", portable_models[("gbm", GBM_MODEL_ID)]["dataset"])
+            # Install the already saved folders only after all no-sidecar
+            # reports and GLM tabulations have completed.
+            installer = load_lucidum_installer()
+            installed_glm_dir = installer.install_model_in_lucidum(
+                dataset_path=dataset_path,
+                model_folder=glm_dir,
+                model_type="glm",
+                model_id=GLM_MODEL_ID,
+                replace_existing=True,
+            )
+            installed_gbm_dir = installer.install_model_in_lucidum(
+                dataset_path=dataset_path,
+                model_folder=gbm_dir,
+                model_type="gbm",
+                model_id=GBM_MODEL_ID,
+                replace_existing=True,
+            )
+            installed_glm_store = GlmModelStore(dataset_path, dataset=dataset)
+            installed_gbm_store = GbmModelStore(dataset_path, dataset=dataset)
+            self.assertEqual(installed_glm_store.model_dir(GLM_MODEL_ID), installed_glm_dir)
+            self.assertEqual(installed_gbm_store.model_dir(GBM_MODEL_ID), installed_gbm_dir)
+            self.assertEqual(installed_glm_store.active_model_id(), GLM_MODEL_ID)
+            self.assertEqual(installed_gbm_store.active_model_id(), GBM_MODEL_ID)
+            self.assertTrue((installed_glm_dir / "tabulations" / "tabulation_manifest.json").is_file())
+            self.assertTrue((installed_glm_dir / "tabulated_predictions.parquet").is_file())
 
-            # Rebuilding the configured ID must leave neighbouring models alone.
-            keep_dirs = [glm_store.root / "KEEP-ME", gbm_store.root / "KEEP-ME"]
+            # Reinstalling the configured ID must leave neighbouring models alone.
+            keep_dirs = [
+                installed_glm_store.root / "KEEP-ME",
+                installed_gbm_store.root / "KEEP-ME",
+            ]
             for keep_dir in keep_dirs:
                 keep_dir.mkdir()
                 (keep_dir / "sentinel.txt").write_text("keep", encoding="utf-8")
-            run_builder(GLM_SCRIPT, glm_config)
-            run_builder(GBM_SCRIPT, gbm_config)
+            installer.install_model_in_lucidum(
+                dataset_path=dataset_path,
+                model_folder=glm_dir,
+                model_type="glm",
+                model_id=GLM_MODEL_ID,
+                replace_existing=True,
+            )
+            installer.install_model_in_lucidum(
+                dataset_path=dataset_path,
+                model_folder=gbm_dir,
+                model_type="gbm",
+                model_id=GBM_MODEL_ID,
+                replace_existing=True,
+            )
             for keep_dir in keep_dirs:
                 self.assertEqual((keep_dir / "sentinel.txt").read_text(encoding="utf-8"), "keep")
 
@@ -1270,7 +1342,7 @@ JOIN (
             feature_spec = load_features(feature_spec_path)
             glm_tabulation = build_tabulations(
                 dataset,
-                glm_store,
+                installed_glm_store,
                 {"model_ids": [GLM_MODEL_ID]},
                 feature_spec,
             )
@@ -1307,7 +1379,12 @@ JOIN (
             self.assertEqual(status, 200)
             self.assertTrue(stacked["rows"])
 
-            gbm_tabulation = build_gbm_tabulations(dataset, gbm_store, GBM_MODEL_ID, feature_spec)
+            gbm_tabulation = build_gbm_tabulations(
+                dataset,
+                installed_gbm_store,
+                GBM_MODEL_ID,
+                feature_spec,
+            )
             self.assertEqual(gbm_tabulation["status"], "tabulated")
             self.assertTrue(gbm_tabulation["tables"])
 

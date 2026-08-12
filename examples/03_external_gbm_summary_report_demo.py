@@ -27,6 +27,7 @@ settings, performance, feature_importance, parameters = load_gbm_summary_setting
 evaluation_chart = gbm_evaluation_chart(
     settings["dataset_path"],
     model_id=settings["model_id"],
+    model_folder=settings["model_folder"],
     title="Model evaluation chart",
 )
 

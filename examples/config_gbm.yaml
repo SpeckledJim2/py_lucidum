@@ -5,7 +5,7 @@ dataset:
   sample_column: SAMPLE
   training_value: training
   early_stopping_value: test
-  holdout_value: validation
+  validation_value: validation
 
 features:
   spec_path: ../specs/feature_spec.csv
@@ -34,6 +34,6 @@ training:
     verbosity: -1
 
 output:
-  portable_root: ../local/external_model_artifacts
-  install: true
+  model_results_root: ../local/external_model_results
+  install_in_lucidum: true
   replace_existing: true

@@ -39,6 +39,7 @@ def line_bar_chart(
     sample_column: str = "SAMPLE",
     sample_values: str | Sequence[str] = "all",
     model_id: str | None = None,
+    model_folder: str | Path | None = None,
     controls: Mapping[str, Any] | None = None,
     content: str = "actual_expected",
     transform: str | None = None,
@@ -76,6 +77,7 @@ def line_bar_chart(
             expected_source=expected_source,
             model_id=str(model_id or "").strip(),
             partial_dependence=partial_dependence,
+            model_folder=model_folder,
         )
         columns = dataset.column_map()
         _require_column(columns, x, "x-axis")
@@ -110,7 +112,14 @@ def line_bar_chart(
             "partialDependence": {
                 "mode": partial_dependence,
                 **(
-                    {"model_id": str(model_id)}
+                    {
+                        "model_id": str(model_id),
+                        **(
+                            {"model_folder": str(Path(model_folder).expanduser().resolve())}
+                            if model_folder is not None and partial_dependence == "glm"
+                            else {}
+                        ),
+                    }
                     if partial_dependence in {"glm", "shap"}
                     else {}
                 ),
@@ -172,6 +181,11 @@ def line_bar_chart(
                 "expected_source": expected_source,
                 "denominator": denominator,
                 "model_id": str(model_id or ""),
+                "model_folder": (
+                    str(Path(model_folder).expanduser().resolve())
+                    if model_folder is not None
+                    else ""
+                ),
                 "base": base,
                 "controls": settings,
                 "partial_dependence": partial_dependence,
@@ -185,6 +199,7 @@ def gbm_evaluation_chart(
     dataset_path: str | Path,
     *,
     model_id: str,
+    model_folder: str | Path | None = None,
     title: str = "Model evaluation",
 ) -> dict[str, Any]:
     """Return the saved Evaluation Log for one exact GBM as a chart spec."""
@@ -198,7 +213,11 @@ def gbm_evaluation_chart(
 
     dataset = Dataset(path)
     try:
-        store = GbmModelStore(path, dataset=dataset)
+        store = GbmModelStore(
+            path,
+            dataset=dataset,
+            model_root=_explicit_model_root(model_folder, model_id, "GBM"),
+        )
         detail = store.model_detail(model_id)
         evaluation = detail.get("evaluation")
         has_values = any(
@@ -351,6 +370,7 @@ def write_glm_summary_report(
     model_id: str,
     kpi_spec_path: str | Path,
     tabulation_export: Mapping[str, Any],
+    model_folder: str | Path | None = None,
     metadata: Mapping[str, Any] | None = None,
 ) -> Path:
     """Write a portable GLM summary using fitted and tabulated model artifacts."""
@@ -361,7 +381,11 @@ def write_glm_summary_report(
     path = Path(dataset_path).expanduser().resolve()
     dataset = Dataset(path)
     try:
-        store = GlmModelStore(path, dataset=dataset)
+        store = GlmModelStore(
+            path,
+            dataset=dataset,
+            model_root=_explicit_model_root(model_folder, model_id, "GLM"),
+        )
         manifest = store.manifest(model_id)
         model_folder = store.model_dir(model_id).resolve()
         scoring_path = store.artifact_path(model_id, "tabulated_predictions").resolve()
@@ -400,7 +424,7 @@ def write_glm_summary_report(
             "expected": "glm_prediction",
             "SAMPLE_ROWS": ["training", "test", "validation"],
             "model label": manifest.get("label") or model_id,
-            "family / link": f"{manifest.get('family') or type(estimator.family_instance).__name__} / {actual_link}",
+            "family / link": _glm_family_link_label(manifest, estimator, actual_link),
             **dict(metadata or {}),
         }
     finally:
@@ -452,6 +476,7 @@ def _register_report_sources(
     expected_source: str,
     model_id: str,
     partial_dependence: str,
+    model_folder: str | Path | None,
 ) -> str:
     source_id = "dataset"
     needs_glm = expected_source == "glm" or partial_dependence == "glm"
@@ -459,7 +484,11 @@ def _register_report_sources(
     if needs_glm:
         from py_lucidum.tools.glm.store import GlmModelStore, GlmSourceProvider
 
-        store = GlmModelStore(dataset.path, dataset=dataset)
+        store = GlmModelStore(
+            dataset.path,
+            dataset=dataset,
+            model_root=_explicit_model_root(model_folder, model_id, "GLM"),
+        )
         store.manifest(model_id)
         if not store.artifact_path(model_id, "predictions").exists():
             raise ValueError(f"GLM predictions are unavailable for model {model_id}")
@@ -471,7 +500,11 @@ def _register_report_sources(
     if needs_gbm:
         from py_lucidum.tools.gbm.store import GbmModelStore, GbmSourceProvider
 
-        store = GbmModelStore(dataset.path, dataset=dataset)
+        store = GbmModelStore(
+            dataset.path,
+            dataset=dataset,
+            model_root=_explicit_model_root(model_folder, model_id, "GBM"),
+        )
         store.manifest(model_id)
         if not store.artifact_path(model_id, "predictions").exists():
             raise ValueError(f"GBM predictions are unavailable for model {model_id}")
@@ -481,6 +514,21 @@ def _register_report_sources(
         if expected_source == "gbm":
             source_id = store.source_id(model_id, "predictions")
     return source_id
+
+
+def _explicit_model_root(
+    model_folder: str | Path | None,
+    model_id: str,
+    model_type: str,
+) -> Path | None:
+    if model_folder is None:
+        return None
+    folder = Path(model_folder).expanduser().resolve()
+    if folder.name != str(model_id or "").strip():
+        raise ValueError(f"model_folder must be the folder for {model_type} model {model_id!r}")
+    if not folder.is_dir():
+        raise ValueError(f"{model_type} model folder does not exist: {folder}")
+    return folder.parent
 
 
 def _sample_filter(
@@ -846,8 +894,8 @@ def _gbm_summary_document(
     .section-detail {{ margin: 5px 20px 0; color: var(--muted); font-size: 12px; }}
     .table-wrap {{ padding: 16px 20px 20px; overflow-x: auto; }}
     .summary-table {{ width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }}
-    .summary-table th {{ padding: 9px 12px; border-bottom: 2px solid var(--line); color: var(--muted); font-size: 11px; letter-spacing: .04em; text-align: right; text-transform: uppercase; white-space: nowrap; }}
-    .summary-table td {{ padding: 9px 12px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }}
+    .summary-table th {{ padding: 4px 12px; border-bottom: 2px solid var(--line); color: var(--muted); font-size: 11px; letter-spacing: .04em; text-align: right; text-transform: uppercase; white-space: nowrap; }}
+    .summary-table td {{ padding: 4px 12px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }}
     .summary-table tbody tr:last-child td {{ border-bottom: 0; }}
     .summary-table th:first-child, .summary-table td:first-child {{ text-align: left; }}
     .importance-table th:nth-child(2), .importance-table td:nth-child(2), .parameter-table th, .parameter-table td {{ text-align: left; }}
@@ -1201,6 +1249,27 @@ def _glm_link_name(estimator: Any) -> str:
     return names.get(class_name, class_name.removesuffix("Link").casefold())
 
 
+def _glm_family_link_label(
+    manifest: Mapping[str, Any],
+    estimator: Any,
+    link_name: str | None = None,
+) -> str:
+    family = str(manifest.get("family") or type(estimator.family_instance).__name__)
+    link = link_name or _glm_link_name(estimator)
+    fitted_family = estimator.family_instance
+    is_tweedie = (
+        family.strip().casefold() == "tweedie"
+        or type(fitted_family).__name__ == "TweedieDistribution"
+    )
+    if not is_tweedie:
+        return f"{family} / {link}"
+    power = _finite_number(manifest.get("family_parameter"))
+    if power is None:
+        power = _finite_number(getattr(fitted_family, "power", None))
+    power_label = _format_compact(power)
+    return f"{family} (variance power {power_label}) / {link}"
+
+
 def _file_uri(path: Any) -> str:
     text = str(path)
     if re.match(r"^[A-Za-z]:[\\/]", text) or text.startswith("\\\\"):
@@ -1261,8 +1330,8 @@ def _glm_summary_document(
     .section-detail a {{ color: var(--accent); }}
     .table-wrap {{ padding: 16px 20px 20px; overflow-x: auto; }}
     .summary-table {{ width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }}
-    .summary-table th {{ padding: 9px 12px; border-bottom: 2px solid var(--line); color: var(--muted); font-size: 11px; letter-spacing: .04em; text-align: right; text-transform: uppercase; white-space: nowrap; }}
-    .summary-table td {{ padding: 9px 12px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }}
+    .summary-table th {{ padding: 4px 12px; border-bottom: 2px solid var(--line); color: var(--muted); font-size: 11px; letter-spacing: .04em; text-align: right; text-transform: uppercase; white-space: nowrap; }}
+    .summary-table td {{ padding: 4px 12px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }}
     .summary-table tbody tr:last-child td {{ border-bottom: 0; }}
     .summary-table th:first-child, .summary-table td:first-child {{ text-align: left; }}
     .coefficient-table th:nth-child(2), .coefficient-table td:nth-child(2), .tabulation-table th:nth-child(2), .tabulation-table td:nth-child(2) {{ text-align: left; }}

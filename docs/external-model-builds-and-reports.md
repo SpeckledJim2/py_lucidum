@@ -1,10 +1,53 @@
-# Build models and reports outside Lucidum
+# Build models outside Lucidum, then report or view them
 
-These examples let a data scientist build GLM and GBM models, score data, and
-create HTML reports without using the Lucidum application.
+These examples provide two complete modelling workflows: one for GLMs and one
+for GBMs. Each workflow has three numbered Python scripts. Choose a model type,
+edit its YAML and specification files, then run its `01`, `02`, and `03`
+scripts unchanged.
 
-The workflow is controlled by YAML and specification files. You normally run
-the six numbered Python scripts unchanged.
+Model training happens outside the Lucidum application. The `01` scripts fit
+models directly with ordinary `glum` or LightGBM code, score the source data,
+and save the fitted results. You do not need to launch Lucidum to build either
+model or create its reports.
+
+The `02` and `03` scripts create self-contained HTML reports. They reuse
+Lucidum's tested chart, tabulation, and report-writing code, but they do not
+start the application or a server. Report data is fixed when the HTML is
+created, while hover, tooltips, legends, and chart zoom remain interactive.
+
+The saved model-results folder is the authoritative output. Reports read that
+folder directly and do not need a `.lucidum` sidecar. As a separate optional
+operation, a saved folder can be copied and activated in Lucidum so the
+application can display it without retraining it.
+
+## Choose one three-script workflow
+
+### GLM workflow: three scripts
+
+1. `01_external_glm_artifacts_demo.py` fits the GLM with `glum`, scores every
+   eligible source row, and saves the fitted model and predictions.
+2. `02_external_glm_report_demo.py` creates a feature-by-feature Validation
+   Actual-versus-Expected report. The demo includes two-sigma error bars,
+   whole-model feature importance in chart titles, and the fitted GLM
+   partial-dependence line.
+3. `03_external_glm_summary_report_demo.py` builds and scores GLM tabulations,
+   exports them to XLSX, and creates a model summary containing Training, Test,
+   and Validation performance, coefficients and p-values, and a tabulation
+   summary with a link to the workbook.
+
+### GBM workflow: three scripts
+
+1. `01_external_gbm_artifacts_demo.py` fits the GBM with LightGBM, scores every
+   eligible source row, and saves predictions, evaluation history, trees, and
+   SHAP values.
+2. `02_external_gbm_report_demo.py` creates two feature-by-feature reports: a
+   Validation Actual-versus-Expected report with two-sigma error bars, and an
+   all-row SHAP-only report whose SHAP ribbons are rebased to 1. The reports
+   can show whole-model feature importance in their chart titles.
+3. `03_external_gbm_summary_report_demo.py` creates a model summary containing
+   Training, Test, and Validation performance, mean absolute SHAP feature
+   importance, LightGBM parameters, and the saved evaluation history with its
+   Validation marker.
 
 ## What you edit
 
@@ -20,47 +63,19 @@ For your own analysis, copy and edit these inputs:
 
 The numbered scripts read those settings and perform the work. They are kept
 as clear, linear `# %%` workflows so that an interested user can follow them,
-but routine use should not require Python changes.
+but routine use means running the three scripts for the chosen model type
+without changing their Python code.
 
 The helper files are implementation machinery:
 
 - `external_model_helpers.py` loads YAML, resolves paths, and prepares inputs.
-- `lucidum_export.py` saves externally fitted models in the format Lucidum can
-  read.
+- `external_model_results.py` saves the ordinary fitted model results used by
+  the report workflows.
+- `lucidum_install.py` optionally copies one saved folder into the matching
+  Lucidum dataset workspace and activates that exact model ID.
 - `external_report_helpers.py` prepares settings and labels for reports.
 
 Most users do not need to read or edit those helpers.
-
-## The workflow at a glance
-
-The number at the start of each filename shows when to run it:
-
-### 01 — Build and score
-
-Fit the model, score the source data, and save the results.
-
-- GLM: `01_external_glm_artifacts_demo.py`
-- GBM: `01_external_gbm_artifacts_demo.py`
-
-### 02 — Create chart reports
-
-Create Actual-versus-Expected charts and, for GBMs, optional SHAP charts.
-
-- GLM: `02_external_glm_report_demo.py`
-- GBM: `02_external_gbm_report_demo.py`
-
-### 03 — Create a model summary
-
-Create the model-summary HTML. The GLM version also builds, scores, and
-exports tabulations.
-
-- GLM: `03_external_glm_summary_report_demo.py`
-- GBM: `03_external_gbm_summary_report_demo.py`
-
-The `01` scripts use `glum` or LightGBM directly and do not import
-`py_lucidum`. The `02` and `03` scripts use Lucidum's chart, tabulation, and
-report-writing functions, but they do not launch the application or start a
-server.
 
 ## Install and run
 
@@ -96,15 +111,39 @@ python examples/01_external_glm_artifacts_demo.py path/to/my_glm.yaml
 Paths written inside a YAML file are relative to that YAML file. This means a
 configuration continues to work when the command is run from another folder.
 
+## Optionally view the externally trained models in Lucidum
+
+The supplied build YAML files set `output.install_in_lucidum: true`. After the
+normal model results have been saved, this copies and activates the model in a
+hidden folder beside the source dataset. Open Lucidum against that same dataset
+file and it will find the installed model automatically:
+
+```bash
+lucidum datasets/motor_premiums.parquet --tools line-bar,glm,gbm --features specs/feature_spec.csv
+```
+
+Lucidum loads the fitted model and its saved results; it does not fit the model
+again. The external model behaves like a model built in the application:
+
+- External GLMs appear in model navigation, coefficients, predictions, and
+  partial-dependence views. After running the GLM `03` script, their
+  tabulations are also available.
+- External GBMs appear in model navigation, predictions, evaluation, tree,
+  SHAP, and Stacked SHAP views.
+
+Opening the model in Lucidum is optional. The external build and HTML-report
+workflows remain complete without it.
+
 ## Step 01: build and score a model
 
-The two `01` scripts follow the same familiar sequence:
+The two `01` scripts follow the same six-part sequence:
 
 1. Load the YAML and source data.
 2. Prepare the response, features, and sample masks.
-3. Fit the model.
-4. Predict every eligible row.
-5. Save the results so reports and Lucidum can read them.
+3. Train.
+4. Predict and evaluate.
+5. Calculate and save normal model results.
+6. Optionally install the saved model in Lucidum.
 
 ### GLM settings
 
@@ -123,12 +162,15 @@ The supplied `config_glm.yaml` demonstrates these fields:
 - `model.formula_path` — text file containing the right-hand side of the
   formula.
 - `model.family` and `model.link` — `glum` family and link.
+- `model.family_parameter` — the Tweedie variance power when `family` is
+  `tweedie`; it defaults to `1.5` when omitted.
 - `model.fit_intercept` — whether to fit an intercept.
 - `model.regularization` — `alpha`, `l1_ratio`, and predictor-scaling
   settings.
-- `output.portable_root` — folder for a standalone copy of the saved model.
-- `output.install` — also make the model available beside the dataset for
-  reports and Lucidum.
+- `output.model_results_root` — root of the authoritative saved model results;
+  the exact folder is `<root>/glm/<model.id>` or `<root>/gbm/<model.id>`.
+- `output.install_in_lucidum` — optionally copy and activate the saved model in
+  the source dataset's Lucidum workspace. Reports do not depend on this copy.
 - `output.replace_existing` — allow this model ID to replace an earlier build
   with the same ID.
 
@@ -136,8 +178,8 @@ The formula file contains the model expression without `response ~`. It may
 include Python-style `#` comments. Comments are removed for fitting, while the
 original readable formula is retained with the saved model.
 
-The demo uses a Gamma family with a log link. If a denominator is supplied,
-the model fits:
+The demo uses a Tweedie family with variance power `1.2` and a log link. If a
+denominator is supplied, the model fits:
 
 ```text
 response_numerator / denominator
@@ -159,7 +201,8 @@ additional settings:
 
 - `dataset.training_value` — rows used to fit trees.
 - `dataset.early_stopping_value` — rows used to choose the best iteration.
-- `dataset.holdout_value` — rows reserved for an independent metric.
+- `dataset.validation_value` — rows reserved for the independent Validation
+  metric.
 - `features.spec_path` — Feature Specification CSV.
 - `features.scenario_column` — column that selects the GBM features.
 - `training.parameters` — values passed to `lightgbm.train`.
@@ -185,34 +228,30 @@ Later reports read those values; they do not calculate SHAP again.
 
 ## Where the saved models go
 
-Each successful `01` run can create two copies of the same model:
+Each successful `01` run always creates one authoritative model folder and may
+create one optional application copy:
 
-1. **Standalone model copy** — written under `output.portable_root`. This is a
-   normal output folder that can be inspected, archived, or copied elsewhere.
-   The YAML field is called `portable_root`, but it is simplest to think of it
-   as the model-output folder.
-2. **Lucidum model copy** — when `output.install: true`, the model is also
-   placed in a hidden `.lucidum` folder beside the source dataset. This is the
-   copy that the `02` and `03` report functions and the Lucidum application can
-   find automatically.
+1. **Model results** — written below `output.model_results_root` as
+   `<glm|gbm>/<model.id>`. The `01` script returns and prints this exact
+   `model_folder`. The `02` and `03` scripts read it directly, and GLM `03`
+   writes its tabulations and workbook back into it.
+2. **Optional Lucidum installation** — when
+   `output.install_in_lucidum: true`, the saved folder is copied into the
+   hidden dataset-version workspace and that exact model ID is activated.
 
-The supplied examples set `install: true`. They also set
-`replace_existing: true`, which replaces only a previous GLM or GBM with the
-same `model.id`. It does not delete other models or other dataset information.
+The supplied examples enable installation and set `replace_existing: true`,
+which replaces only a previous GLM or GBM with the same `model.id`. It does not
+delete other models or other dataset information. Set
+`install_in_lucidum: false` to run all three scripts without creating or using
+any `.lucidum` folder.
 
 Lucidum keeps models separate for each exact version of a dataset. If the
 source file is rewritten, its size, modification time, row count, or columns
 may change. Re-run `01` so the model is saved against that new dataset version.
 
-To inspect the demo models in the application after running `01`:
-
-```bash
-lucidum datasets/motor_premiums.parquet --tools line-bar,glm,gbm \
-  --features specs/feature_spec.csv
-```
-
-Using Lucidum this way is optional; model building and HTML reporting do not
-depend on interacting with the application.
+The hidden copy is used only by the application. Model building, HTML
+reporting, partial dependence, SHAP, evaluation summaries, and GLM tabulation
+all use the authoritative model-results folder.
 
 ## Step 02: create chart reports
 
@@ -266,8 +305,8 @@ script name, and run time.
 
 The report scenario in the Feature Specification controls which rows become
 charts. In the demo, `report_demo` selects every model/report feature except
-postcode sector, postcode unit, latitude, longitude, and PREMIUM where those
-rows exist.
+MAKE, postcode area, postcode sector, postcode unit, latitude, longitude, and
+PREMIUM where those rows exist.
 
 The following optional columns give a feature its own chart settings:
 
@@ -306,12 +345,15 @@ A selected feature that is not in the model is labelled `Not in model`.
 
 ### GLM summary and tabulations
 
-`03_external_glm_summary_report_demo.py` performs four operations:
+`03_external_glm_summary_report_demo.py` performs four normal report operations
+and one optional synchronization:
 
 1. Build rating tables from the fitted formula and Feature Specification.
 2. Score every source row from those persisted rating tables.
 3. Export the tables to XLSX.
 4. Write a one-page HTML model summary.
+5. When `install_in_lucidum` is true, reinstall the updated model folder so
+   the application also sees the new tabulations.
 
 `config_glm_summary_report.yaml` supplies the `01` build config, Feature
 Specification, KPI Specification, report title/name, and output directory.
@@ -323,6 +365,7 @@ suffix `_linear.xlsx`.
 The HTML contains:
 
 - Source, model, and tabulated-score paths plus other run information.
+- The fitted family and link; Tweedie models also show their variance power.
 - Model performance for Training, Test, and Validation. Every family shows
   deviance and deviance explained. Binomial models also show weighted AUC,
   Gini, and log loss; other models show weighted RMSE and MAE.
@@ -388,11 +431,10 @@ motor_premiums_external_gbm_all_rows_rebased_shap.html
 motor_premiums_external_gbm_model_summary.html
 ```
 
-The standalone model-output folder has this structure:
+The authoritative model-results root has this structure:
 
 ```text
-<portable_root>/
-├── lucidum_artifacts.json
+<model_results_root>/
 ├── glm/<model-id>/
 │   ├── manifest.json
 │   ├── formula.txt
@@ -414,7 +456,8 @@ The standalone model-output folder has this structure:
     └── shap_summary.parquet
 ```
 
-The automatically discoverable Lucidum copy is stored beside the dataset:
+The optional, automatically discoverable Lucidum copy is stored beside the
+dataset:
 
 ```text
 <dataset-folder>/.lucidum/datasets/<dataset-name>/<dataset-version>/models/
@@ -430,23 +473,24 @@ outputs and are ignored by Git.
 The numbered report scripts are usually the simplest interface. If you are
 writing a different Python workflow, the same public functions are available:
 
-- `py_lucidum.line_bar_chart(...)` prepares one serializable Lucidum Line/Bar
-  chart.
+- `py_lucidum.line_bar_chart(..., model_folder=...)` prepares one serializable
+  Line/Bar chart from an exact saved model folder.
 - `py_lucidum.write_echarts_report(...)` combines charts into a self-contained
   HTML report.
 - `py_lucidum.report_filename(...)` creates the standard output filename.
-- `py_lucidum.gbm_evaluation_chart(...)` prepares the saved GBM evaluation
-  chart.
+- `py_lucidum.gbm_evaluation_chart(..., model_folder=...)` prepares the saved
+  GBM evaluation chart.
 - `py_lucidum.write_gbm_summary_report(...)` writes the GBM summary page.
-- `py_lucidum.build_glm_tabulations(...)` builds rating tables and scores the
-  source rows.
-- `py_lucidum.score_glm_tabulations(...)` scores from already saved rating
-  tables without calling the fitted estimator.
-- `py_lucidum.export_glm_tabulations(..., scale="auto")` writes the XLSX.
-- `py_lucidum.write_glm_summary_report(...)` writes the GLM summary page.
+- `py_lucidum.build_glm_tabulations(..., model_folder=...)` builds rating
+  tables and scores the source rows in that folder.
+- `py_lucidum.score_glm_tabulations(..., model_folder=...)` scores from already
+  saved rating tables without calling the fitted estimator.
+- `py_lucidum.export_glm_tabulations(..., model_folder=..., scale="auto")`
+  writes the XLSX beside those tables.
+- `py_lucidum.write_glm_summary_report(..., model_folder=...)` writes the GLM
+  summary page from that exact folder.
 
-These are supported reporting and GLM-tabulation functions.
-`lucidum_export.py` is a helper used by the `01` scripts. It saves the fitted
-model and predictions in the form required by the report scripts and,
-optionally, by the Lucidum application. Users normally do not call or edit it
-directly.
+Omit `model_folder` to retain the existing dataset-sidecar lookup for backward
+compatibility. `external_model_results.py` is the neutral writer used by the
+`01` scripts; `lucidum_install.py` is used only for the optional application
+installation. Users normally do not call or edit either helper directly.

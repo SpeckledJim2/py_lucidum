@@ -76,6 +76,11 @@ def load_report_settings(path: Path, model_type: str) -> tuple[dict[str, Any], l
 
     dataset = build_config["dataset"]
     model_id = str(build_config["model"]["id"])
+    model_results_root = _resolve(
+        build_path.parent,
+        build_config["output"]["model_results_root"],
+    )
+    model_folder = model_results_root / model_type / model_id
     needs_importance = any(
         report["show_feature_importance"] or report["sort_by_feature_importance"]
         for report in reports
@@ -84,6 +89,7 @@ def load_report_settings(path: Path, model_type: str) -> tuple[dict[str, Any], l
         dataset_path,
         model_type,
         model_id,
+        model_folder=model_folder,
         needs_importance=needs_importance,
     )
     if needs_importance:
@@ -131,10 +137,19 @@ def load_gbm_summary_settings(
     kpi_path = _resolve(path.parent, report_config["kpi_spec"])
     output_directory = _resolve(path.parent, report_config["output"]["directory"])
     model_id = str(build_config["model"]["id"])
+    model_results_root = _resolve(
+        build_path.parent,
+        build_config["output"]["model_results_root"],
+    )
+    model_folder = (model_results_root / "gbm" / model_id).resolve()
 
     dataset = Dataset(dataset_path)
     try:
-        store = GbmModelStore(dataset_path, dataset=dataset)
+        store = GbmModelStore(
+            dataset_path,
+            dataset=dataset,
+            model_root=model_folder.parent,
+        )
         manifest = store.manifest(model_id)
         parameters = store.model_parameters(model_id)
         prediction_path = store.artifact_path(model_id, "predictions")
@@ -161,7 +176,8 @@ def load_gbm_summary_settings(
         )
         importance_payload = gbm_model_importance(store, model_id)
         importance = _summary_importance(importance_payload, model_id)
-        model_folder = store.model_dir(model_id).resolve()
+        if store.model_dir(model_id).resolve() != model_folder or not model_folder.is_dir():
+            raise ValueError(f"GBM model results folder does not exist: {model_folder}")
     finally:
         dataset.con.close()
 
@@ -177,7 +193,7 @@ def load_gbm_summary_settings(
         "sample_values": [
             dataset_config["training_value"],
             dataset_config["early_stopping_value"],
-            dataset_config["holdout_value"],
+            dataset_config["validation_value"],
         ],
         "report_name": str(report["name"]),
         "report_title": str(report["title"]),
@@ -199,8 +215,16 @@ def load_glm_summary_settings(path: Path) -> dict[str, Any]:
     build_config = _read_yaml(build_path)
     dataset_config = build_config["dataset"]
     report = dict(report_config["report"])
+    model_id = str(build_config["model"]["id"])
+    model_results_root = _resolve(
+        build_path.parent,
+        build_config["output"]["model_results_root"],
+    )
     return {
-        "model_id": str(build_config["model"]["id"]),
+        "model_id": model_id,
+        "model_folder": (model_results_root / "glm" / model_id).resolve(),
+        "install_in_lucidum": bool(build_config["output"]["install_in_lucidum"]),
+        "replace_existing": bool(build_config["output"]["replace_existing"]),
         "dataset_path": _resolve(build_path.parent, dataset_config["path"]),
         "feature_spec_path": _resolve(path.parent, report_config["feature_spec"]),
         "kpi_spec_path": _resolve(path.parent, report_config["kpi_spec"]),
@@ -216,6 +240,7 @@ def glm_summary_header(settings: dict[str, Any], script_file: str) -> dict[str, 
     """Return the small provenance block for the standalone GLM summary."""
 
     return {
+        "model": settings["model_folder"],
         "feature spec": settings["feature_spec_path"].name,
         "KPI spec": settings["kpi_spec_path"].name,
         "report config": settings["config_path"].name,
@@ -363,7 +388,7 @@ GROUP BY sample_value
     roles = [
         ("Training", str(dataset_config["training_value"]), best_metrics.get("training")),
         ("Test", str(dataset_config["early_stopping_value"]), best_metrics.get("test")),
-        ("Validation", str(dataset_config["holdout_value"]), best_metrics.get("validation")),
+        ("Validation", str(dataset_config["validation_value"]), best_metrics.get("validation")),
     ]
     rows = []
     for label, sample_value, metric_value in roles:
@@ -531,6 +556,7 @@ def _model_details(
     model_type: str,
     model_id: str,
     *,
+    model_folder: Path,
     needs_importance: bool,
 ) -> tuple[Path, dict[str, Any] | None]:
     """Return the named model folder and, when requested, its importance."""
@@ -543,15 +569,26 @@ def _model_details(
             from py_lucidum.tools.glm.store import GlmModelStore
             from py_lucidum.tools.line_bar.importance import glm_model_importance
 
-            store = GlmModelStore(dataset_path, dataset=dataset)
+            store = GlmModelStore(
+                dataset_path,
+                dataset=dataset,
+                model_root=model_folder.parent,
+            )
             importance = glm_model_importance(store, model_id) if needs_importance else None
         else:
             from py_lucidum.tools.gbm.store import GbmModelStore
             from py_lucidum.tools.line_bar.importance import gbm_model_importance
 
-            store = GbmModelStore(dataset_path, dataset=dataset)
+            store = GbmModelStore(
+                dataset_path,
+                dataset=dataset,
+                model_root=model_folder.parent,
+            )
             importance = gbm_model_importance(store, model_id) if needs_importance else None
-        return store.model_dir(model_id).resolve(), importance
+        resolved_folder = store.model_dir(model_id).resolve()
+        if resolved_folder != model_folder.resolve() or not resolved_folder.is_dir():
+            raise ValueError(f"{model_type.upper()} model results folder does not exist: {model_folder}")
+        return resolved_folder, importance
     except Exception as exc:
         if needs_importance:
             raise ValueError(

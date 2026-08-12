@@ -21,7 +21,12 @@ def run_worker(request_path: Path, response_path: Path) -> int:
     if not isinstance(payload, dict):
         raise ValueError("GLM tabulation worker request payload must be an object")
     dataset = Dataset(dataset_path)
-    store = GlmModelStore(dataset_path)
+    model_root = request.get("model_root")
+    store = GlmModelStore(
+        dataset_path,
+        dataset=dataset,
+        model_root=Path(str(model_root)) if model_root else None,
+    )
     gbm_store = GbmModelStore(dataset_path) if request.get("gbm_available") else None
     progress_path = Path(str(request["progress_path"])) if request.get("progress_path") else None
 

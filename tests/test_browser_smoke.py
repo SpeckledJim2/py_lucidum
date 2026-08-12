@@ -460,8 +460,8 @@ model:
     l1_ratio: 0.0
     scale_predictors: false
 output:
-  portable_root: portable
-  install: true
+  model_results_root: model_results
+  install_in_lucidum: true
   replace_existing: true
 """,
                 encoding="utf-8",
@@ -474,7 +474,7 @@ output:
   sample_column: SAMPLE
   training_value: training
   early_stopping_value: test
-  holdout_value: validation
+  validation_value: validation
 features:
   spec_path: {feature_spec_path.name}
   scenario_column: report_demo
@@ -499,8 +499,8 @@ training:
     bagging_seed: 2026
     verbosity: -1
 output:
-  portable_root: portable
-  install: true
+  model_results_root: model_results
+  install_in_lucidum: true
   replace_existing: true
 """,
                 encoding="utf-8",

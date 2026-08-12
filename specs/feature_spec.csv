@@ -6,10 +6,10 @@ FUEL_TYPE,VEHICLE,Petrol,,,,0,0,0,show,none,alpha,none,0,none,show,,feature,feat
 LATITUDE,POSTCODE,52.5,50,60.5,0.5,,,,,,,,,,,,feature,feature,
 LICENCE_TYPE,DRIVER,Full UK,,,,0,0,0,show,none,alpha,none,0,none,show,feature,feature,,feature
 LONGITUDE,POSTCODE,-1.5,-7.5,2,0.5,,,,,,,,,,,,feature,feature,
-MAKE,VEHICLE,FORD,,,,0,0,0,show,none,expected,none,0,none,show,,feature,,feature
+MAKE,VEHICLE,FORD,,,,0,0,0,show,none,expected,none,0,none,show,,feature,,
 NCD_YEARS,DRIVER,10,0,20,1,,0,0.1%,show,none,alpha,none,0,none,show,feature,,feature,feature
 OVERNIGHT_LOCATION,POLICY,Driveway,,,,,,,,,,,,,,feature,feature,feature,feature
-POSTCODE_AREA,POSTCODE,B,,,,,,,,,expected,,,,,,feature,feature,feature
+POSTCODE_AREA,POSTCODE,B,,,,,,,,,expected,,,,,,feature,feature,
 POSTCODE_CATEGORY,POSTCODE,10,1,50,1,,0,0.1%,show,none,alpha,none,0,none,show,feature,feature,feature,feature
 POSTCODE_SECTOR,POSTCODE,LE5 1,,,,0,0,0,show,none,alpha,none,0,none,show,,feature,,
 PRIOR_CLAIMS,DRIVER,0,0,2,1,,,,,,,,,,,feature,,feature,feature

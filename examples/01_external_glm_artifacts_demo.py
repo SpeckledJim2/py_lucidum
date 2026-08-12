@@ -1,8 +1,9 @@
-"""Train a GLM outside Lucidum, then save it so Lucidum can display it.
+"""Train a GLM outside Lucidum and save standalone model results.
 
 Normally run this script unchanged.  The YAML and formula file control the
-analysis.  Parts 1-4 are ordinary pandas and glum modelling code; Part 5 saves
-the fitted model and predictions for reports and optional Lucidum viewing.
+analysis. Parts 1-4 are ordinary pandas and glum modelling code; Part 5 saves
+the fitted model and predictions for reporting; Part 6 optionally installs
+that saved folder in Lucidum.
 """
 
 # %% Imports
@@ -11,7 +12,7 @@ import time
 
 import numpy as np
 import pandas as pd
-from glum import GeneralizedLinearRegressor
+from glum import GeneralizedLinearRegressor, TweedieDistribution
 
 from external_model_helpers import (
     config_path_from_command_line,
@@ -22,10 +23,10 @@ from external_model_helpers import (
     resolve_path,
     strip_formula_comments,
 )
-from lucidum_export import save_glm_for_lucidum
+from external_model_results import save_glm_model_results
 
 
-# %% 1. Load the YAML settings, dataset, and formula
+# %% 1. Load settings and data
 
 started = time.perf_counter()
 
@@ -53,7 +54,7 @@ if not formula_rhs or "~" in formula_rhs:
     raise ValueError("The formula file must contain only the right-hand side of the formula")
 
 
-# %% 2. Prepare the response, weights, and training mask
+# %% 2. Prepare modelling inputs
 
 response = pd.to_numeric(data[response_name], errors="coerce")
 
@@ -85,13 +86,22 @@ training_target = model_target.loc[training_mask]
 training_weights = model_weights.loc[training_mask] if model_weights is not None else None
 
 
-# %% 3. Fit the GLM
+# %% 3. Train
 
 alpha = float(regularization["alpha"])
+family_name = str(model_settings["family"]).strip().casefold()
+family_parameter = model_settings.get("family_parameter")
+family = (
+    TweedieDistribution(
+        power=float(family_parameter) if family_parameter is not None else 1.5
+    )
+    if family_name == "tweedie"
+    else family_name
+)
 
 model = GeneralizedLinearRegressor(
     formula=formula_rhs,
-    family=str(model_settings["family"]),
+    family=family,
     link=str(model_settings["link"]),
     fit_intercept=bool(model_settings["fit_intercept"]),
     alpha=alpha,
@@ -110,7 +120,7 @@ model.fit(
 )
 
 
-# %% 4. Predict every eligible row
+# %% 4. Predict and evaluate
 
 # Keeping predictions aligned to the original DataFrame index makes the later
 # row matching explicit.  Rows that cannot be scored remain missing.
@@ -121,13 +131,11 @@ predictions.loc[scoring_mask] = model.predict(
 )
 
 
-# %% 5. Save the fitted model for Lucidum
+# %% 5. Calculate and save normal model results
 
-# Everything specific to Lucidum's file and installation format is inside this
-# one adapter call.  Most users should not need to read lucidum_export.py.
-result = save_glm_for_lucidum(
+# The standalone folder is authoritative for reporting and later reuse.
+result = save_glm_model_results(
     config=config,
-    dataset_path=dataset_path,
     data=data,
     formula_text=formula_text,
     formula_context=formulaic_context(),
@@ -137,6 +145,19 @@ result = save_glm_for_lucidum(
 )
 
 print(f"GLM model id: {result['model_id']}")
-print(f"Portable copy: {result['portable_dir']}")
-if result["sidecar_dir"]:
-    print(f"Lucidum sidecar: {result['sidecar_dir']}")
+print(f"Model folder: {result['model_folder']}")
+
+
+# %% 6. Optionally install the saved model in Lucidum
+
+if bool(config["output"]["install_in_lucidum"]):
+    from lucidum_install import install_model_in_lucidum
+
+    lucidum_model_folder = install_model_in_lucidum(
+        dataset_path=dataset_path,
+        model_folder=result["model_folder"],
+        model_type="glm",
+        model_id=result["model_id"],
+        replace_existing=bool(config["output"]["replace_existing"]),
+    )
+    print(f"Lucidum model folder: {lucidum_model_folder}")

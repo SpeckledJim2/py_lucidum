@@ -150,7 +150,14 @@ class DemoDatasetTests(unittest.TestCase):
             {
                 row["Feature"]
                 for row in rows
-                if row["Feature"] not in {"LATITUDE", "LONGITUDE", "POSTCODE_SECTOR"}
+                if row["Feature"]
+                not in {
+                    "LATITUDE",
+                    "LONGITUDE",
+                    "MAKE",
+                    "POSTCODE_AREA",
+                    "POSTCODE_SECTOR",
+                }
             },
         )
         self.assertGreaterEqual(len({row["Grouping"] for row in rows if row["Grouping"]}), 3)

@@ -42,6 +42,7 @@ for report in settings["reports"]:
             sample_column=settings["sample_column"],
             sample_values=report["sample_values"],
             model_id=settings["model_id"],
+            model_folder=settings["model_folder"],
             controls={**feature["controls"], "sigma": report["sigma"]},
             content=report["chart_content"],
             transform=report["transform"],

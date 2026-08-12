@@ -248,9 +248,18 @@ class GbmSourceRef:
 
 
 class GbmModelStore:
-    def __init__(self, dataset_path: str | Path, dataset: Dataset | None = None):
+    def __init__(
+        self,
+        dataset_path: str | Path,
+        dataset: Dataset | None = None,
+        *,
+        model_root: str | Path | None = None,
+    ):
         self.dataset_path = Path(dataset_path).expanduser().resolve()
         self._dataset = dataset
+        self._model_root = (
+            Path(model_root).expanduser().resolve() if model_root is not None else None
+        )
         self._workspace_stat_key: tuple[int, int] | None = None
         self._workspace_metadata: dict[str, Any] | None = None
         self._root: Path | None = None
@@ -262,6 +271,8 @@ class GbmModelStore:
 
     @property
     def root(self) -> Path:
+        if self._model_root is not None:
+            return self._model_root
         return self.dataset_workspace_root() / "models" / "gbm"
 
     def dataset_workspace_root(self) -> Path:

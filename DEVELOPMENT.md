@@ -73,26 +73,31 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
   - `examples/02_external_gbm_report_demo.py [config-path]`
   - `examples/03_external_glm_summary_report_demo.py [config-path]`
   - `examples/03_external_gbm_summary_report_demo.py [config-path]`
-  - The two executable examples are linear `# %%` scripts whose numbered
-    load, prepare, fit, predict, and save sections are the user-facing surface.
+  - The two executable builders are linear `# %%` scripts with six numbered
+    sections: load settings/data, prepare inputs, train, predict/evaluate,
+    calculate/save normal results, and optionally install in Lucidum.
   - `examples/external_model_helpers.py` contains only shared CLI, YAML,
     path, and input-table preparation helpers.
-  - `examples/lucidum_export.py` contains all workspace, artifact, and install
-    adapter code and is not intended as part of the teaching flow.
+  - `examples/external_model_results.py` contains neutral compact-artifact
+    writing; `examples/lucidum_install.py` contains only optional workspace
+    signature, one-folder copy, and activation logic. Neither is part of the
+    teaching flow.
   - The 01 scripts intentionally do not import `py_lucidum` and do not establish
     a public writer API. They are executable documentation of the current
     manual artifact and installation contract.
-  - The 02 report scripts do import the public reporting functions. They name
-    the exact model ID from the 01 config, do not start the app, and write
-    self-contained static-data HTML with the shared Line/Bar renderer.
+  - The 02 report scripts do import the public reporting functions. They pass
+    the exact `model_results_root/<type>/<model-id>` folder from the 01 config,
+    do not start the app, and write self-contained static-data HTML with the
+    shared Line/Bar renderer.
   - The 03 GBM summary script names the exact model ID from the 01 config and
     writes eligible split performance, KPI-formatted Actual/prediction values,
     SHAP-preferred whole-model importance, parameters, and saved evaluation
     history without following `active_model.json`.
-  - The 03 GLM summary script names the exact 01 model, calls the public shared
-    tabulation/scoring and XLSX APIs, and writes fitted-prediction performance,
-    coefficients/p-values, and the shared workbook index without starting the
-    app.
+  - The 03 GLM summary script names the exact 01 model folder, calls the public
+    shared tabulation/scoring and XLSX APIs, writes artifacts back into that
+    folder, and writes fitted-prediction performance, coefficients/p-values,
+    and the shared workbook index without starting the app. When installation
+    is enabled it then synchronizes that updated folder into Lucidum.
   - `static/app/line-bar-chart.js` owns one-feature ECharts option generation
     for both the normal app and standalone reports. Keep it free of DOM and app
     state dependencies; report-only presentation choices are passed as options.
@@ -294,17 +299,17 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
   IDs, unsupported dataset kinds, invalid sample partitions, and invalid
   formula/scenario references. Keep `PyYAML` in the `examples` optional extra;
   a checkout that runs both examples uses `.[glm,gbm,examples]`.
-- External builders must remain independent of `py_lucidum`. They reproduce
-  workspace-signature version 1 from file size, nanosecond mtime, row count,
-  and ordered DuckDB schema; assign one-based `__lucidum_row_id` before any
-  filtering; and install only to
+- External builders must remain independent of `py_lucidum`. The neutral
+  writer assigns one-based `__lucidum_row_id` before any filtering and writes
+  only below `model_results_root/<type>/<model-id>`. The optional installer
+  reproduces workspace-signature version 1 from file size, nanosecond mtime,
+  row count, and ordered DuckDB schema, and installs only to
   `.lucidum/datasets/<slug>/<signature>/models/<type>/<model-id>`.
 - Installation is a staged rename of one validated model folder. Replacement
   may move that exact folder through a temporary backup, but must never delete
   a model-type root or wider dataset sidecar. Write `active_model.json` only
-  after the model folder is live. Portable copies live below
-  `<output>/glm|gbm/<model-id>` and are indexed by the output-level
-  `lucidum_artifacts.json`.
+  after the model folder is live. The authoritative model-results root has no
+  index file; exact folders are resolved directly from model type and ID.
 - The external GLM contract fits `glum` directly, persists a compatible
   `estimator.pkl`, and writes the current compact manifest, formula,
   coefficient, importance, prediction, and diagnostic artifacts. A denominator
@@ -318,8 +323,15 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
   artifacts.
 - Keep the external build/report user contract in
   `docs/external-model-builds-and-reports.md`. The 02 and 03 report helpers must
-  load the exact GLM or GBM model ID named by the matching 01 YAML, regardless
-  of the current `active_model.json` marker.
+  load the exact GLM or GBM folder named by the matching 01 YAML, regardless of
+  installation or the current `active_model.json` marker. Report headers show
+  this authoritative folder, never the optional hidden copy.
+- `line_bar_chart`, `gbm_evaluation_chart`, `build_glm_tabulations`,
+  `score_glm_tabulations`, `export_glm_tabulations`, and
+  `write_glm_summary_report` accept an optional exact `model_folder`. When it
+  is omitted, preserve the existing dataset-sidecar lookup. Carry explicit GLM
+  folders through both partial-dependence and tabulation subprocess workers,
+  including interaction-model paths.
 - Public GLM tabulation calls live in `glm_api.py`. The combined build delegates
   to the normal tabulation builder, then both that build and explicit
   `score_glm_tabulations` score from persisted table Parquets through
@@ -331,9 +343,10 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
   values from `SAMPLE` case-insensitively, applies denominator rate/weight
   semantics, always reports deviance and explained deviance, and adds weighted
   AUC/Gini/log loss for binomial families or weighted RMSE/MAE for other
-  families. The coefficient row order and visible columns mirror the GLM tool.
-  The HTML tabulation index and XLSX index originate from one shared value
-  structure.
+  families. Its Family / Link metadata includes the fitted Tweedie variance
+  power for Tweedie models, falling back to the estimator for older manifests.
+  The coefficient row order and visible columns mirror the GLM tool. The HTML
+  tabulation index and XLSX index originate from one shared value structure.
 - The 03 GBM summary counts only rows joined to a saved prediction with a
   finite Actual and, when configured, a finite positive Weight. Average-row
   Actual/prediction values are means; weighted values are numerator sums over
@@ -394,7 +407,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 - GBM training projects only the selected response, denominator, SAMPLE, init-score, and feature columns through DuckDB into Polars. Stable sorted categorical mappings are encoded once into numeric Arrow columns shared by training, test, validation, scoring, and SHAP; logical/boolean columns use the same two-level categorical path, including Polars' lowercase `false`/`true` labels. GBM tabulation must compare source boolean values with those saved labels using the same normalization. LightGBM receives Arrow tables rather than pandas matrices. Keep pandas limited to compact tree/evaluation/config artifacts, tabulations, and exports, and do not restore large-row pandas frame copies.
 - GBM model manifests retain `timings.training_seconds` and add dependency, validation, data-load, matrix-preparation, dataset-construction, fit, score, SHAP, and artifact-write timings. Response scoring must call LightGBM exactly once: raw-score mode only for supplied init scores or denominator-derived log offsets, and normal prediction mode otherwise.
 - GBM training runs as an in-memory background job. `GET /api/gbm/jobs/{job_id}` returns transient `progress` while the job is queued/running, including phase, message, iteration, train/test metric points, and live evaluation history. Persisted training history is `evaluation.parquet`; frontend Evaluation Log downsampling and the borderless `Zoom tail` toggle are render-only and must not truncate this artifact. Its adjacent copy command writes the rendered chart PNG to the clipboard without a backend request.
-- GBM uses a canonical uppercase `SAMPLE` column when present: `training` rows fit the model, `test` rows drive early stopping, and `validation` rows are scored as holdout diagnostics. If `SAMPLE` is absent, users can create a reusable generated 60/20/20 split stored as `models/gbm/generated_sample.parquet` under the current dataset workspace; generated splits do not mutate the source dataset.
+- GBM uses a canonical uppercase `SAMPLE` column when present: `training` rows fit the model, `test` rows drive early stopping, and `validation` rows are scored as independent Validation diagnostics. If `SAMPLE` is absent, users can create a reusable generated 60/20/20 split stored as `models/gbm/generated_sample.parquet` under the current dataset workspace; generated splits do not mutate the source dataset.
 - GBM training mode is persisted as manifest `training_mode`. `ebm` mode is available when the active sample source, either a physical dataset `SAMPLE` column or the generated sidecar split, contains `training` and `test` rows after denominator filtering. EBM uses `num_iterations` as the global cap across all leaf stages, requires `early_stopping_rounds > 0`, starts with `num_leaves=2` and `learning_rate=0.3`, then advances leaf counts through the configured `num_leaves` after stage-local test-metric plateaus.
 - GBM parameter cells support grid-search braces: explicit sets like `{200, 300, 400}` and inclusive numeric ranges like `{0.05, 0.3; 0.05}`. Grid search samples combination indexes deterministically from the hypergrid without constructing the full cartesian product, pre-validates only sampled combinations, skips invalid combinations with a notice, trains valid combinations sequentially in one job, persists each as a normal model with `grid_search` metadata, and activates the best completed model by test metric when present, otherwise training metric.
 - GBM always exposes `tweedie_variance_power` in the Parameters grid with default `1.5` and validates LightGBM's `1.0 <= value < 2.0` constraint for every objective. LightGBM uses it for a Tweedie objective or Tweedie metric; when neither is selected, a valid value remains accepted and persisted without affecting the fitted model or evaluation metric.

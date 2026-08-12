@@ -34,6 +34,7 @@ tabulations = build_glm_tabulations(
     settings["dataset_path"],
     model_id=settings["model_id"],
     feature_spec_path=settings["feature_spec_path"],
+    model_folder=settings["model_folder"],
 )
 
 
@@ -43,6 +44,7 @@ workbook = export_glm_tabulations(
     settings["dataset_path"],
     model_id=settings["model_id"],
     scale="auto",  # exp for a fitted log link; linear for every other link
+    model_folder=settings["model_folder"],
 )
 
 print(f"Tabulated scores: {tabulations['scoring_path']}")
@@ -65,7 +67,23 @@ write_glm_summary_report(
     model_id=settings["model_id"],
     kpi_spec_path=settings["kpi_spec_path"],
     tabulation_export=workbook,
+    model_folder=settings["model_folder"],
     metadata=glm_summary_header(settings, __file__),
 )
 
 print(f"GLM summary report: {output_path}")
+
+
+# %% 5. Optionally synchronize the updated model with Lucidum
+
+if settings["install_in_lucidum"]:
+    from lucidum_install import install_model_in_lucidum
+
+    lucidum_model_folder = install_model_in_lucidum(
+        dataset_path=settings["dataset_path"],
+        model_folder=settings["model_folder"],
+        model_type="glm",
+        model_id=settings["model_id"],
+        replace_existing=settings["replace_existing"],
+    )
+    print(f"Lucidum model folder: {lucidum_model_folder}")

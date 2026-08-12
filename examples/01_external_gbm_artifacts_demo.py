@@ -1,9 +1,9 @@
-"""Train a GBM outside Lucidum, then save it so Lucidum can display it.
+"""Train a GBM outside Lucidum and save standalone model results.
 
 Normally run this script unchanged.  The YAML and Feature Specification
-control the analysis.  Parts 1-4 are ordinary pandas and LightGBM modelling
-code; Part 5 saves the fitted model and predictions for reports and optional
-Lucidum viewing.
+control the analysis. Parts 1-4 are ordinary pandas and LightGBM modelling
+code; Part 5 saves the fitted model and predictions for reporting; Part 6
+optionally installs that saved folder in Lucidum.
 """
 
 # %% Imports
@@ -23,13 +23,13 @@ from external_model_helpers import (
     require_columns,
     resolve_path,
 )
-from lucidum_export import save_gbm_for_lucidum
+from external_model_results import save_gbm_model_results
 
 
 LOG_LINK_OBJECTIVES = {"poisson", "gamma", "tweedie"}
 
 
-# %% 1. Load the YAML settings, dataset, and feature scenario
+# %% 1. Load settings and data
 
 started = time.perf_counter()
 
@@ -59,7 +59,7 @@ if {response_name, denominator_name, sample_name}.intersection(feature_names):
     raise ValueError("Response, denominator, and sample columns cannot also be model features")
 
 
-# %% 2. Prepare the response and sample masks
+# %% 2. Prepare modelling inputs
 
 response = pd.to_numeric(data[response_name], errors="coerce")
 
@@ -83,14 +83,14 @@ training_mask = scoring_mask & sample.eq(
 test_mask = scoring_mask & sample.eq(
     str(dataset_settings["early_stopping_value"]).strip().lower()
 ).fillna(False)
-holdout_mask = scoring_mask & sample.eq(
-    str(dataset_settings["holdout_value"]).strip().lower()
+validation_mask = scoring_mask & sample.eq(
+    str(dataset_settings["validation_value"]).strip().lower()
 ).fillna(False)
 
 for sample_label, sample_rows in (
     ("training", training_mask),
     ("test", test_mask),
-    ("holdout", holdout_mask),
+    ("validation", validation_mask),
 ):
     if not sample_rows.any():
         raise ValueError(f"The {sample_label} sample has no eligible rows")
@@ -101,7 +101,7 @@ use_log_offset = denominator is not None and objective in LOG_LINK_OBJECTIVES
 initial_score = np.log(denominator) if use_log_offset else None
 
 
-# %% 3. Fit the GBM
+# %% 3. Train
 
 training_data = lgb.Dataset(
     feature_data.loc[training_mask, feature_names],
@@ -140,7 +140,7 @@ model = lgb.train(
 best_iteration = int(model.best_iteration or model.current_iteration())
 
 
-# %% 4. Predict every eligible row
+# %% 4. Predict and evaluate
 
 # Predictions stay aligned to the original DataFrame index.  For log-link
 # objectives, LightGBM returns the model adjustment and the exposure offset is
@@ -167,21 +167,19 @@ else:
 # Validation.  This adds one point to the saved Evaluation Log without making
 # another prediction or allowing Validation to affect early stopping.
 validation_warning = evaluate_validation_metric(
-    actual=response.loc[holdout_mask],
-    prediction=predictions.loc[holdout_mask],
+    actual=response.loc[validation_mask],
+    prediction=predictions.loc[validation_mask],
     parameters=parameters,
     evaluation=evaluation,
     best_iteration=best_iteration,
 )
 
 
-# %% 5. Save the fitted model for Lucidum
+# %% 5. Calculate and save normal model results
 
-# Everything specific to Lucidum's file and installation format is inside this
-# one adapter call.  Most users should not need to read lucidum_export.py.
-result = save_gbm_for_lucidum(
+# The standalone folder is authoritative for reporting and later reuse.
+result = save_gbm_model_results(
     config=config,
-    dataset_path=dataset_path,
     data=data,
     feature_data=feature_data,
     model=model,
@@ -192,6 +190,19 @@ result = save_gbm_for_lucidum(
 )
 
 print(f"GBM model id: {result['model_id']}")
-print(f"Portable copy: {result['portable_dir']}")
-if result["sidecar_dir"]:
-    print(f"Lucidum sidecar: {result['sidecar_dir']}")
+print(f"Model folder: {result['model_folder']}")
+
+
+# %% 6. Optionally install the saved model in Lucidum
+
+if bool(config["output"]["install_in_lucidum"]):
+    from lucidum_install import install_model_in_lucidum
+
+    lucidum_model_folder = install_model_in_lucidum(
+        dataset_path=dataset_path,
+        model_folder=result["model_folder"],
+        model_type="gbm",
+        model_id=result["model_id"],
+        replace_existing=bool(config["output"]["replace_existing"]),
+    )
+    print(f"Lucidum model folder: {lucidum_model_folder}")

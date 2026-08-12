@@ -1,18 +1,18 @@
-"""Compatibility machinery for Lucidum's current on-disk model format.
+"""Save compact standalone results for externally fitted GLM and GBM models.
 
 Most users should not read or modify this file.  The readable examples are
 ``01_external_glm_artifacts_demo.py`` and ``01_external_gbm_artifacts_demo.py``;
 they contain the ordinary modelling workflow and make one call into this
 module after fitting and prediction.
 
-This adapter deliberately does not import :mod:`py_lucidum`.  It reproduces
-the file, row-identity, workspace, and installation contracts needed for the
-externally fitted models to appear in Lucidum's normal views.
+This module deliberately does not import :mod:`py_lucidum`.  It writes the
+compact model, prediction, diagnostic, evaluation, tree, and SHAP artifacts
+used by the reporting examples. Optional application installation is kept in
+``lucidum_install.py``.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import pickle
@@ -41,13 +41,11 @@ GLM_COEFFICIENT_COLUMNS = [
     "ci_upper",
 ]
 MODEL_ID_RE = re.compile(r"[A-Za-z0-9_.-]+")
-WORKSPACE_VERSION = 1
 
 
-def save_glm_for_lucidum(
+def save_glm_model_results(
     *,
     config: dict[str, Any],
-    dataset_path: Path,
     data: pd.DataFrame,
     formula_text: str,
     formula_context: dict[str, Any],
@@ -55,14 +53,13 @@ def save_glm_for_lucidum(
     predictions: pd.Series,
     started: float,
 ) -> dict[str, Any]:
-    """Create the GLM files used by Lucidum's saved-model views."""
+    """Save the compact fitted GLM results in their authoritative folder."""
 
     dataset = config["dataset"]
     model_config = config["model"]
     output = config["output"]
     regularization = model_config["regularization"]
     model_id = validate_model_id(model_config["id"])
-    metadata = workspace_metadata(dataset_path)
 
     response = pd.to_numeric(data[str(dataset["response_numerator"])], errors="coerce")
     denominator_name = str(dataset.get("denominator") or "").strip()
@@ -144,14 +141,20 @@ def save_glm_for_lucidum(
     l1_ratio = float(regularization["l1_ratio"])
     drop_first = alpha == 0
     nonzero = int(np.count_nonzero(np.abs(np.asarray(model.coef_, dtype=float)) > 1e-10))
+    family_name = str(model_config["family"])
+    family_parameter = (
+        float(model_config.get("family_parameter", 1.5))
+        if family_name.strip().casefold() == "tweedie"
+        else model_config.get("family_parameter")
+    )
     manifest = {
         "model_id": model_id,
         "label": str(model_config["label"]),
         "tool": "glm",
         "created_at": utc_now(),
-        "family": str(model_config["family"]),
+        "family": family_name,
         "link": str(model_config["link"]),
-        "family_parameter": None,
+        "family_parameter": family_parameter,
         "regularization": {
             "mode": "none" if alpha == 0 else "manual",
             "alpha": alpha,
@@ -182,8 +185,8 @@ def save_glm_for_lucidum(
     if denominator is not None:
         prediction_frame["glm_prediction_rate"] = rate_predictions
 
-    portable_root = resolve_path(config["_config_dir"], output["portable_root"])
-    model_dir, staging = new_model_staging(portable_root, "glm", model_id)
+    model_results_root = resolve_path(config["_config_dir"], output["model_results_root"])
+    model_dir, staging = new_model_staging(model_results_root, "glm", model_id)
     try:
         write_parquet(
             pd.DataFrame(coefficients, columns=GLM_COEFFICIENT_COLUMNS),
@@ -201,22 +204,12 @@ def save_glm_for_lucidum(
         shutil.rmtree(staging, ignore_errors=True)
         raise
 
-    return finish_export(
-        dataset_path=dataset_path,
-        metadata=metadata,
-        portable_root=portable_root,
-        model_type="glm",
-        model_id=model_id,
-        model_dir=model_dir,
-        install=bool(output["install"]),
-        replace_existing=bool(output["replace_existing"]),
-    )
+    return {"model_id": model_id, "model_folder": model_dir}
 
 
-def save_gbm_for_lucidum(
+def save_gbm_model_results(
     *,
     config: dict[str, Any],
-    dataset_path: Path,
     data: pd.DataFrame,
     feature_data: pd.DataFrame,
     model: Any,
@@ -225,7 +218,7 @@ def save_gbm_for_lucidum(
     started: float,
     warnings: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Create the GBM files used by Lucidum's saved-model views."""
+    """Save the compact fitted GBM results in their authoritative folder."""
 
     dataset = config["dataset"]
     features_config = config["features"]
@@ -234,7 +227,6 @@ def save_gbm_for_lucidum(
     output = config["output"]
     parameters = jsonable(dict(training["parameters"]))
     model_id = validate_model_id(model_config["id"])
-    metadata = workspace_metadata(dataset_path)
 
     feature_names = [str(name) for name in model.feature_name()]
     categorical_labels = {
@@ -274,7 +266,7 @@ def save_gbm_for_lucidum(
     sample = data[str(dataset["sample_column"])].astype("string").str.strip().str.lower()
     training_mask = sample_rows(sample, dataset["training_value"], eligible)
     test_mask = sample_rows(sample, dataset["early_stopping_value"], eligible)
-    holdout_mask = sample_rows(sample, dataset["holdout_value"], eligible)
+    validation_mask = sample_rows(sample, dataset["validation_value"], eligible)
     best_iteration = int(model.best_iteration or model.current_iteration())
 
     prediction_series = aligned_predictions(data, predictions)
@@ -345,7 +337,7 @@ def save_gbm_for_lucidum(
         "best_iteration": best_iteration,
         "training_rows": int(training_mask.sum()),
         "test_rows": int(test_mask.sum()),
-        "validation_rows": int(holdout_mask.sum()),
+        "validation_rows": int(validation_mask.sum()),
         "scored_rows": int(eligible.sum()),
         "sample_column": str(dataset["sample_column"]),
         "sample_source": "dataset",
@@ -364,8 +356,8 @@ def save_gbm_for_lucidum(
         "init_score": {"value": "none", "kind": "none", "transform": None},
     }
 
-    portable_root = resolve_path(config["_config_dir"], output["portable_root"])
-    model_dir, staging = new_model_staging(portable_root, "gbm", model_id)
+    model_results_root = resolve_path(config["_config_dir"], output["model_results_root"])
+    model_dir, staging = new_model_staging(model_results_root, "gbm", model_id)
     try:
         write_parquet(prediction_frame, staging / "predictions.parquet")
         write_parquet(evaluation_frame, staging / "evaluation.parquet")
@@ -383,16 +375,7 @@ def save_gbm_for_lucidum(
         shutil.rmtree(staging, ignore_errors=True)
         raise
 
-    return finish_export(
-        dataset_path=dataset_path,
-        metadata=metadata,
-        portable_root=portable_root,
-        model_type="gbm",
-        model_id=model_id,
-        model_dir=model_dir,
-        install=bool(output["install"]),
-        replace_existing=bool(output["replace_existing"]),
-    )
+    return {"model_id": model_id, "model_folder": model_dir}
 
 
 # ---------------------------------------------------------------------------
@@ -694,134 +677,13 @@ def decode_categorical_threshold(value: Any, categories: list[str]) -> str | Non
 
 
 # ---------------------------------------------------------------------------
-# Workspace and installation adapter
+# Result-folder staging
 # ---------------------------------------------------------------------------
-
-
-def workspace_metadata(path: Path) -> dict[str, Any]:
-    relation = dataset_relation(path)
-    con = duckdb.connect(database=":memory:")
-    try:
-        describe = con.execute(f"DESCRIBE SELECT * FROM {relation}").fetchall()
-        if any(str(row[0]) == "__lucidum_row_id" for row in describe):
-            raise ValueError("The source dataset already contains the reserved __lucidum_row_id column")
-        row_count = int(con.execute(f"SELECT COUNT(*) FROM {relation}").fetchone()[0])
-    finally:
-        con.close()
-    stat = path.stat()
-    schema = [{"name": str(row[0]), "duckdb_type": str(row[1])} for row in describe]
-    schema_fingerprint = sha256_json(schema)
-    signature = sha256_json(
-        {
-            "version": WORKSPACE_VERSION,
-            "file_size": int(stat.st_size),
-            "mtime_ns": int(stat.st_mtime_ns),
-            "row_count": row_count,
-            "schema_fingerprint": schema_fingerprint,
-        }
-    )[:20]
-    return {
-        "version": WORKSPACE_VERSION,
-        "path": str(path),
-        "name": path.name,
-        "slug": dataset_slug(path),
-        "signature": signature,
-        "file_size": int(stat.st_size),
-        "mtime_ns": int(stat.st_mtime_ns),
-        "row_count": row_count,
-        "schema_fingerprint": schema_fingerprint,
-    }
 
 
 def new_model_staging(root: Path, model_type: str, model_id: str) -> tuple[Path, Path]:
     parent = root / model_type
     return parent / model_id, create_staging_dir(parent, model_id)
-
-
-def finish_export(
-    *,
-    dataset_path: Path,
-    metadata: dict[str, Any],
-    portable_root: Path,
-    model_type: str,
-    model_id: str,
-    model_dir: Path,
-    install: bool,
-    replace_existing: bool,
-) -> dict[str, Any]:
-    write_portable_index(portable_root, model_type, model_dir, metadata)
-    sidecar_dir = (
-        install_model(
-            dataset_path,
-            metadata,
-            model_type,
-            model_id,
-            model_dir,
-            replace_existing=replace_existing,
-        )
-        if install
-        else None
-    )
-    return {"model_id": model_id, "portable_dir": model_dir, "sidecar_dir": sidecar_dir}
-
-
-def install_model(
-    dataset_path: Path,
-    metadata: dict[str, Any],
-    model_type: str,
-    model_id: str,
-    source: Path,
-    *,
-    replace_existing: bool,
-) -> Path:
-    parent = (
-        dataset_path.parent
-        / ".lucidum"
-        / "datasets"
-        / str(metadata["slug"])
-        / str(metadata["signature"])
-        / "models"
-        / model_type
-    )
-    target = parent / model_id
-    staging = create_staging_dir(parent, model_id)
-    shutil.rmtree(staging)
-    shutil.copytree(source, staging)
-    try:
-        replace_directory(staging, target, replace_existing=replace_existing)
-    except Exception:
-        shutil.rmtree(staging, ignore_errors=True)
-        raise
-    write_json(parent / "active_model.json", {"model_id": model_id, "activated_at": utc_now()})
-    return target
-
-
-def write_portable_index(
-    root: Path,
-    model_type: str,
-    model_dir: Path,
-    metadata: dict[str, Any],
-) -> None:
-    path = root / "lucidum_artifacts.json"
-    payload: dict[str, Any] = {"version": 1, "models": []}
-    if path.exists():
-        existing = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(existing, dict) and isinstance(existing.get("models"), list):
-            payload = existing
-            payload["version"] = 1
-    entry = {
-        "model_type": model_type,
-        "model_id": model_dir.name,
-        "relative_path": model_dir.relative_to(root).as_posix(),
-        "dataset": {key: value for key, value in metadata.items() if key != "path"},
-    }
-    payload["models"] = [
-        row
-        for row in payload["models"]
-        if not (row.get("model_type") == model_type and row.get("model_id") == model_dir.name)
-    ]
-    payload["models"].append(entry)
-    write_json(path, payload)
 
 
 def create_staging_dir(parent: Path, model_id: str) -> Path:
@@ -881,15 +743,6 @@ def validate_model_id(value: Any) -> str:
 def resolve_path(config_dir: Any, value: Any) -> Path:
     path = Path(str(value)).expanduser()
     return (Path(config_dir) / path).resolve() if not path.is_absolute() else path.resolve()
-
-
-def dataset_relation(path: Path) -> str:
-    literal = sql_literal(str(path))
-    if path.suffix.lower() == ".parquet":
-        return f"read_parquet({literal})"
-    if path.suffix.lower() == ".csv":
-        return f"read_csv_auto({literal}, header=true, ignore_errors=true)"
-    raise ValueError("The examples support one CSV or Parquet file")
 
 
 def write_json(path: Path, payload: Any) -> None:
@@ -955,16 +808,6 @@ def shap_row_count(value: Any, available: int) -> int:
     if isinstance(value, str) and value.strip().lower() == "all":
         return available
     return min(available, max(0, int(value)))
-
-
-def dataset_slug(path: Path) -> str:
-    slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", path.name).strip(".-")
-    return slug or "dataset"
-
-
-def sha256_json(payload: Any) -> str:
-    text = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def sql_literal(value: str) -> str:

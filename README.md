@@ -363,44 +363,80 @@ app = create_app(
 py_lucidum.run_app(app, host="127.0.0.1", port=8000, open_browser=True)
 ```
 
-## External model builds and HTML reports
+## Build models outside Lucidum, then report or view them
 
-The checked-in examples provide a YAML-controlled 01 → 02 → 03 workflow for
-building GLM or GBM models outside the Lucidum application and creating static,
-interactive ECharts reports from them. The 01 scripts use ordinary
-`glum`/LightGBM code and do not import `py_lucidum`; their adapter writes and
-installs the current artifact format. The short 02 scripts use Lucidum only as
-a chart library and name the exact model created by the matching build YAML.
-The GLM 03 script uses Lucidum's public tabulation engine to build rating
-tables, score the source rows, export XLSX, and create a model-summary page.
-The GBM 03 script creates a model-summary page containing split performance,
-SHAP-preferred feature importance, saved LightGBM parameters, and the same
-Evaluation Log chart used in Lucidum.
+The examples provide two separate YAML-controlled workflows: three scripts
+for a GLM and three scripts for a GBM. Users normally edit the YAML, GLM
+formula, and specification files, then run the three Python scripts for their
+chosen model type unchanged.
+
+The `01` scripts train and score models outside the Lucidum application using
+ordinary `glum` or LightGBM code. The `02` and `03` scripts create static HTML
+reports without launching Lucidum or starting a server. The HTML data is fixed
+when the report is created, while hover, tooltips, legends, and zoom remain
+interactive.
 
 From a source checkout:
 
 ```bash
 python -m pip install -e ".[glm,gbm,examples]"
+```
 
+### GLM workflow: three scripts
+
+```bash
 python examples/01_external_glm_artifacts_demo.py
 python examples/02_external_glm_report_demo.py
 python examples/03_external_glm_summary_report_demo.py
+```
 
+The GLM `02` report shows feature-level Validation Actual versus Expected with
+two-sigma error bars, feature importance, and the fitted partial-dependence
+line. The `03` summary contains split performance, coefficients and p-values,
+and the tabulation summary with a link to the exported XLSX workbook.
+
+### GBM workflow: three scripts
+
+```bash
 python examples/01_external_gbm_artifacts_demo.py
 python examples/02_external_gbm_report_demo.py
 python examples/03_external_gbm_summary_report_demo.py
 ```
 
-The supplied reports include GLM and GBM validation Actual-vs-Expected charts
-and an all-row rebased GBM SHAP report. YAML and Feature Specification columns
-control sample rows, chart presentation, model-wide importance titles and
-ordering, output location, and chart height.
+The GBM `02` script creates a Validation Actual-versus-Expected report and an
+all-row rebased SHAP-only report. The `03` summary contains split performance,
+mean absolute SHAP importance, LightGBM parameters, and saved evaluation
+history.
 
-See [External model builds and HTML
-reports](docs/external-model-builds-and-reports.md) for the complete 01/02/03
-workflow, every YAML field, row-identity and installation contracts, artifact
-trees, report controls, GLM tabulation/scoring APIs, feature-importance rules,
-and summary calculations.
+### Optionally view the external models in Lucidum
+
+Every `01` build writes authoritative model results below
+`output.model_results_root/<glm|gbm>/<model-id>`. The `02` and `03` scripts read
+that exact folder, so all static reports and GLM tabulations work without a
+`.lucidum` sidecar.
+
+The supplied build YAML files also set `output.install_in_lucidum: true`, which
+optionally copies and activates the saved model beside its source dataset. Open
+Lucidum against that same dataset file:
+
+```bash
+lucidum datasets/motor_premiums.parquet --tools line-bar,glm,gbm --features specs/feature_spec.csv
+```
+
+Lucidum finds and displays the installed copy; it does not retrain it.
+External GLMs can be used in model navigation, coefficients, predictions, and
+partial-dependence views, with tabulations available after running GLM `03`.
+External GBMs can be used in model navigation, predictions, evaluation, tree,
+SHAP, and Stacked SHAP views.
+
+Set `install_in_lucidum: false` to keep the workflow entirely in the ordinary
+model-results and static-report folders. When installation is enabled, GLM
+`03` synchronizes the updated model again after creating tabulations.
+
+See [Build models outside Lucidum, then report or view
+them](docs/external-model-builds-and-reports.md) for the complete 01/02/03
+workflows, YAML fields, report controls, saved-model details, GLM
+tabulation/scoring APIs, feature-importance rules, and summary calculations.
 
 ## Filters
 
@@ -543,7 +579,7 @@ Saved `shap_summary.parquet` contains one row per trained feature with `feature`
 
 When feature interaction constraint groups are selected during training, saved `shap_values.parquet` files also include one grouped SHAP contribution column per selected grouping, named like `POSTCODE_INTERACTION_GROUP`. These grouped columns and the active model's prediction column are available in the Line and Bar Actual chooser under separate Dataset, Model predictions, and SHAP values sections.
 
-If the source dataset has a `SAMPLE` column, GBM trains on `training`, early-stops on `test`, and scores `validation` as a holdout. After scoring all rows once, Lucidum calculates the configured LightGBM metric from the saved Validation predictions and records one Validation point at the best iteration; Validation never affects fitting or early stopping. If `SAMPLE` is missing, the tool can create one reusable generated 60/20/20 sidecar split under the current dataset workspace in `models/gbm/`; for durable modelling, add a proper `SAMPLE` column to the original Parquet file. Models are saved under the same dataset-version workspace.
+If the source dataset has a `SAMPLE` column, GBM trains on `training`, early-stops on `test`, and scores `validation` independently. After scoring all rows once, Lucidum calculates the configured LightGBM metric from the saved Validation predictions and records one Validation point at the best iteration; Validation never affects fitting or early stopping. If `SAMPLE` is missing, the tool can create one reusable generated 60/20/20 sidecar split under the current dataset workspace in `models/gbm/`; for durable modelling, add a proper `SAMPLE` column to the original Parquet file. Models are saved under the same dataset-version workspace.
 
 During training, the app shows live iteration and train/test metric progress and updates the evaluation plot while the background job runs; grid-search progress includes the current model number. The Evaluation Log keeps its live x-axis fixed to the configured iteration count, then uses the exact completed tree count and a tail-focused y-axis view so later training progress remains readable after a steep initial drop. Completed models add only one Validation marker at the best iteration, not a Validation curve. Use the borderless `Zoom tail` toggle to switch between the full history and a focused tail view, or the adjacent copy icon to place the chart image on the clipboard. Long evaluation histories are sampled only for browser rendering; saved `evaluation.parquet` artifacts remain complete.
 

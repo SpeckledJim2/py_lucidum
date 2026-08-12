@@ -646,8 +646,9 @@ def _build_glm_partial_dependence_overlay_impl(
     x_group_kind: str,
     denominator: dict[str, str | None],
 ) -> dict[str, Any]:
-    store = GlmModelStore(dataset.path, dataset=dataset)
-    model_id = glm_partial_dependence_model_id(request) or store.active_model_id()
+    requested_model_id = glm_partial_dependence_model_id(request)
+    store = glm_partial_dependence_store(dataset, request, requested_model_id)
+    model_id = requested_model_id or store.active_model_id()
     if not model_id:
         return empty_glm_partial_dependence_warning("No active GLM is available for GLM overlay.")
     estimator_path = store.artifact_path(model_id, "estimator")
@@ -854,6 +855,30 @@ def _build_glm_partial_dependence_overlay_impl(
         "sample": sample,
         "transform": {"mode": str(request.get("transform") or "none")},
     }
+
+
+def glm_partial_dependence_store(
+    dataset: Dataset,
+    request: dict[str, Any],
+    model_id: str,
+) -> GlmModelStore:
+    partial_dependence = request.get("partialDependence")
+    raw_folder = (
+        partial_dependence.get("model_folder")
+        if isinstance(partial_dependence, dict)
+        else None
+    )
+    if not raw_folder:
+        return GlmModelStore(dataset.path, dataset=dataset)
+    if not model_id:
+        raise ValueError("An explicit GLM model folder requires a model ID")
+    folder = Path(str(raw_folder)).expanduser().resolve()
+    store = GlmModelStore(dataset.path, dataset=dataset, model_root=folder.parent)
+    if store.model_dir(model_id).resolve() != folder:
+        raise ValueError(f"model_folder must be the folder for GLM model {model_id!r}")
+    if not folder.is_dir():
+        raise ValueError(f"GLM model folder does not exist: {folder}")
+    return store
 
 
 def glm_partial_dependence_model_id(request: dict[str, Any]) -> str:

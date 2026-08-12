@@ -39,7 +39,7 @@ CONFIG_KEYS = {
             "regularization",
         },
         "model.regularization": {"alpha", "l1_ratio", "scale_predictors"},
-        "output": {"portable_root", "install", "replace_existing"},
+        "output": {"model_results_root", "install_in_lucidum", "replace_existing"},
     },
     "gbm": {
         "config": {"dataset", "features", "model", "training", "output"},
@@ -50,7 +50,7 @@ CONFIG_KEYS = {
             "sample_column",
             "training_value",
             "early_stopping_value",
-            "holdout_value",
+            "validation_value",
         },
         "features": {"spec_path", "scenario_column"},
         "model": {"id", "label"},
@@ -60,8 +60,12 @@ CONFIG_KEYS = {
             "shap_rows",
             "parameters",
         },
-        "output": {"portable_root", "install", "replace_existing"},
+        "output": {"model_results_root", "install_in_lucidum", "replace_existing"},
     },
+}
+
+OPTIONAL_CONFIG_KEYS = {
+    "glm": {"model": {"family_parameter"}},
 }
 
 
@@ -98,7 +102,12 @@ def load_config(path: Path, model_type: str) -> dict[str, Any]:
         value = config
         for name in section.split("."):
             value = value[name]
-        _expect_keys(value, schema[section], section)
+        _expect_keys(
+            value,
+            schema[section],
+            section,
+            optional=OPTIONAL_CONFIG_KEYS.get(model_type, {}).get(section, set()),
+        )
 
     model_id = str(config["model"]["id"] or "").strip()
     if model_id in {"", ".", ".."} or not MODEL_ID_RE.fullmatch(model_id):
@@ -109,10 +118,18 @@ def load_config(path: Path, model_type: str) -> dict[str, Any]:
     if model_type == "gbm":
         sample_values = {
             str(config["dataset"][name]).strip().lower()
-            for name in ("training_value", "early_stopping_value", "holdout_value")
+            for name in ("training_value", "early_stopping_value", "validation_value")
         }
         if len(sample_values) != 3:
-            raise ValueError("Training, test, and holdout sample values must be distinct")
+            raise ValueError("Training, test, and validation sample values must be distinct")
+    elif str(config["model"]["family"]).strip().casefold() == "tweedie":
+        raw_power = config["model"].get("family_parameter", 1.5)
+        try:
+            power = float(raw_power)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("model.family_parameter must be a numeric Tweedie variance power") from exc
+        if not 1.0 <= power <= 2.0:
+            raise ValueError("model.family_parameter must be between 1 and 2 for a Tweedie GLM")
 
     config["_config_dir"] = path.parent
     return config
@@ -380,11 +397,18 @@ def _running_as_script(script_path: Path) -> bool:
         return False
 
 
-def _expect_keys(mapping: Any, expected: set[str], label: str) -> None:
+def _expect_keys(
+    mapping: Any,
+    expected: set[str],
+    label: str,
+    *,
+    optional: set[str] | None = None,
+) -> None:
     if not isinstance(mapping, dict):
         raise ValueError(f"{label} must be a YAML mapping")
+    allowed = expected | set(optional or set())
     missing = sorted(expected - set(mapping))
-    unknown = sorted(set(mapping) - expected)
+    unknown = sorted(set(mapping) - allowed)
     if unknown:
         raise ValueError(f"{label} has unknown keys: {', '.join(unknown)}")
     if missing:

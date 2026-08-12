@@ -44,7 +44,28 @@ class LogLink:
     pass
 
 
+class TweedieDistribution(NormalDistribution):
+    power = 1.2
+
+
 class ReportingTests(unittest.TestCase):
+    def test_glm_tweedie_family_link_label_includes_variance_power(self) -> None:
+        estimator = SimpleNamespace(
+            family_instance=TweedieDistribution(),
+            link_instance=LogLink(),
+        )
+        self.assertEqual(
+            reporting_module._glm_family_link_label(
+                {"family": "tweedie", "family_parameter": 1.2},
+                estimator,
+            ),
+            "tweedie (variance power 1.2) / log",
+        )
+        self.assertEqual(
+            reporting_module._glm_family_link_label({"family": "tweedie"}, estimator),
+            "tweedie (variance power 1.2) / log",
+        )
+
     def test_dataset_chart_can_be_written_as_self_contained_html(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
@@ -249,6 +270,8 @@ COPY (
             self.assertIn('data-summary-section="evaluation"', document)
             self.assertIn("Mean absolute SHAP", document)
             self.assertIn("£100", document)
+            self.assertIn(".summary-table th { padding: 4px 12px;", document)
+            self.assertIn(".summary-table td { padding: 4px 12px;", document)
             self.assertIn("function gbmEvaluationChartOption", document)
             self.assertNotIn("Zoom tail", document)
             self.assertNotIn("<script src=", document)
@@ -369,6 +392,8 @@ TO {sql_literal(str(store.artifact_path(model_id, 'coefficients')))} (FORMAT PAR
             self.assertEqual(payload["coefficients"]["rows"][0]["p_value"], "0.5%")
             self.assertEqual(payload["coefficients"]["rows"][1]["std_error"], "--")
             self.assertIn('class="significance-low"', document)
+            self.assertIn(".summary-table th { padding: 4px 12px;", document)
+            self.assertIn(".summary-table td { padding: 4px 12px;", document)
             self.assertIn(workbook_path.resolve().as_uri(), document)
             self.assertIn("<td>1.0000</td>", document)
             self.assertIn("<td>0.0000</td>", document)
