@@ -30,8 +30,11 @@ CHART_COLUMNS = {
 }
 
 
-def config_path_from_command_line(script_file: str, default_name: str) -> Path:
-    """Return the optional YAML path, or the config beside the script."""
+def config_path_from_command_line(script_file: str | None, default_name: str) -> Path:
+    """Return the optional YAML path, or the matching example config."""
+
+    if script_file is None:
+        return Path(__file__).resolve().with_name(default_name)
 
     script_path = Path(script_file).resolve()
     if not _running_as_script(script_path):

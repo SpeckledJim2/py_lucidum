@@ -13,6 +13,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
+from unittest.mock import patch
 
 import duckdb
 import pandas as pd
@@ -384,6 +385,55 @@ def load_lucidum_installer() -> Any:
 
 
 class ExternalModelExampleTests(unittest.TestCase):
+    def test_external_workflows_resolve_configs_in_scripts_and_code_cells(self) -> None:
+        helper_cases = (
+            (load_model_helpers, GLM_SCRIPT, "config_glm.yaml"),
+            (load_report_helpers, GLM_REPORT_SCRIPT, "config_glm_report.yaml"),
+        )
+        with TemporaryDirectory() as tmp_dir:
+            explicit_config = Path(tmp_dir) / "custom.yaml"
+            for load_helpers, script, default_name in helper_cases:
+                with self.subTest(helper=load_helpers.__name__):
+                    helpers = load_helpers()
+                    with patch.object(sys, "argv", ["positron-console", "--unrelated"]):
+                        interactive_path = helpers.config_path_from_command_line(None, default_name)
+                    self.assertEqual(interactive_path, EXAMPLES / default_name)
+
+                    with patch.object(sys, "argv", [str(script), str(explicit_config)]):
+                        command_path = helpers.config_path_from_command_line(str(script), default_name)
+                    self.assertEqual(command_path, explicit_config.resolve())
+
+    def test_external_workflows_do_not_read_undefined_file_in_code_cells(self) -> None:
+        scripts = (
+            GLM_SCRIPT,
+            GBM_SCRIPT,
+            GLM_REPORT_SCRIPT,
+            GBM_REPORT_SCRIPT,
+            GLM_SUMMARY_SCRIPT,
+            GBM_SUMMARY_SCRIPT,
+        )
+        report_scripts = {
+            GLM_REPORT_SCRIPT,
+            GBM_REPORT_SCRIPT,
+            GLM_SUMMARY_SCRIPT,
+            GBM_SUMMARY_SCRIPT,
+        }
+        for script in scripts:
+            with self.subTest(script=script.name):
+                source = script.read_text(encoding="utf-8")
+                tree = ast.parse(source, filename=str(script))
+                direct_file_reads = [
+                    node
+                    for node in ast.walk(tree)
+                    if isinstance(node, ast.Name)
+                    and isinstance(node.ctx, ast.Load)
+                    and node.id == "__file__"
+                ]
+                self.assertEqual(direct_file_reads, [])
+                self.assertIn('script_file = globals().get("__file__")', source)
+                if script in report_scripts:
+                    self.assertIn(f'script_file or "{script.name}"', source)
+
     def test_checked_in_glm_demo_uses_tweedie_1_2_with_log_link(self) -> None:
         import yaml
 

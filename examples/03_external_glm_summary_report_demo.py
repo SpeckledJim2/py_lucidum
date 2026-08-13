@@ -24,7 +24,8 @@ from external_report_helpers import (
 
 # %% 1. Load the YAML settings
 
-config_path = config_path_from_command_line(__file__, "config_glm_summary_report.yaml")
+script_file = globals().get("__file__")
+config_path = config_path_from_command_line(script_file, "config_glm_summary_report.yaml")
 settings = load_glm_summary_settings(config_path)
 
 
@@ -68,7 +69,10 @@ write_glm_summary_report(
     kpi_spec_path=settings["kpi_spec_path"],
     tabulation_export=workbook,
     model_folder=settings["model_folder"],
-    metadata=glm_summary_header(settings, __file__),
+    metadata=glm_summary_header(
+        settings,
+        script_file or "03_external_glm_summary_report_demo.py",
+    ),
 )
 
 print(f"GLM summary report: {output_path}")

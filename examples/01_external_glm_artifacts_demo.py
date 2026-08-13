@@ -30,7 +30,8 @@ from external_model_results import save_glm_model_results
 
 started = time.perf_counter()
 
-config_path = config_path_from_command_line(__file__, "config_glm.yaml")
+script_file = globals().get("__file__")
+config_path = config_path_from_command_line(script_file, "config_glm.yaml")
 config = load_config(config_path, "glm")
 
 dataset_settings = config["dataset"]

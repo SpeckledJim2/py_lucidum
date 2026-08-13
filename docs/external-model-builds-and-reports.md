@@ -111,6 +111,29 @@ python examples/01_external_glm_artifacts_demo.py path/to/my_glm.yaml
 Paths written inside a YAML file are relative to that YAML file. This means a
 configuration continues to work when the command is run from another folder.
 
+### Run the scripts as code cells in Positron
+
+Each numbered script is also a plain Python code-cell workflow. Open it in
+Positron, run the `Imports` cell first, then run the numbered cells in order.
+The active cell runs in Positron's shared Python Console, so variables created
+by one cell remain available to the cells below it.
+
+Python does not define `__file__` in that interactive Console. The examples
+handle this difference explicitly: code-cell execution selects the matching
+YAML beside the example helpers, while whole-script execution retains the
+optional command-line YAML argument described above.
+
+To use another YAML while working interactively, replace the `config_path`
+assignment in the first numbered cell with an explicit path, for example:
+
+```python
+from pathlib import Path
+
+config_path = Path("path/to/my_gbm.yaml").expanduser().resolve()
+```
+
+The remaining lines and cells are unchanged.
+
 ## Optionally view the externally trained models in Lucidum
 
 The supplied build YAML files set `output.install_in_lucidum: true`. After the

@@ -76,6 +76,9 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
   - The two executable builders are linear `# %%` scripts with six numbered
     sections: load settings/data, prepare inputs, train, predict/evaluate,
     calculate/save normal results, and optionally install in Lucidum.
+  - All six numbered workflows support Positron code-cell execution, where
+    `__file__` is absent. Interactive runs use the matching YAML beside the
+    example helpers; whole-script runs retain their optional YAML argument.
   - `examples/external_model_helpers.py` contains only shared CLI, YAML,
     path, and input-table preparation helpers.
   - `examples/external_model_results.py` contains neutral compact-artifact

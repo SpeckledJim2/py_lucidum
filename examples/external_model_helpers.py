@@ -69,12 +69,15 @@ OPTIONAL_CONFIG_KEYS = {
 }
 
 
-def config_path_from_command_line(script_file: str, default_name: str) -> Path:
+def config_path_from_command_line(script_file: str | None, default_name: str) -> Path:
     """Return the optional YAML argument, or the config beside the script.
 
     When a section is run interactively rather than as a command, use the
     default file and ignore the notebook or IDE process's unrelated arguments.
     """
+
+    if script_file is None:
+        return Path(__file__).resolve().with_name(default_name)
 
     script_path = Path(script_file).resolve()
     if not _running_as_script(script_path):

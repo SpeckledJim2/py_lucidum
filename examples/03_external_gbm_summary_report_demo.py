@@ -18,7 +18,8 @@ from external_report_helpers import (
 
 # %% 1. Load the YAML settings and saved model results
 
-config_path = config_path_from_command_line(__file__, "config_gbm_summary_report.yaml")
+script_file = globals().get("__file__")
+config_path = config_path_from_command_line(script_file, "config_gbm_summary_report.yaml")
 settings, performance, feature_importance, parameters = load_gbm_summary_settings(config_path)
 
 
@@ -44,7 +45,10 @@ output_path = settings["output_directory"] / output_name
 write_gbm_summary_report(
     output_path,
     title=settings["report_title"],
-    metadata=gbm_summary_header(settings, __file__),
+    metadata=gbm_summary_header(
+        settings,
+        script_file or "03_external_gbm_summary_report_demo.py",
+    ),
     performance=performance,
     feature_importance=feature_importance,
     parameters=parameters,

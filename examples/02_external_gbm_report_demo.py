@@ -19,7 +19,8 @@ from external_report_helpers import (
 
 # %% 1. Load the YAML settings and the selected feature-spec rows
 
-config_path = config_path_from_command_line(__file__, "config_gbm_report.yaml")
+script_file = globals().get("__file__")
+config_path = config_path_from_command_line(script_file, "config_gbm_report.yaml")
 settings, report_features = load_report_settings(config_path, "gbm")
 
 
@@ -69,7 +70,11 @@ for prepared_report in prepared_reports:
         prepared_report["charts"],
         output_path,
         title=report["title"],
-        metadata=report_header(settings, report, __file__),
+        metadata=report_header(
+            settings,
+            report,
+            script_file or "02_external_gbm_report_demo.py",
+        ),
         chart_height=settings["chart_height"],
     )
     print(f"GBM report: {output_path}")

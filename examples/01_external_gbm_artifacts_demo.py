@@ -52,7 +52,8 @@ def lightgbm_arrow_table(frame, categorical_names):
 
 started = time.perf_counter()
 
-config_path = config_path_from_command_line(__file__, "config_gbm.yaml")
+script_file = globals().get("__file__")
+config_path = config_path_from_command_line(script_file, "config_gbm.yaml")
 config = load_config(config_path, "gbm")
 
 dataset_settings = config["dataset"]
