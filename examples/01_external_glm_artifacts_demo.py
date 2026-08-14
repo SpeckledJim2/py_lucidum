@@ -82,6 +82,28 @@ training_mask = (
 if training_mask.sum() < 2:
     raise ValueError(f"Need at least two valid {sample_name}={training_value!r} rows")
 
+# Glum keeps its fitted intercept separate from the Formulaic model matrix.
+# For the special formula ``1`` that leaves zero predictor columns, which the
+# underlying scikit-learn validation rejects.  A private constant column gives
+# Glum the one-column matrix it needs while remaining mathematically identical
+# to an intercept-only model.  The results writer records this implementation
+# detail so Lucidum can recreate the same column when it later scores the model.
+configured_fit_intercept = bool(model_settings["fit_intercept"])
+intercept_only = formula_rhs.strip() == "1" and configured_fit_intercept
+internal_intercept_column = ""
+estimator_formula = formula_rhs
+estimator_fit_intercept = configured_fit_intercept
+if intercept_only:
+    internal_intercept_base = "__external_glm_intercept_only"
+    internal_intercept_column = internal_intercept_base
+    suffix = 2
+    while internal_intercept_column in data.columns:
+        internal_intercept_column = f"{internal_intercept_base}_{suffix}"
+        suffix += 1
+    data[internal_intercept_column] = 1.0
+    estimator_formula = f"0 + `{internal_intercept_column}`"
+    estimator_fit_intercept = False
+
 training_data = data.loc[training_mask]
 training_target = model_target.loc[training_mask]
 training_weights = model_weights.loc[training_mask] if model_weights is not None else None
@@ -100,17 +122,24 @@ family = (
     else family_name
 )
 
-model = GeneralizedLinearRegressor(
-    formula=formula_rhs,
-    family=family,
-    link=str(model_settings["link"]),
-    fit_intercept=bool(model_settings["fit_intercept"]),
-    alpha=alpha,
-    l1_ratio=float(regularization["l1_ratio"]),
-    scale_predictors=bool(regularization["scale_predictors"]),
-    drop_first=alpha == 0,
-    robust=True,
-)
+estimator_settings = {
+    "formula": estimator_formula,
+    "family": family,
+    "link": str(model_settings["link"]),
+    "fit_intercept": estimator_fit_intercept,
+    "alpha": alpha,
+    "l1_ratio": float(regularization["l1_ratio"]),
+    "scale_predictors": bool(regularization["scale_predictors"]),
+    "drop_first": alpha == 0,
+    "robust": True,
+}
+if intercept_only:
+    # Treat the internal constant exactly like a normal intercept: it must not
+    # be shrunk even if a future intercept-only configuration uses a penalty.
+    estimator_settings["P1"] = np.zeros(1)
+    estimator_settings["P2"] = np.zeros((1, 1))
+
+model = GeneralizedLinearRegressor(**estimator_settings)
 
 model.fit(
     training_data,
@@ -143,6 +172,8 @@ result = save_glm_model_results(
     model=model,
     predictions=predictions,
     started=started,
+    intercept_only=intercept_only,
+    internal_intercept_column=internal_intercept_column,
 )
 
 print(f"GLM model id: {result['model_id']}")

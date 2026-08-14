@@ -52,6 +52,8 @@ def save_glm_model_results(
     model: Any,
     predictions: pd.Series,
     started: float,
+    intercept_only: bool = False,
+    internal_intercept_column: str = "",
 ) -> dict[str, Any]:
     """Save the compact fitted GLM results in their authoritative folder."""
 
@@ -100,13 +102,18 @@ def save_glm_model_results(
         else rate_predictions
     )
     scored_row_ids = np.flatnonzero(scoring_mask.to_numpy()).astype("int64") + 1
-    source_columns = [str(name) for name in data.columns]
+    source_columns = [
+        str(name)
+        for name in data.columns
+        if str(name) != internal_intercept_column
+    ]
 
     alpha = float(regularization["alpha"])
     coefficients, inference_warning = glm_coefficient_rows(
         model,
         source_columns,
         include_inference=alpha == 0,
+        internal_intercept_column=internal_intercept_column,
     )
     importance = glm_feature_importance(
         model,
@@ -172,9 +179,9 @@ def save_glm_model_results(
         "formula": {
             "drop_first": drop_first,
             "fit_intercept": bool(model_config["fit_intercept"]),
-            "estimator_fit_intercept": bool(model_config["fit_intercept"]),
-            "intercept_only": False,
-            "internal_intercept_column": "",
+            "estimator_fit_intercept": bool(getattr(model, "fit_intercept", False)),
+            "intercept_only": bool(intercept_only),
+            "internal_intercept_column": str(internal_intercept_column),
         },
         "timings": {"elapsed_ms": round((time.perf_counter() - started) * 1000, 1)},
     }
@@ -185,6 +192,18 @@ def save_glm_model_results(
     if denominator is not None:
         prediction_frame["glm_prediction_rate"] = rate_predictions
 
+    importance_frame = pd.DataFrame(importance)
+    if importance_frame.empty:
+        # Intercept-only models have no feature contributions, but the compact
+        # artifact still needs the ordinary three-column importance schema.
+        importance_frame = pd.DataFrame(
+            {
+                "feature": pd.Series(dtype="string"),
+                "importance": pd.Series(dtype="float64"),
+                "metric": pd.Series(dtype="string"),
+            }
+        )
+
     model_results_root = resolve_path(config["_config_dir"], output["model_results_root"])
     model_dir, staging = new_model_staging(model_results_root, "glm", model_id)
     try:
@@ -192,7 +211,7 @@ def save_glm_model_results(
             pd.DataFrame(coefficients, columns=GLM_COEFFICIENT_COLUMNS),
             staging / "coefficients.parquet",
         )
-        write_parquet(pd.DataFrame(importance), staging / "feature_importance.parquet")
+        write_parquet(importance_frame, staging / "feature_importance.parquet")
         write_parquet(prediction_frame, staging / "predictions.parquet")
         with (staging / "estimator.pkl").open("wb") as handle:
             pickle.dump(model, handle, protocol=pickle.HIGHEST_PROTOCOL)
@@ -388,6 +407,7 @@ def glm_coefficient_rows(
     source_columns: list[str],
     *,
     include_inference: bool,
+    internal_intercept_column: str = "",
 ) -> tuple[list[dict[str, Any]], str | None]:
     feature_rows = coefficient_feature_rows(model, source_columns)
     names = [str(name) for name in getattr(model, "feature_names_", [])]
@@ -411,7 +431,14 @@ def glm_coefficient_rows(
             coefficient_index = 0
             for term, values in table.iterrows():
                 raw_term = str(term)
-                is_intercept = raw_term.lower() == "intercept" or raw_term == "(Intercept)"
+                is_intercept = (
+                    raw_term.lower() == "intercept"
+                    or raw_term == "(Intercept)"
+                    or bool(
+                        internal_intercept_column
+                        and raw_term == internal_intercept_column
+                    )
+                )
                 features = []
                 if not is_intercept:
                     features = features_by_name.get(
@@ -478,10 +505,17 @@ def glm_coefficient_rows(
             }
         )
     for index, name in enumerate(names):
+        is_intercept = bool(
+            internal_intercept_column and name == internal_intercept_column
+        )
         rows.append(
             {
-                "term": name,
-                "features": feature_rows[index] if index < len(feature_rows) else [],
+                "term": "(Intercept)" if is_intercept else name,
+                "features": (
+                    []
+                    if is_intercept
+                    else feature_rows[index] if index < len(feature_rows) else []
+                ),
                 "estimate": json_number(coefficients[index] if index < len(coefficients) else None),
                 "std_error": None,
                 "statistic": None,

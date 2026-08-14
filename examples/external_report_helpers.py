@@ -578,6 +578,15 @@ def _model_details(
                 model_root=model_folder.parent,
             )
             importance = glm_model_importance(store, model_id) if needs_importance else None
+            manifest = store.manifest(model_id)
+            formula = manifest.get("formula")
+            if (
+                needs_importance
+                and isinstance(importance, dict)
+                and isinstance(formula, dict)
+                and bool(formula.get("intercept_only"))
+            ):
+                importance = {**importance, "intercept_only": True, "message": ""}
         else:
             from py_lucidum.tools.gbm.store import GbmModelStore
             from py_lucidum.tools.line_bar.importance import gbm_model_importance
@@ -611,6 +620,12 @@ def _add_feature_importance(
 ) -> None:
     rows = list((importance or {}).get("rows") or [])
     if not rows:
+        if bool((importance or {}).get("intercept_only")):
+            # An intercept-only GLM legitimately contains no model features.
+            # Keep every requested chart feature, but label it as not in model.
+            for feature in features:
+                feature["in_model"] = False
+            return
         message = str((importance or {}).get("message") or "").strip()
         raise ValueError(
             message

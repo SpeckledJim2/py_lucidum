@@ -959,6 +959,82 @@ COPY (
             self.assertIn("model.id must contain only", unsafe.stderr)
 
     @unittest.skipUnless(HAS_EXAMPLE_DEPENDENCIES, "external-model example dependencies are not installed")
+    def test_external_glm_intercept_only_runs_complete_standalone_workflow(self) -> None:
+        self.addCleanup(stop_persistent_glm_overlay_worker)
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            dataset_path = root / "motor_fixture.parquet"
+            write_reduced_dataset(
+                ROOT / "datasets" / "motor_premiums.parquet",
+                dataset_path,
+            )
+            glm_config, _, _ = write_example_configs(
+                root,
+                dataset_path,
+                install_in_lucidum=False,
+            )
+            (root / "formula.txt").write_text("1\n", encoding="utf-8")
+            glm_report_config, _, glm_summary_config, _ = write_report_configs(root)
+
+            glm_run = run_builder(GLM_SCRIPT, glm_config)
+            glm_report_run = run_builder(GLM_REPORT_SCRIPT, glm_report_config)
+            glm_summary_run = run_builder(GLM_SUMMARY_SCRIPT, glm_summary_config)
+
+            self.assertIn(GLM_MODEL_ID, glm_run.stdout)
+            self.assertFalse((root / ".lucidum").exists())
+
+            glm_dir = root / "model_results" / "glm" / GLM_MODEL_ID
+            manifest = json.loads(
+                (glm_dir / "manifest.json").read_text(encoding="utf-8")
+            )
+            formula = manifest["formula"]
+
+            self.assertTrue(formula["fit_intercept"])
+            self.assertFalse(formula["estimator_fit_intercept"])
+            self.assertTrue(formula["intercept_only"])
+            self.assertTrue(formula["internal_intercept_column"])
+            self.assertEqual((glm_dir / "formula.txt").read_text(encoding="utf-8"), "1\n")
+
+            con = duckdb.connect(database=":memory:")
+            try:
+                coefficients = con.execute(
+                    f"""
+SELECT term, features
+FROM read_parquet({sql_literal(str(glm_dir / 'coefficients.parquet'))})
+"""
+                ).fetchall()
+                prediction_count, minimum_rate, maximum_rate = con.execute(
+                    f"""
+SELECT COUNT(glm_prediction_rate),
+       MIN(glm_prediction_rate),
+       MAX(glm_prediction_rate)
+FROM read_parquet({sql_literal(str(glm_dir / 'predictions.parquet'))})
+"""
+                ).fetchone()
+            finally:
+                con.close()
+
+            self.assertEqual(coefficients, [("(Intercept)", [])])
+            self.assertGreater(prediction_count, 0)
+            self.assertAlmostEqual(minimum_rate, maximum_rate, places=12)
+
+            report_dir = root / "reports"
+            chart_path = report_dir / "motor_fixture_external_glm_validation_actual_vs_expected.html"
+            summary_path = report_dir / "motor_fixture_external_glm_model_summary.html"
+            self.assertIn(str(chart_path.resolve()), glm_report_run.stdout)
+            self.assertIn(str(summary_path.resolve()), glm_summary_run.stdout)
+            self.assertTrue((glm_dir / "tabulated_predictions.parquet").is_file())
+            self.assertTrue(
+                (glm_dir / "tabulations" / f"{GLM_MODEL_ID}_tabulations_linear.xlsx").is_file()
+            )
+
+            summary = report_payload(summary_path)
+            self.assertEqual(
+                [row["term"] for row in summary["coefficients"]["rows"]],
+                ["(Intercept)"],
+            )
+
+    @unittest.skipUnless(HAS_EXAMPLE_DEPENDENCIES, "external-model example dependencies are not installed")
     def test_external_results_report_without_sidecar_then_install_and_work_in_lucidum(self) -> None:
         self.addCleanup(stop_persistent_glm_overlay_worker)
         with TemporaryDirectory() as tmp_dir:
