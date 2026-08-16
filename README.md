@@ -20,14 +20,14 @@ training on large tabular datasets.
 
 | Use Lucidum to | Tool |
 | --- | --- |
-| <img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/tool-icons/dataset-viewer.svg#table" width="20" height="20" align="absmiddle" alt=""> Inspect, search, sort, and copy source rows | [Dataset Viewer](#dataset-viewer) |
-| <img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/tool-icons/specifications.svg#table" width="20" height="20" align="absmiddle" alt=""> Maintain reusable feature, KPI, and filter definitions | [Specifications](#specifications) |
-| <img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/tool-icons/column-profile.svg#table" width="20" height="20" align="absmiddle" alt=""> Understand distributions, ranges, missings, and common values | [Column Profile](#column-profile) |
-| <img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/tool-icons/line-and-bar.svg#table" width="20" height="20" align="absmiddle" alt=""> Explore grouped metrics across one or two features | [Line and Bar](#line-and-bar) |
-| <img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/tool-icons/histogram.svg#table" width="20" height="20" align="absmiddle" alt=""> Examine the distribution of a numeric response | [Histogram](#histogram) |
-| <img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/tool-icons/uk-mapping.svg#table" width="20" height="20" align="absmiddle" alt=""> Explore geographic patterns in UK postcode data | [UK Mapping](#uk-mapping) |
-| <img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/tool-icons/glm.svg#table" width="20" height="20" align="absmiddle" alt=""> Fit and review generalised linear models | [GLM](#glm) |
-| <img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/tool-icons/gbm.svg#table" width="20" height="20" align="absmiddle" alt=""> Fit, evaluate, and explain boosted tree models | [GBM](#gbm) |
+| <img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/tool-icons/dataset-viewer.svg#table" width="20" height="20" align="absmiddle" alt=""> Inspect, search, sort, and copy source rows | [Dataset Viewer](#-dataset-viewer) |
+| <img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/tool-icons/specifications.svg#table" width="20" height="20" align="absmiddle" alt=""> Maintain reusable feature, KPI, and filter definitions | [Specifications](#-specifications) |
+| <img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/tool-icons/column-profile.svg#table" width="20" height="20" align="absmiddle" alt=""> Understand distributions, ranges, missings, and common values | [Column Profile](#-column-profile) |
+| <img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/tool-icons/line-and-bar.svg#table" width="20" height="20" align="absmiddle" alt=""> Explore grouped metrics across one or two features | [Line and Bar](#-line-and-bar) |
+| <img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/tool-icons/histogram.svg#table" width="20" height="20" align="absmiddle" alt=""> Examine the distribution of a numeric response | [Histogram](#-histogram) |
+| <img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/tool-icons/uk-mapping.svg#table" width="20" height="20" align="absmiddle" alt=""> Explore geographic patterns in UK postcode data | [UK Mapping](#-uk-mapping) |
+| <img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/tool-icons/glm.svg#table" width="20" height="20" align="absmiddle" alt=""> Fit and review generalised linear models | [GLM](#-glm) |
+| <img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/tool-icons/gbm.svg#table" width="20" height="20" align="absmiddle" alt=""> Fit, evaluate, and explain boosted tree models | [GBM](#-gbm) |
 
 ## Install and launch
 
@@ -130,35 +130,35 @@ also toggle it by clicking the icon for the currently selected tool again.
     </tr>
     <tr>
       <td><img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/sidebar-icons/dataset-viewer.png" width="40" height="38" align="absmiddle" alt=""></td>
-      <td><a href="#dataset-viewer"><strong>Dataset Viewer</strong></a></td>
+      <td><a href="#-dataset-viewer"><strong>Dataset Viewer</strong></a></td>
     </tr>
     <tr>
       <td><img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/sidebar-icons/specifications.png" width="40" height="38" align="absmiddle" alt=""></td>
-      <td><a href="#specifications"><strong>Specifications</strong></a></td>
+      <td><a href="#-specifications"><strong>Specifications</strong></a></td>
     </tr>
     <tr>
       <td><img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/sidebar-icons/column-profile.png" width="40" height="38" align="absmiddle" alt=""></td>
-      <td><a href="#column-profile"><strong>Column Profile</strong></a></td>
+      <td><a href="#-column-profile"><strong>Column Profile</strong></a></td>
     </tr>
     <tr>
       <td><img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/sidebar-icons/line-and-bar.png" width="40" height="38" align="absmiddle" alt=""></td>
-      <td><a href="#line-and-bar"><strong>Line and Bar</strong></a></td>
+      <td><a href="#-line-and-bar"><strong>Line and Bar</strong></a></td>
     </tr>
     <tr>
       <td><img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/sidebar-icons/histogram.png" width="40" height="38" align="absmiddle" alt=""></td>
-      <td><a href="#histogram"><strong>Histogram</strong></a></td>
+      <td><a href="#-histogram"><strong>Histogram</strong></a></td>
     </tr>
     <tr>
       <td><img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/sidebar-icons/uk-mapping.png" width="40" height="38" align="absmiddle" alt=""></td>
-      <td><a href="#uk-mapping"><strong>UK Mapping</strong></a></td>
+      <td><a href="#-uk-mapping"><strong>UK Mapping</strong></a></td>
     </tr>
     <tr>
       <td><img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/sidebar-icons/glm.png" width="40" height="38" align="absmiddle" alt=""></td>
-      <td><a href="#glm"><strong>GLM</strong></a></td>
+      <td><a href="#-glm"><strong>GLM</strong></a></td>
     </tr>
     <tr>
       <td><img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/sidebar-icons/gbm.png" width="40" height="38" align="absmiddle" alt=""></td>
-      <td><a href="#gbm"><strong>GBM</strong></a></td>
+      <td><a href="#-gbm"><strong>GBM</strong></a></td>
     </tr>
   </tbody>
 </table>
