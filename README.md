@@ -1,621 +1,393 @@
-# lucidum
+# <img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/lucidum.png" width="44" height="44" align="absmiddle" alt=""> Lucidum
 
-`lucidum` is a local browser workbench for exploring CSV and Parquet datasets. It starts a small local FastAPI server, reads data with DuckDB, and opens an interactive UI for profiling columns, plotting grouped metrics, applying filters, and mapping UK postcode data.
+Lucidum is a local browser workbench for exploring CSV and Parquet data, visualising
+KPIs using interactive charts and maps, and building GLM and GBM models.
 
-The app is designed for local analysis: your dataset stays on the machine running `lucidum`.
+It is designed for data scientists who want an interactive view of their data and models
+without first building a dashboard. DuckDB reads the data efficiently and FastAPI
+serves the application locally.
 
-## Current Tools
+Lucidum's approach reflects actuarial pricing workflows, including the development
+of regression models for claim frequency, average claim cost, conversion, retention,
+and market price. The same tools remain useful for broader tabular data science.
 
-- **Dataset Viewer**: inspect a fast filtered preview of dataset rows in a sortable Tabulator grid, capped at 100 displayed rows, with client-side whole-table search, axis-exclusive whole-row or whole-column selection, transpose mode where search matches original column-name rows while keeping all preview row columns, optional alphabetical column ordering, right-click column pinning that marks pinned names, lists pinned columns above the grid, and keeps pinned columns first and visible during column search without frozen or sticky cells, saved Dataset view favourites including sort state, right-click cell copy, and right-click CSV copy for selected rows or columns.
-- **Column Profile**: review dataset columns, missing values, distinct counts, ranges, value counts, and numeric/date distributions. Logical/boolean columns are labelled `logical` while retaining categorical analysis behavior. Large datasets open with a fast preview summary and can be recalculated on all rows. Right-click a column row to copy the feature name.
-- **Line and Bar**: plot grouped Actual and up to two optional Expected response values over one or two features in a full-bleed chart/table workspace. Its scrollbar-free settings strip uses edge fades to mark off-screen controls and supports horizontal trackpad/touch gestures, keyboard focus scrolling, and ordinary vertical mouse-wheel scrolling. One-feature views retain the existing line/bar controls, including sorting, transforms, sigma bars, SHAP ribbons, and GLM partial-dependence overlays. A plain feature click always makes that row the sole Feature 1; Command-click another feature on macOS, or Ctrl-click it on Windows/Linux, to add or remove Feature 2 without disabling the remaining rows. The Expected chooser uses the same convention: a plain click selects one line, the platform modifier adds or removes a second, and `No expected line` clears the selection; its rows remain fully enabled and visible throughout. The double-ended arrow beside the x-axis heading swaps the two features together with their independent grouping controls in one refresh. Two untreated continuous numeric/date groupings render a surface whose axes use the exact plotted data ranges and whose 3D footprint expands responsively on wider chart areas, continuous/factor groupings render colour-matched response lines with stacked Weight/N bars, and factor/factor groupings render a heatmap whose category axes independently suppress tick labels that cannot fit at the 8px legibility floor while retaining axis titles and tooltips. Dates are continuous by default, use chronological date-aware line/surface axes, and expose `Treat as factor` alongside their independent calendar bucket so the same pair can switch to lines or a heatmap. Numeric features expose the same override alongside independent banding and quantile controls. A one-feature `Missings — Show / Hide` control, or one independent control per feature in two-feature mode, either retains missing groups or removes raw rows missing that feature from the Line/Bar analysis. Shown missing-volume bars use pale grey. Hide recalculates the Line/Bar chart, table totals, transforms, overlays, pagination, and displayed Line/Bar row count, but the shared sidebar Numerator and Denominator values remain based on the global filter so switching tools does not change their meaning. Numeric tails Winsorise fixed-width values at that feature's percentile cutoffs; categorical tails combine at least two marginal levels at or below the chosen share of filtered Weight/N into `Other`. In one-feature ordered low-weight grouping, shown missings stay separate and do not consume either tail, although percentage thresholds still use total included Weight/N. Quantile, date, and unbanded numeric groupings ignore two-feature Tail grouping. Mixed line/bar plots always show volume and offer a cached Plot chooser only when multiple response values are available; surfaces and heatmaps show one chosen response or Weight/N at a time. Factor/factor heatmaps accept up to 100,000 populated grouped cells; other Line/Bar charts retain the 10,000-group guard. Heatmaps offer cached `-`, `Actual`, `Weight`, and, where two lines fit, `Both` cell labels, using active-KPI response formatting, contrast-aware text colours, and responsive font sizing. Each label mode remains available at larger category counts whenever its formatted text still fits at the separate 7px cell-label floor. The server-backed table keeps both feature columns and every selected response. The tool also supports a shared Denominator, including the active primary GLM or GBM prediction joined by row identity, lazily estimated numeric banding, date buckets with optional empty-period display in one-feature mode, searchable/paginated tables, A-Z picker defaults, a launch-collapsed Expected picker, saved Favourites views, an active GBM/GLM prediction-ratio feature, and Expected-aware feature ordering by saved GBM/GLM importance. A sole GLM Expected output puts GLM importance first; GBM leads for GBM-only, mixed-model, or no-model Expected selections. Importance mode hides the prediction-ratio feature and highlights only one model-list occurrence per selected x-axis feature.
+Lucidum uses [glum](https://glum.readthedocs.io/en/stable/) for GLM training and [LightGBM](https://lightgbm.readthedocs.io/en/stable/) for GBM training. Both libraries
+were chosen for speed: glum provides high-performance, scalable generalised
+linear models, while LightGBM is optimised for efficient gradient-boosted tree
+training on large tabular datasets.
 
-  ![lucidum line and bar tool](https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/line_and_bar.png)
+## Capabilities
 
-- **Histogram**: plot the selected Actual value, or Actual divided by Weight, as a filtered distribution in a full-bleed workspace with a launch-collapsed borderless settings strip and a compact metrics table separated from the chart by a draggable divider. When a Denominator is selected, the x-axis title identifies the plotted calculation as `Numerator / Denominator`; Average row value shows only the Numerator. Histogram supports bin counts or explicit original-unit bin widths with boundaries anchored to rounded width multiples, integer-aware bins for discrete numeric Actuals, optional responsive values above bins, denser fit-aware x-axis labels, sampled 100k previews or exact all-row mode, cumulative/probability modes, log axes, mean/median reference lines, and saved Histogram view favourites.
-- **UK Mapping**: map postcode areas and sectors with bundled GeoJSON, including optional sector neighbour smoothing, or postcode units when unit and coordinate columns are available. MapLibre GL provides the map camera, raster and OpenFreeMap vector bases, controls, and WebGL area/sector layers; the dense unit canvas is a geographically anchored MapLibre source, so it follows the base continuously while panning. An exact 50px, full-width control strip above the map presents six compact Base tiles (Blank, Esri, OSM, Aerial, Light, and Dark), three Resolution tiles, three Palette tiles, the controls applicable to the active resolution, and postcode search. A separate 16px information strip immediately below keeps the KPI, plotting/missing summary, row count, and filter state on one line. The image tiles fill the control strip vertically with their labels directly below; long controls scroll horizontally. A chevron immediately above Zoom In hides or restores both strips for the session while preserving the map camera and making no summary request. Units mode loads the complete point set for the active global filter once, then pans and zooms locally without replacing it with viewport-specific data. Its borderless Dot size controls offer **Min**, which paints every eligible unit as one physical canvas pixel after movement settles, and default **Adaptive**, which sizes points from the filtered count and zoom relative to the fitted layer extent. Adaptive uses a one-pixel baseline and a 10 CSS-pixel close-zoom cap at 500,000 points, tapering that cap to 8 CSS pixels by 1.5 million points; sets of 100 or fewer remain a constant 6 CSS pixels. Intermediate counts use logarithmic interpolation and dots grow smoothly across six zoom levels. Sector mode offers a borderless smoothing chooser with **-**, **N1**, **N2**, **N3**, **N4**, and **N5** options. Area and Sector modes use a borderless **Off**/**Thin**/**Bold** outline chooser corresponding to the former widths 0, 1, and 3. Area mode offers borderless **Off**/**On** analytical labels; when enabled, their 6–20px text grows with zoom and is adjusted using each postcode area's cached approximate bounding-box size, so compact areas such as EC and WC remain smaller than broad areas at the same view. Label resizing is local and performs no map-summary request. The Light and Dark options use OpenFreeMap vector styles: roads and other linework sit above area and sector colour fills, Lucidum's polygon outline sits above that linework, and symbols and labels remain uppermost. Roads retain the source style's zoom-dependent hierarchy at 70% of its original width. Both styles use consistent opaque charcoal labels with a crisp white halo so names remain readable over light and dark analytical colours and follow the Lucidum theme as a pair. Area and sector maps continue plotting valid geometry when some nonblank postcode values are absent from the bundled shapes, report the affected row count and percentage in the information strip, and report blank postcode counts and percentages separately. Colour legends and hotspot selection use only values attached to geometry that can actually be drawn. The information strip omits the KPI when the selected Numerator and Denominator do not match one and exposes complete truncated status text through titles and its live region. Right-click the map at any resolution to stage a postcode-region selection and apply it as one global area filter; postcode popups provide View rows, Zoom, Copy, and postcode filtering actions.
+| Use Lucidum to | Tool |
+| --- | --- |
+| <img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/tool-icons/dataset-viewer.svg#table" width="20" height="20" align="absmiddle" alt=""> Inspect, search, sort, and copy source rows | [Dataset Viewer](#dataset-viewer) |
+| <img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/tool-icons/specifications.svg#table" width="20" height="20" align="absmiddle" alt=""> Maintain reusable feature, KPI, and filter definitions | [Specifications](#specifications) |
+| <img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/tool-icons/column-profile.svg#table" width="20" height="20" align="absmiddle" alt=""> Understand distributions, ranges, missings, and common values | [Column Profile](#column-profile) |
+| <img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/tool-icons/line-and-bar.svg#table" width="20" height="20" align="absmiddle" alt=""> Explore grouped metrics across one or two features | [Line and Bar](#line-and-bar) |
+| <img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/tool-icons/histogram.svg#table" width="20" height="20" align="absmiddle" alt=""> Examine the distribution of a numeric response | [Histogram](#histogram) |
+| <img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/tool-icons/uk-mapping.svg#table" width="20" height="20" align="absmiddle" alt=""> Explore geographic patterns in UK postcode data | [UK Mapping](#uk-mapping) |
+| <img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/tool-icons/glm.svg#table" width="20" height="20" align="absmiddle" alt=""> Fit and review generalised linear models | [GLM](#glm) |
+| <img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/tool-icons/gbm.svg#table" width="20" height="20" align="absmiddle" alt=""> Fit, evaluate, and explain boosted tree models | [GBM](#gbm) |
 
-  ![UK Postcode Area mapping tool](https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/postcode_area.png)
+## Install and launch
 
-  ![UK Postcode Sector mapping tool](https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/postcode_sector.png)
-
-  ![UK Postcode Unit mapping tool](https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/postcode_unit.png)
-
-- **GLM**: optional `glum` model building with Formulaic formulas, coefficient tables, persisted tabulations/rating tables with XLSX export, and active `glm_prediction`, denominator-backed `glm_prediction_rate`, and `glm_tabulated_prediction` sources that can be plotted like other model predictions. Tabulation plots name their x-axis feature, fit dense category labels responsively, emphasize the zero axis, and provide a borderless chart-image copy command. The header status badge reports elapsed time from the build click through fitting and post-fit scoring, and separately times tabulation through row scoring.
-- **GBM**: optional LightGBM model building with persistent sidecar artifacts, predictions and denominator-backed prediction rates that can be plotted as chart/map data sources, evaluation plots, model navigation, tree viewing, SHAP plotting when SHAP rows are saved during training, and XLSX export for saved tabulations. The header status badge reports elapsed time through training, scoring, SHAP calculation, artifact saving, and final client refresh.
-- **Filters, Favourites, KPIs, and Feature specs**: apply free-form DuckDB `WHERE` filters, saved filter rows, sidebar Favourites for saved metric/filter/Line/Bar/Histogram/Map views, separate KPI metric presets, and GBM feature scenarios/interaction constraints.
-- **Specifications**: default editor tab for feature, KPI, and filter specification CSV files, with continuous validation and save actions against the app's current metadata contracts.
-
-The two shared metric headings in the sidebar are `Numerator` and `Denominator`; this is a presentation-only rename, so chart legends, tables, APIs, KPI files, and model metadata retain their existing Actual/Weight terminology. The Denominator selector groups numeric dataset columns separately from the active primary `glm_prediction` and `gbm_prediction` outputs. Activating a saved GLM or GBM, including automatic promotion after deleting the active model, atomically selects that model's saved training Numerator and Denominator before the visible chart refreshes. A selected model denominator follows the active model of that type, and Line/Bar, Histogram, UK Map, and sidebar summaries refresh against the replacement model. GLM and GBM building is disabled while a model prediction is the Denominator; prediction chaining remains available through GBM `init_score`.
-
-Activating a GLM or GBM selects that model family's primary `glm_prediction` or `gbm_prediction` as the sole Line/Bar Expected line, including when Expected was empty or contained only dataset values. An exact GLM/GBM prediction pair is retained only when the sidebar metric pair stays unchanged and both active models were trained against that same Numerator and Denominator. The one-feature SHAP and GLM partial-dependence controls follow the same rule: an active overlay switches to the newly activated family, while `Both` is retained only for a compatible unchanged metric pair; `None` remains unchanged. If a promoted or activated model cannot supply the requested prediction or SHAP overlay, Line/Bar keeps only the remaining compatible comparison state.
-
-Line/Bar keeps manually selected model comparisons visible when their saved training Numerator or Denominator differs from the selected KPI, but the chart's top-right message identifies each incompatible GLM prediction, GBM prediction, SHAP, or GLM partial-dependence component. The warning clears when the KPI is restored or the incompatible component is removed.
-
-Line/Bar response axes identify the selected calculation as `Numerator / Denominator`, using the underlying column names (for example, `PREMIUM / glm_prediction`). With `Average row value`, only the Numerator name is shown. Single-feature charts use the same convention for the primary Numerator legend entry while keeping Expected and Denominator entries unchanged. The secondary Denominator/row-count axis reserves space from its formatted tick widths so its labels remain clear of the vertical axis title.
-
-Unreadable dataset columns, such as Parquet strings with invalid UTF-8, are skipped by the shared schema used by normal selectors. Column Profile reports them as skipped, and the GBM feature chooser shows them as disabled invalid rows.
-
-## Installation
-
-Lucidum requires Python 3.13 or newer. Both `pip` and `pipx` download the same
-`py-lucidum` package from PyPI. For a user-level `lucidum` command, `pipx` is
-recommended because it gives Lucidum its own isolated environment and exposes
-the command on your `PATH`. Choose the optional modelling extras you need at
-install time:
+Lucidum requires Python 3.13 or newer. For a user-level `lucidum` command,
+[`pipx`](https://pipx.pypa.io/) is the recommended installation method. It installs Lucidum and its
+dependencies in a dedicated virtual environment, avoiding conflicts with
+other Python projects or system packages. The `lucidum` command is
+still available on your `PATH`, so you can launch it from any terminal:
 
 ```bash
 pipx install --python python3.13 py-lucidum
+```
+
+Launch the bundled synthetic motor dataset:
+
+```bash
+lucidum --demo --open
+```
+
+Or open your own data:
+
+```bash
+lucidum path/to/my_data.parquet --open
+lucidum path/to/my_data.csv --open
+lucidum path/to/monthly_parquets/ --open
+```
+
+The terminal prints the local URL if `--open` is omitted. Stop the server with
+`Ctrl+C`.
+
+### Add modelling tools
+
+GLM and GBM are optional so that non-modelling workflows stay lightweight.
+Choose the extras you need when installing:
+
+```bash
 pipx install --python python3.13 "py-lucidum[glm]"
 pipx install --python python3.13 "py-lucidum[gbm]"
 pipx install --python python3.13 "py-lucidum[glm,gbm]"
 ```
 
-For a reproducible Lucidum version, pin the release explicitly:
+Then request the modelling tools alongside Line and Bar:
 
 ```bash
-pipx install --python python3.13 "py-lucidum==0.4.59"
-pipx install --python python3.13 "py-lucidum[glm,gbm]==0.4.59"
-```
-
-The `pip install py-lucidum` command shown at the top of the PyPI project page
-is also supported. `pip` installs into whichever Python environment is
-currently selected, so on a clean machine create and activate a virtual
-environment first. On macOS or Linux:
-
-```bash
-python3.13 -m venv lucidum-venv
-source lucidum-venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install "py-lucidum==0.4.59"
-```
-
-On Windows PowerShell:
-
-```powershell
-py -3.13 -m venv lucidum-venv
-.\lucidum-venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install "py-lucidum==0.4.59"
-```
-
-Omit `==0.4.59` to install the latest release. To include both optional
-modelling toolsets with plain `pip`, use:
-
-```bash
-python -m pip install "py-lucidum[glm,gbm]==0.4.59"
-```
-
-Once the virtual environment is active, `lucidum` is available in that
-terminal. Using `python -m pip` makes explicit which Python environment receives
-the installation; do not use `sudo pip` for Lucidum.
-
-Use the same requirement in another Python project's dependency metadata or
-requirements file:
-
-```bash
-py-lucidum==0.4.59
-```
-
-An exact Lucidum pin fixes Lucidum's code but does not pin DuckDB, FastAPI, or
-its other transitive dependencies. Use the consuming project's normal lock or
-constraints file when the complete environment must be reproducible.
-
-On macOS, LightGBM also needs the OpenMP runtime. This applies whether you
-install with a virtual environment or `pipx`. If training fails with a
-`libomp.dylib` load error, install it with:
-
-```bash
-brew install libomp
-```
-
-Upgrade an existing PyPI installation with:
-
-```bash
-pipx upgrade py-lucidum
-```
-
-To change the installed extras, reinstall with the desired spec:
-
-```bash
-pipx uninstall py-lucidum
-pipx install --python python3.13 "py-lucidum[glm,gbm]"
-```
-
-If PyPI is unavailable, install the same immutable release from its Git tag:
-
-```bash
-pipx install --python python3.13 "py-lucidum @ git+https://github.com/SpeckledJim2/py_lucidum.git@v0.4.59"
-pipx install --python python3.13 "py-lucidum[glm,gbm] @ git+https://github.com/SpeckledJim2/py_lucidum.git@v0.4.59"
-```
-
-Quote package specifications containing extras exactly as shown, because shells
-can interpret `[glm,gbm]` as a filename pattern. The distribution name used by
-installers is `py-lucidum`, the Python import is `py_lucidum`, and the installed
-command is `lucidum`.
-
-For development from a source checkout, create an editable environment from
-the project root:
-
-```bash
-python3.13 -m venv .venv
-.venv/bin/python -m pip install --upgrade pip
-.venv/bin/python -m pip install -e .
-.venv/bin/python -m pip install -e ".[glm]"
-.venv/bin/python -m pip install -e ".[gbm]"
-```
-
-For a pipx command backed by a local checkout, use the same extra names with the
-local path:
-
-```bash
-pipx install --python python3.13 /path/to/py_lucidum
-pipx install --python python3.13 "/path/to/py_lucidum[glm,gbm]"
-```
-
-## Quick Start
-
-Launch the bundled synthetic demo dataset:
-
-```bash
-lucidum --demo --port 8000
-```
-
-This command works after either the `pipx` installation or activation of the
-plain-`pip` virtual environment. From a source checkout whose development
-environment is not activated, use `.venv/bin/lucidum` instead. Open the printed
-URL in your browser. Stop the server with `Ctrl+C` in the terminal. Pass
-`--buttons` when you want the browser header to show `Stop app` and `Open
-monitor` buttons.
-
-Demo launches label the header as `Lucidum Demo Dataset · motor_premiums.parquet · ...` before the size, row count, and column count.
-
-The sidebar footer shows the installed Lucidum package version as `lucidum v<version>` when expanded and `v<version>` when collapsed. Both labels are populated from the running app's schema metadata.
-
-Run your own data:
-
-```bash
-.venv/bin/lucidum path/to/my_data.parquet --port 8000
-.venv/bin/lucidum path/to/my_data.csv --port 8000
-.venv/bin/lucidum path/to/monthly_parquets/ --port 8000
-```
-
-From a source checkout, `datasets/monthly/` contains a seven-file monthly split
-of the demo data that exercises folder input:
-
-```bash
-.venv/bin/lucidum datasets/monthly --port 8000
-```
-
-If installed with `pipx`, use:
-
-```bash
-lucidum path/to/my_data.parquet --open
-lucidum path/to/my_data.csv --open
 lucidum path/to/my_data.parquet --tools line-bar,glm --open
 lucidum path/to/my_data.parquet --tools line-bar,glm,gbm --open
 ```
 
-Use `--tools all` after installing the needed modelling extras when you want to
-load every available tool, including GLM and GBM.
+Use `--tools all` to load every available tool after installing the required
+extras. On macOS, LightGBM may also require `brew install libomp`.
 
-Parquet is recommended for normal use because DuckDB can read it efficiently.
-You can also pass a folder containing direct-child `.parquet` files. Lucidum
-reads those files as one dataset when every file has identical column names and
-DuckDB types. Non-Parquet files and nested folders are ignored. Folder inputs
-are available only when GLM and GBM are not enabled; use a single Parquet file
-for modelling tools. The app header displays folder inputs with their file
-count, for example `monthly (7 files)`.
-Use `--title-prefix` to put your own text before the file or folder name,
-separated by the same middle dot used by the rest of the header metadata.
+Plain `pip`, virtual environments, source checkouts, Windows installation,
+upgrades, version pinning, and the full launch reference are covered in the
+[User Guide](https://github.com/SpeckledJim2/py_lucidum/blob/main/docs/user-guide.md#installation-alternatives-and-launch-options).
 
-## Dataset Workspaces
+## Working with your data
 
-Lucidum stores model sidecars beside the data folder under a hidden dataset-scoped workspace:
+Lucidum accepts:
 
-```text
-.lucidum/datasets/<dataset-slug>/<dataset-signature>/models/
-```
+- A single CSV file.
+- A single Parquet file. Parquet is recommended for normal use.
+- A folder of direct-child Parquet files with identical column names and DuckDB
+  types. The files are queried as one dataset; nested folders and non-Parquet files
+  are ignored.
 
-The dataset slug comes from the CSV or Parquet filename. The dataset signature is based on the file size, modification time, row count, and schema fingerprint. This means one folder can safely contain many datasets: models trained for one file do not attach to another file in the same folder.
+Folder inputs support the exploration tools but not GLM or GBM. Modelling artefacts
+must be tied to one source file, so use a single CSV or Parquet file when enabling
+either modelling tool.
 
-If a dataset file is replaced or edited, it gets a new signature workspace. Existing GLM/GBM models from the previous version remain on disk but are not shown or used; rebuild models after changing the source file. Older root-level `.lucidum/models/` folders are ignored by current Lucidum versions. Parquet folder inputs do not create or read GLM/GBM workspaces because modelling tools require a single source Parquet.
-
-The GLM and GBM Model navigators show an `Open folder` command when Lucidum is opened through `localhost`, `127.0.0.1`, or `::1` and the host has a supported desktop file manager. Select one model to open that model's sidecar directory in Finder on macOS, File Explorer on Windows, or the desktop file manager through `xdg-open` on Linux; no additional Python package is required. The command opens a folder on the machine running the Lucidum server, so it is hidden from browsers connected over the LAN and in unsupported or headless environments.
-
-By default, saved Favourites are saved beside those workspaces but one level above the dataset signature:
-
-```text
-.lucidum/datasets/<dataset-slug>/line_bar/favourites.json
-```
-
-They persist across replacements of the dataset at the same path. For server deployments, `--line-bar-favourites path/to/favourites.json` overrides that default and makes Lucidum read and write exactly that JSON file instead; the parent folder is created on first save if needed. If the configured JSON is malformed, favourites are reported as unavailable and Lucidum does not overwrite the bad file during that request.
-
-The sidebar FAVOURITES accordion shows only user-saved favourites. New saved favourites choose a restore scope: Metrics, Metrics + filter, Line/Bar view, Dataset view, Histogram view, or Map view when the matching tool is active. Older favourites without a scope are treated as Line/Bar view favourites. When a saved view references a column, data source, filter expression, KPI row, or saved FILTER row that is no longer valid, Lucidum validates the view against the current dataset before restoring it and reports the stale fields in the browser. Metric favourites store the Denominator source separately from its column; saved model denominators resolve to the currently active model of the same type, while legacy favourites remain dataset-backed. Line/Bar view favourites restore one or two grouping objects, their independent grouping and `Missings` controls, the two-feature Plot, Tail, and heatmap Labels choices, and the one-feature Empty periods choice. Legacy `x` favourites are converted to one grouping, legacy grouping objects default `missings` to `show`, and legacy heatmap labels default to off; a stale optional second feature is dropped with a warning while the valid first grouping is restored. Dataset view favourites restore filter state, transpose, alphabetical column ordering, select-columns text, pinned columns, user-resized column widths, and column sort state; normal sort columns are saved by dataset column name, while transposed sort uses `__field` or `rN` preview-row fields. Histogram view favourites restore binning mode, bin count or width, bin labels, distribution, y-axis type, log scale, sample mode, metrics, and filter state. Older Histogram favourites containing only a bin count restore in count mode with labels off. Map view favourites restore UK map level, base map, palette, presentation controls, and camera where possible, falling back safely for stale values. Legacy numeric map label sizes migrate to the corresponding Off/On area-label state, and removed CARTO `grey`/`darkGrey` base values migrate to the current OpenFreeMap Light/Dark options. The map control-strip collapsed state is session-only and is not saved.
-
-On startup, when saved favourites exist and no `--line-bar-favourite` or `line_bar_favourite` URL/default value is supplied, Lucidum opens the first favourite in the saved order. The favourite is applied before the initial chart or map request, so startup opens directly in the saved state.
-
-## Common Options
+The default tools are Line and Bar, Dataset Viewer, Column Profile, Histogram, UK
+Mapping, and Specifications. Use `--tools` to choose and order the tabs shown in the
+app:
 
 ```bash
-.venv/bin/lucidum --demo --open --port 8000
-.venv/bin/lucidum --demo --host 0.0.0.0 --port 8000
-.venv/bin/lucidum --demo --no-token
-.venv/bin/lucidum --demo --x DRIVER_AGE --actual PREMIUM --denominator ANNUAL_MILEAGE
-.venv/bin/lucidum --demo --line-bar-favourite "Loss curve"
-.venv/bin/lucidum datasets/monthly \
-  --line-bar-favourites config/monthly_favourites.json \
-  --line-bar-favourite "Postcode view"
-.venv/bin/lucidum --demo --filters specs/filter_spec.csv
-.venv/bin/lucidum --demo --no-filters
-.venv/bin/lucidum --demo --kpis specs/kpi_spec.csv
-.venv/bin/lucidum --demo --no-kpis
-.venv/bin/lucidum --demo --features specs/feature_spec.csv
-.venv/bin/lucidum --demo --no-features
-.venv/bin/lucidum --demo --tools line-bar
-.venv/bin/lucidum --demo --buttons
-.venv/bin/lucidum --demo --title-prefix "Lucidum Demo Dataset"
-.venv/bin/lucidum path/to/my_data.parquet --title-prefix "Motor pricing data"
-.venv/bin/lucidum path/to/my_data.parquet --tools line-bar,uk-map,glm,gbm
-.venv/bin/lucidum path/to/my_data.parquet --tools all
+lucidum path/to/my_data.parquet --tools dataset-viewer,column-profile,line-bar
 ```
 
-- `--open` opens the generated URL with Python's configured browser handler.
-- `--host 0.0.0.0` binds to all network interfaces for LAN testing. Keep token protection enabled unless another access layer is in place.
-- `--no-token` disables URL/API token protection for local-only use.
-- `--buttons` shows the `Stop app` and `Open monitor` buttons in the browser header. Without it, those header buttons are hidden; stop terminal launches with `Ctrl+C`, and open the monitor directly at `/monitor?token=...` when needed.
-- The monitor's Model operations panel correlates GLM builds, GLM tabulations, and GBM training from preflight through background-job phases. It shows wall time, process CPU time and average cores, boundary-observed RSS, and a phase/request timeline. `Copy diagnostics` copies the selected operation plus sanitized runtime and dataset metadata without request bodies, filter expressions, tokens, or absolute paths. Operation history is bounded in memory and is not written to disk.
-- `--title-prefix` shows custom text before the file or folder name in the browser header. `--demo` defaults this to `Lucidum Demo Dataset`; pass an empty value to suppress it.
-- `--x`, `--actual`, `--expected`, `--expected2`, and `--denominator` set initial Line/Bar selections.
-- `--line-bar-favourite` opens a saved Favourite by name or id. URL query parameter `line_bar_favourite` provides the same startup selection and overrides the default supplied by Python or the CLI. If no startup favourite is supplied, the first saved favourite opens automatically when favourites exist.
-- `--line-bar-favourites` points Lucidum at the JSON file used to store saved Favourites. It is a server-side file path, not a URL query parameter.
-- `--filters` points to a saved-filter CSV. By default the app tries `./filter_spec.csv`, then `./specs/filter_spec.csv`.
-- `--kpis` points to a KPI spec CSV. By default the app tries `./kpi_spec.csv`, then `./specs/kpi_spec.csv`.
-- `--features` points to a Feature Specification CSV for GBM feature scenarios, interaction constraints, optional Base metadata, GLM tabulation `min/max/banding` metadata, and external report `chart_*` controls. By default the app tries `./feature_spec.csv`, then `./specs/feature_spec.csv`.
-- With `--demo`, if no explicit or local default spec exists, Lucidum loads the bundled demo filter, KPI, and feature specs.
-- `--no-filters`, `--no-kpis`, and `--no-features` disable discovery for those spec files. When the Specifications tab is enabled, disabled or missing spec kinds open as generated starter drafts instead of preloading default-discovered CSVs. Generated drafts are not written to disk until you click Save; the path line shows the save target and marks new files or suppressed existing files.
-- Without `--tools`, the default user-facing tools are `line-bar`, `dataset-viewer`, `column-profile`, `histogram`, `uk-map`, and `specs`, with Line and Bar opening first unless a saved favourite startup state applies. Use `--tools all` to load every tool, including GLM and GBM, in the built-in registry order. When `--tools` is provided with a comma-separated list, only those app tabs are loaded, the sidebar uses the supplied order, and the first supplied tool opens first unless a URL tool or saved favourite startup state applies. The sidebar shows multi-tool selections as a vertical rail that stays visible while the sidebar is collapsed; clicking the active tool button toggles the sidebar open or closed, while clicking another tool switches tools without changing the sidebar state. Enabled GLM and GBM icons carry blue numbered badges showing the saved model count, including zero. Add `glm` after installing the `glm` extra to train GLMs, and add `gbm` after installing the `gbm` extra to train GBMs; either modelling tool must be requested with `line-bar` because model context-menu actions open Line/Bar charts. When only one tool is enabled, the sidebar tool selector is hidden.
+By default, Lucidum runs on your own computer and protects the browser session with
+an access token. To view the same analysis from another device on your local network,
+launch with `--host 0.0.0.0`; keep the token enabled unless access is controlled in
+another way.
 
-UK map columns default to `PostcodeArea`, `PostcodeSector`, `PostcodeUnit`, `lat`, and `long`. Uppercase aliases such as `POSTCODE_AREA`, `POSTCODE_UNIT`, `LATITUDE`, and `LONGITUDE` are also detected. You can override them:
+The application and UK map geometry are included in the Lucidum installation. Blank
+maps work offline, while the other map backgrounds fetch tiles from their named
+providers.
 
-```bash
-.venv/bin/lucidum path/to/my_data.parquet \
-  --postcode-area Area \
-  --postcode-sector Sector \
-  --postcode-unit Unit \
-  --latitude latitude \
-  --longitude longitude
-```
+## Sidebar
 
-Core browser libraries are bundled and served by the local app. UK map geometry
-is also bundled. The `Blank` map background makes no external tile requests;
-other map backgrounds, such as OSM, Esri, Aerial, Light, and Dark, fetch map
-tiles from their listed third-party providers and need network access.
+Use the sidebar to move between Lucidum's tools. Numbered badges show saved models
+available in the modelling tools.
 
-## License
+Collapse or expand the sidebar using the sidebar toggle in the page header. You can
+also toggle it by clicking the icon for the currently selected tool again.
 
-Lucidum is open source under the MIT License. See `LICENSE`.
+<table>
+  <tbody>
+    <tr>
+      <td><img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/sidebar-icons/lucidum-logo.png" width="40" height="38" align="absmiddle" alt=""></td>
+      <td><a href="https://github.com/SpeckledJim2/py_lucidum#readme"><strong>Lucidum</strong></a> — opens this README on GitHub.</td>
+    </tr>
+    <tr>
+      <td><img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/sidebar-icons/dataset-viewer.png" width="40" height="38" align="absmiddle" alt=""></td>
+      <td><a href="#dataset-viewer"><strong>Dataset Viewer</strong></a></td>
+    </tr>
+    <tr>
+      <td><img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/sidebar-icons/specifications.png" width="40" height="38" align="absmiddle" alt=""></td>
+      <td><a href="#specifications"><strong>Specifications</strong></a></td>
+    </tr>
+    <tr>
+      <td><img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/sidebar-icons/column-profile.png" width="40" height="38" align="absmiddle" alt=""></td>
+      <td><a href="#column-profile"><strong>Column Profile</strong></a></td>
+    </tr>
+    <tr>
+      <td><img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/sidebar-icons/line-and-bar.png" width="40" height="38" align="absmiddle" alt=""></td>
+      <td><a href="#line-and-bar"><strong>Line and Bar</strong></a></td>
+    </tr>
+    <tr>
+      <td><img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/sidebar-icons/histogram.png" width="40" height="38" align="absmiddle" alt=""></td>
+      <td><a href="#histogram"><strong>Histogram</strong></a></td>
+    </tr>
+    <tr>
+      <td><img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/sidebar-icons/uk-mapping.png" width="40" height="38" align="absmiddle" alt=""></td>
+      <td><a href="#uk-mapping"><strong>UK Mapping</strong></a></td>
+    </tr>
+    <tr>
+      <td><img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/sidebar-icons/glm.png" width="40" height="38" align="absmiddle" alt=""></td>
+      <td><a href="#glm"><strong>GLM</strong></a></td>
+    </tr>
+    <tr>
+      <td><img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/sidebar-icons/gbm.png" width="40" height="38" align="absmiddle" alt=""></td>
+      <td><a href="#gbm"><strong>GBM</strong></a></td>
+    </tr>
+  </tbody>
+</table>
 
-## Python Usage
+## <img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/tool-icons/dataset-viewer.svg" width="31" height="31" align="absmiddle" alt=""> Dataset Viewer
+
+Use Dataset Viewer when you need to inspect the rows behind a chart, filter, or map.
+
+- Browse a fast, filtered preview in a sortable table.
+- Search across the preview, select rows or columns, and copy cells or CSV data.
+- Transpose the preview when a wide dataset is easier to read vertically.
+- Search, reorder, resize, sort, and pin columns.
+- Save the current table layout and filter as a Dataset view favourite.
+
+The displayed preview is capped at 100 rows; filtering and the other analytical
+tools continue to work against the dataset rather than only the preview.
+
+## <img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/tool-icons/specifications.svg" width="31" height="31" align="absmiddle" alt=""> Specifications
+
+Specifications uses three simple CSV files to tailor Lucidum to your dataset and
+make everyday analysis quicker and easier. Edit them on Lucidum's Specifications
+screen, or outside Lucidum with a text editor or spreadsheet application such as Excel.
+
+- **Filter Specification** (default `filter_spec.csv`) gives names and themes to reusable
+  DuckDB filter expressions.
+- **KPI Specification** (default `kpi_spec.csv`) defines named Numerator and Denominator
+  combinations together with their display format and decimal places.
+- **Feature Specification** (default `feature_spec.csv`) organises features into groups and
+  can define modelling scenarios, interaction groups, chart bases, GLM tabulation
+  grids, and defaults for reproducible external reports.
+
+These filenames are defaults rather than requirements. Use `--filters`, `--kpis`,
+and `--features` to select differently named files when launching Lucidum.
+
+Lucidum validates changes against the current dataset and the expected CSV format.
+If a file does not exist, the Specifications screen provides a starter draft; after
+a valid file is saved, the corresponding controls refresh without restarting the
+application.
+
+## <img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/tool-icons/column-profile.svg" width="31" height="31" align="absmiddle" alt=""> Column Profile
+
+Use Column Profile to learn the shape and quality of an unfamiliar dataset before
+choosing features or metrics.
+
+- Review data types, missing values, distinct counts, ranges, and common values.
+- Inspect numeric and date distributions or categorical value counts.
+- Open large datasets quickly with a preview summary, then request exact all-row
+  profiling when needed.
+- Copy a feature name from the column table.
+
+Columns that DuckDB cannot read are reported as skipped instead of breaking the
+normal feature selectors.
+
+## <img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/tool-icons/line-and-bar.svg" width="31" height="31" align="absmiddle" alt=""> Line and Bar
+
+Line and Bar is the main tool for assessing model predictions against observed
+results, or simply exploring a KPI interactively across one or two features.
+
+Set the Numerator and Denominator in the sidebar, either from the dropdowns at the
+top or by choosing a saved KPI in the **KPIs** section.
+
+- Plot Actual and up to two Expected series, including active GLM and GBM
+  predictions.
+- Analyse one feature with line and bar charts, or two features with continuous
+  surfaces, continuous-by-factor lines, and factor-by-factor heatmaps.
+- Group numeric features with fixed bands or quantiles, bucket dates by calendar
+  period, treat numeric or date features as factors, and control missing values and
+  low-weight tails independently.
+- Apply sorting, response transforms, sigma bars, empty date periods, and heatmap
+  labels where they are meaningful.
+- Overlay GLM partial dependence or GBM SHAP ribbons for compatible active models.
+- Inspect the grouped data in a searchable, paginated table and save the complete
+  analysis as a Line/Bar view favourite.
+
+![Lucidum Line and Bar tool](https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/line_and_bar.png)
+
+A Denominator turns the response into `Numerator / Denominator`; choosing Average
+row value analyses the Numerator directly. Volume remains available alongside the
+response so small groups are visible rather than silently over-interpreted.
+
+The detailed chart modes, grouping rules, limits, model compatibility warnings, and
+table behaviour are described in the
+[Line and Bar guide](https://github.com/SpeckledJim2/py_lucidum/blob/main/docs/user-guide.md#line-and-bar).
+
+## <img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/tool-icons/histogram.svg" width="31" height="31" align="absmiddle" alt=""> Histogram
+
+Use Histogram to understand the distribution of the selected Numerator or
+`Numerator / Denominator`.
+
+- Choose a bin count or an explicit bin width in the source units.
+- Switch between counts and probability, or show a cumulative distribution.
+- Use a log axis and optional mean or median reference lines.
+- Display values above bins and review summary metrics beside the chart.
+- Use a fast 100,000-row sample or calculate exact all-row bins.
+- Save the settings and filter as a Histogram view favourite.
+
+## <img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/tool-icons/uk-mapping.svg" width="31" height="31" align="absmiddle" alt=""> UK Mapping
+
+Lucidum uses MapLibre GL and WebGL-accelerated rendering to keep maps fast and
+responsive as you pan, zoom, and explore results.
+
+Use UK Mapping to find geographic patterns in metrics, model predictions, or SHAP
+outputs.
+
+- Map postcode areas and sectors with bundled geometry.
+- Plot postcode units when unit, latitude, and longitude columns are available.
+- Choose blank, street, aerial, light, or dark backgrounds and several analytical
+  palettes.
+- Smooth neighbouring sectors, control polygon outlines and area labels, or adjust
+  point size for dense unit maps.
+- Search for postcodes and turn a selected map region into a global filter.
+- Save the map presentation, metric, filter, and camera as a Map view favourite.
+
+Lucidum reports blank and unmatched postcode rows separately so the map does not
+hide missing geometry behind apparently complete results.
+
+![Lucidum UK Postcode Sector map](https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/postcode_sector_light.png)
+
+## <img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/tool-icons/glm.svg" width="31" height="31" align="absmiddle" alt=""> GLM
+
+GLM provides an optional `glum` workflow for fitting interpretable generalised
+linear models against the active Numerator and Denominator.
+
+- Write Formulaic formulas with common transforms, splines, categorical terms,
+  interactions, comments, and explicit offsets.
+- Fit normal, Poisson, Gamma, Tweedie, binomial, inverse Gaussian, and negative
+  binomial models.
+- Choose unregularised fitting, automatic regularisation, or manual ridge/lasso mix
+  settings, and fit all rows or the physical `SAMPLE = training` rows.
+- Review sortable coefficients, model diagnostics, feature importance, and saved
+  models.
+- Build rating-table tabulations, rebase them without changing row-level scores,
+  plot them, and export them to XLSX.
+- Use active predictions, prediction rates, tabulated predictions, and partial
+  dependence overlays in Line and Bar.
+
+GLM models are saved in the current dataset workspace and can be reactivated in a
+later session against the same dataset version.
+
+## <img src="https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/tool-icons/gbm.svg" width="31" height="31" align="absmiddle" alt=""> GBM
+
+GBM provides an optional LightGBM workflow for fitting, evaluating, and explaining
+boosted tree models.
+
+- Select features and parameters, use saved feature scenarios, apply monotonicity,
+  and define main-effect, pairwise, or grouped interaction constraints.
+- Train a single configuration or deterministic parameter grid; use an existing
+  `SAMPLE` column or create a reusable 60/20/20 split.
+- Choose normal LightGBM training or staged EBM mode, and optionally initialise from
+  a numeric source or fitted GLM prediction.
+- Follow live training metrics, compare completed models, inspect saved parameters,
+  and view individual trees.
+- Save SHAP rows and explore one- or two-feature SHAP plots, Stacked SHAP, feature
+  importance, and interaction-group contributions.
+- Export saved tabulations and use active predictions, prediction rates, and SHAP
+  outputs in Line and Bar or UK Mapping.
+
+GBM models and diagnostics are persistent. Activating a saved model refreshes its
+features, parameters, evaluation, trees, explanations, and shared model outputs.
+
+## Saved work and persistence
+
+Lucidum saves trained models and favourite views so they remain available in later
+sessions. Each type of saved work is stored differently:
+
+- **GLM and GBM models** are saved with their diagnostics and reusable outputs in a
+  `.lucidum/` sidecar folder beside the source `.parquet` or `.csv` file. Each dataset
+  version has a separate workspace inside it; reopening the same version makes those
+  models available again.
+- **Favourites** save selected metrics, filters, and tool settings. They are associated
+  with the dataset path, so they can survive replacement of the file at that location.
+- **Specification files** are ordinary CSV inputs rather than saved analyses. They
+  tailor Lucidum's filters, KPIs, feature groups, and modelling choices to the dataset.
+
+Lucidum identifies each version of a source dataset separately. If the source file
+changes, Lucidum creates a new workspace; models from the earlier version remain on
+disk but are not automatically attached to the changed data.
+
+The User Guide describes [favourite and model storage](https://github.com/SpeckledJim2/py_lucidum/blob/main/docs/user-guide.md#saved-work-and-model-workspaces) and
+[specification behaviour](https://github.com/SpeckledJim2/py_lucidum/blob/main/docs/user-guide.md#specifications) in detail.
+
+## Python usage
+
+The browser app can also be started from Python:
 
 ```python
 import py_lucidum
 
-py_lucidum.serve(py_lucidum.demo_dataset_path(), port=8000, open_browser=True)
-py_lucidum.serve("path/to/my_data.parquet", port=8000, open_browser=True)
-py_lucidum.serve("path/to/monthly_parquets/", port=8000, open_browser=True)
-py_lucidum.serve(py_lucidum.demo_dataset_path(), port=8000, buttons=True)
-py_lucidum.serve("path/to/my_data.parquet", port=8000, title_prefix="Motor pricing data")
-py_lucidum.serve(
-    "datasets/monthly",
-    line_bar_favourites_path="config/monthly_favourites.json",
-    line_bar_favourite="Postcode view",
-)
-
-postcode_model = py_lucidum.extract_lightgbm_interaction_group(
-    "path/to/model.txt",
-    ["LATITUDE", "LONGITUDE", "POSTCODE_CATEGORY"],
-    "path/to/postcode_model.txt",
+url = py_lucidum.serve(
+    "path/to/my_data.parquet",
+    port=8000,
+    open_browser=True,
 )
 ```
 
-In notebook-style runtimes such as Positron or Jupyter, `serve()` starts the server in the background and returns the URL immediately. In a normal Python shell, it blocks until stopped.
+In notebook-style runtimes such as Positron or Jupyter, `serve()` starts the server
+in the background and returns its URL. In a normal Python shell, it blocks until the
+server is stopped.
 
-`extract_lightgbm_interaction_group()` is a standalone text-model operation: it
-does not start the app or import LightGBM. The requested feature names must
-exactly match one non-overlapping group in the source model's saved
-`interaction_constraints`. The function also verifies that every retained tree
-uses only that group, then compacts split indexes and rewrites feature metadata,
-tree sizes, iteration counts, categorical metadata, per-feature parameters, and
-feature importances. The resulting model can be loaded by LightGBM and predicts
-from a frame containing only the group features in their original model order.
-By default its raw scores are SHAP-centred, so they equal the source model's
-summed SHAP values for the group; for log-link objectives such as Gamma, normal
-response-scale prediction exponentiates that raw group contribution. Pass
-`shap_centered=False` to retain the selected trees' original uncentred leaf
-outputs instead.
-The source file cannot be used as the destination and is never overwritten.
+Lucidum also exposes chart/report writers, GLM tabulation functions, and a standalone
+LightGBM interaction-group extractor. See
+[Python usage in the User Guide](https://github.com/SpeckledJim2/py_lucidum/blob/main/docs/user-guide.md#python-usage)
+for examples and the public entry points.
 
-For ASGI usage:
+## External models and reports
 
-```python
-import py_lucidum
-from py_lucidum.app import create_app
-
-app = create_app(
-    py_lucidum.demo_dataset_path(),
-    token="dev-token",
-    line_bar_favourites_path="config/monthly_favourites.json",
-    defaults={
-        "x": "DRIVER_AGE",
-        "actual": "PREMIUM",
-        "denominator": "ANNUAL_MILEAGE",
-        "line_bar_favourite": "Loss curve",
-    },
-    filters_path="specs/filter_spec.csv",
-    kpis_path="specs/kpi_spec.csv",
-    features_path="specs/feature_spec.csv",
-    tools=["line_bar", "dataset_viewer", "column_profile", "histogram", "uk_map", "specs"],
-    header_buttons=True,
-    title_prefix="Motor pricing data",
-)
-
-py_lucidum.run_app(app, host="127.0.0.1", port=8000, open_browser=True)
-```
-
-## Build models outside Lucidum, then report or view them
-
-The examples provide two separate YAML-controlled workflows: three scripts
-for a GLM and three scripts for a GBM. Users normally edit the YAML, GLM
-formula, and specification files, then run the three Python scripts for their
-chosen model type unchanged.
-
-The `01` scripts train and score models outside the Lucidum application using
-ordinary `glum` or LightGBM code. The `02` and `03` scripts create static HTML
-reports without launching Lucidum or starting a server. The HTML data is fixed
-when the report is created, while hover, tooltips, legends, and zoom remain
-interactive.
-
-From a source checkout:
+From a source checkout, install the dependencies used by both example workflows:
 
 ```bash
 python -m pip install -e ".[glm,gbm,examples]"
 ```
 
-### GLM workflow: three scripts
+The `examples/` folder contains parallel three-step GLM and GBM workflows that:
 
-```bash
-python examples/01_external_glm_artifacts_demo.py
-python examples/02_external_glm_report_demo.py
-python examples/03_external_glm_summary_report_demo.py
-```
+1. Train and score a model outside the Lucidum application.
+2. Create interactive, static-data Actual-versus-Expected or SHAP HTML reports.
+3. Create model summaries and, for GLM, tabulations and an XLSX workbook.
 
-The GLM `02` report shows feature-level Validation Actual versus Expected with
-two-sigma error bars, feature importance, and the fitted partial-dependence
-line. The `03` summary contains split performance, coefficients and p-values,
-and the tabulation summary with a link to the exported XLSX workbook.
+The saved results can remain independent of Lucidum or be copied into the matching
+dataset workspace for review in the application without retraining.
 
-### GBM workflow: three scripts
+See [Build models outside Lucidum, then report or view them](https://github.com/SpeckledJim2/py_lucidum/blob/main/docs/external-model-builds-and-reports.md)
+for the complete workflows and YAML reference.
 
-```bash
-python examples/01_external_gbm_artifacts_demo.py
-python examples/02_external_gbm_report_demo.py
-python examples/03_external_gbm_summary_report_demo.py
-```
+## Documentation
 
-The GBM `02` script creates a Validation Actual-versus-Expected report and an
-all-row rebased SHAP-only report. The `03` summary contains split performance,
-mean absolute SHAP importance, LightGBM parameters, and saved evaluation
-history.
+- [User Guide](https://github.com/SpeckledJim2/py_lucidum/blob/main/docs/user-guide.md) — detailed installation, launch, tool, modelling, and persistence behaviour.
+- [External models and reports](https://github.com/SpeckledJim2/py_lucidum/blob/main/docs/external-model-builds-and-reports.md) — three-step GLM and GBM workflows.
+- [Model operations monitor](https://github.com/SpeckledJim2/py_lucidum/blob/main/docs/telemetry-monitor.md) — timing, CPU, memory, and diagnostic guidance.
+- [Development notes](https://github.com/SpeckledJim2/py_lucidum/blob/main/DEVELOPMENT.md) — architecture, behaviour contracts, testing, and releases.
 
-### Optionally view the external models in Lucidum
-
-Every `01` build writes authoritative model results below
-`output.model_results_root/<glm|gbm>/<model-id>`. The `02` and `03` scripts read
-that exact folder, so all static reports and GLM tabulations work without a
-`.lucidum` sidecar.
-
-The supplied build YAML files also set `output.install_in_lucidum: true`, which
-optionally copies and activates the saved model beside its source dataset. Open
-Lucidum against that same dataset file:
-
-```bash
-lucidum datasets/motor_premiums.parquet --tools line-bar,glm,gbm --features specs/feature_spec.csv
-```
-
-Lucidum finds and displays the installed copy; it does not retrain it.
-External GLMs can be used in model navigation, coefficients, predictions, and
-partial-dependence views, with tabulations available after running GLM `03`.
-External GBMs can be used in model navigation, predictions, evaluation, tree,
-SHAP, and Stacked SHAP views.
-
-Set `install_in_lucidum: false` to keep the workflow entirely in the ordinary
-model-results and static-report folders. When installation is enabled, GLM
-`03` synchronizes the updated model again after creating tabulations.
-
-See [Build models outside Lucidum, then report or view
-them](docs/external-model-builds-and-reports.md) for the complete 01/02/03
-workflows, YAML fields, report controls, saved-model details, GLM
-tabulation/scoring APIs, feature-importance rules, and summary calculations.
-
-## Filters
-
-The footer filter box accepts DuckDB `WHERE` expressions:
-
-```sql
-DRIVER_AGE > 40
-ANNUAL_MILEAGE >= 20000
-VEHICLE_USAGE = 'Social only'
-QUOTE_DATE >= DATE '2017-01-01'
-```
-
-Saved filters are CSV files with exactly these columns:
-
-```csv
-theme,name,expression
-SAMPLE,Training,SAMPLE = 'training'
-SAMPLE,Test,SAMPLE = 'test'
-SAMPLE,Validation,SAMPLE = 'validation'
-DRIVER AGE,Young drivers,DRIVER_AGE < 30
-DRIVER AGE,Older drivers,DRIVER_AGE > 70
-```
-
-Saved-filter rows can be used in `Single`, `Multi`, or `Grouped` mode. The generated expression is written to the footer expression box and applies to the active tool. In a narrow sidebar, the filter name can use the full row while the muted expression uses any remaining space and truncates first.
-
-When the Specifications tool opens a missing filter spec, it starts with one blank row and visual placeholder hints for `theme`, `name`, and `expression`; those hints are not saved as cell values.
-
-## KPIs
-
-KPI specs are CSV files with exactly these columns:
-
-```csv
-group,name,actual,denominator,decimals,format
-VEHICLE,Vehicle age,VEHICLE_AGE,N,1,number
-DRIVER,Driver age,DRIVER_AGE,N,1,number
-FINANCIAL,Premium,PREMIUM,N,2,currency
-```
-
-`denominator` accepts `N`, `Average row value`, an empty value, or `__none__` for average row value, or any numeric column name for weighted response values. `format` accepts `number`, `currency`, or `percent`.
-
-KPI rows appear as read-only presets in their own sidebar KPI accordion. They set Actual, Weight, decimals, and formatting only; filters and Line/Bar view state belong to saved favourites, not the KPI CSV. In a narrow sidebar, the KPI name can use the full row while the muted numerator/denominator detail uses any remaining space and truncates first.
-
-When the Specifications tool opens a missing KPI spec, it starts with one blank row and visual placeholder hints for each field; those hints are not saved as cell values.
-
-## Feature Specs
-
-Feature Specification CSV files drive GBM feature scenarios,
-interaction-constraint groups, optional chart Base metadata, GLM numeric
-tabulation metadata, and reproducible external report controls. The current
-format starts with `Feature,Grouping`, then any recognized metadata columns in
-the order below, followed by any number of scenario columns:
-
-```csv
-Feature,Grouping,Base,min,max,banding,chart_banding,chart_quantiles,chart_low_weights,chart_missings,chart_labels,chart_sort,chart_transform,chart_sigma,chart_date_bucket,chart_empty_periods,scenario1,report_demo
-DRIVER_AGE,DRIVER,40,17,96,1,5,0,0.1%,show,none,alpha,none,0,none,show,feature,feature
-```
-
-For report generation, `chart_banding` falls back first to the existing
-`banding` cell and then to YAML. Every other blank `chart_*` cell falls back to
-the matching `chart_defaults` value. These columns use the same choices as the
-Lucidum Line/Bar controls: fixed band width or quantile count, low-weight tail
-grouping (`0`, `10`, `100`, `0.1%`, or `1%`), missing handling, labels, sort,
-transform, sigma, date bucket, and empty-period handling. `Base` is also used
-to rebase GLM/SHAP overlays for zero/one transforms.
-
-`Feature` must match a dataset column name exactly. `Grouping` is optional metadata shown in the GBM Feature table and, when present, is also used to offer GBM feature interaction constraints. `Base` is optional metadata used to anchor Line/Bar and GBM SHAP chart rescaling to `0` or `1` and to define GLM tabulation base cells; `1` rescaling is displayed as an uplift percentage, so the base level shows as `0%`. Numeric `min`, `max`, and `banding` define GLM rating-table grids; leave them blank for categorical features. Older specs without these metadata columns are still accepted, in which case every column after `Grouping` is treated as a scenario. Each scenario column appears in the GBM scenario dropdown; if a scenario cell contains the word `feature`, case-insensitive, that row is selected when the scenario is chosen.
-
-When the Specifications tool opens a missing Feature spec, it starts with one row per valid dataset column, populates only `Feature`, and leaves `Grouping`, `Base`, `min`, `max`, `banding`, and `scenario1` blank.
-
-## GLM Models
-
-The GLM tool is opt-in and must be requested with `line-bar`:
-
-```bash
-.venv/bin/lucidum path/to/my_data.parquet --tools line-bar,uk-map,glm
-```
-
-The Formula builder accepts either a full `response ~ terms` Formulaic formula, or RHS-only `terms` that use the sidebar Actual metric as the response. Lines can include `#` comments; raw formula text is stored in `formula.txt` with comments, but comments are stripped before fitting. The formula context includes `ifelse`, `pmin`, `pmax`, `ns`, `bs`, `cs`, `poly`, `C`, and common numeric transforms. Explicit `offset(...)` terms are supported; they are stripped from the fitted formula, stored in the manifest, and passed to `glum.fit()` and prediction. Borderless `f(x)` and sliders controls switch between the mutually exclusive Formula tools and Model parameters panels; selecting an open panel again collapses it for more editor space. Open panels use the sidebar background colour to make their expanded state clear. A vertical editor rail provides clear, font-size, and live-formula copy actions. Model parameters are shown by default, and `All`/`Training` use the same grey/blue option styling while `Build GLM` remains the green primary action.
-
-GLM training uses DuckDB to load only the response, denominator, sample, formula, and offset columns required by the selected model, then fits and scores through Polars-backed Formulaic/Tabmat frames. This keeps large, wide datasets from being copied wholesale into pandas; pandas remains available inside the GLM extra for tabulations, overlays, and exports.
-
-Families are `normal`, `poisson`, `gamma`, `tweedie`, `binomial`, `inverse.gaussian`, and `negative.binomial`, with `link="auto"` in the first implementation. Tweedie power and negative-binomial theta can be set from the family parameter input. If a sidebar Weight is selected, GLM fits `Actual / Weight` with `sample_weight=Weight`, stores `glm_prediction` back on the original Actual scale, and exposes `glm_prediction_rate = glm_prediction / Weight`. Saved models live under the current dataset workspace in `models/glm/`, and the active model publishes a `glm:<model_id>:predictions` data source.
-
-The `Tabulations` tab builds insurance-style rating tables on demand from selected saved GLMs. It uses the fitted `glum` estimator, formula terms, feature spec `Base/min/max/banding`, and any stored `offset(...)` expressions to create base-adjusted linear-predictor tables, table/plot payloads, and row-level `glm_tabulated_prediction`. Borderless `Table`/`Plot`, `Exp`, and `Colour` controls use muted text for inactive choices and bold blue text for the active state; inactive `Exp` means linear scale. XLSX export is an accessible borderless spreadsheet-download icon and shows the existing fixed-size spinner while saving. Single-model GLM tables can be rebased from a selected cell into `base`; a two-feature interaction can also set either selected feature-level slice to zero linear/one exponential while transferring its vector of offsets into the opposite one-way table. Missing receiving tables are created automatically, every active rule and generated table is noted below the selectors, and the context menu can clear rebasing involving the current table or all rebasing. Every mutation restores/replays from raw tables as needed and immediately verifies that every row's tabulated linear prediction and missing state are unchanged. Because a successful rebase leaves those row predictions unchanged, the existing Mean error and linear SD error remain valid and are preserved. Numeric feature spec metadata that is missing or blank is estimated from scored rows and reported in the GLM notice. Existing GLMs built before `estimator.pkl` persistence must be rebuilt before tabulation.
-
-The Penalty selector defaults to `None` for the existing unregularized fit. `Auto` uses glum cross-validation over ridge, elastic net, and lasso mixes; `Manual` exposes a compact mix and alpha control. Penalized models show coefficient estimates but suppress coefficient standard errors and p-values because regularized inference is not equivalent to the unpenalized GLM table.
-
-`All` fits all valid rows. `Training` fits only rows where a physical `SAMPLE` column equals `training`, case-insensitively; GLM does not create generated sample splits.
-
-GLM model sidecars keep `manifest.json` compact: identity, response/denominator, family/link, regularization, training scope, offset expressions, minimal formula execution flags, and total elapsed time. Raw formula text lives only in `formula.txt`; diagnostics and warnings live in `diagnostics.json`; coefficients, feature importances, predictions, and tabulated predictions live in Parquet artifacts. The coefficient table numbers terms from `1`, makes every column sortable from its header, and provides borderless icon actions for copying or downloading its contents. New GLM diagnostics also record the fitted coefficient-row count, distinct source-feature count, and distinct multi-feature interaction-combination count. The Model navigator shows these as `Terms`, `Features`, and `Interactions`, leaving them blank for older models that did not capture the values, and shows `Tabulated` as `Yes` or `-`. `estimator.pkl` is required for GLM tabulations and overlay reconstruction. Tabulations add an explicit missing-value rating cell when source features contain missings, so formulas that handle them with expressions such as `ifelse(np.isnan(feature), ..., feature)` retain finite row-level tabulated predictions. Tabulation metadata lives beside the rating tables in `tabulations/tabulation_manifest.json`, and Tabulations panel XLSX exports are saved in that same `tabulations/` folder. When LightGBM/glum load-order protection is required, GLM fitting stays isolated in a hot worker that is reused after the first build; set `PY_LUCIDUM_GLM_FIT_ONE_SHOT=1` to force the old one-shot worker path for debugging.
-
-## GBM Models
-
-The GBM tool is opt-in and must be requested with `line-bar`. Request `glm` separately when you also want GLM comparison and tabulation workflows:
-
-```bash
-.venv/bin/lucidum path/to/my_data.parquet --tools line-bar,uk-map,glm,gbm
-.venv/bin/lucidum path/to/my_data.parquet --tools line-bar,gbm --features specs/feature_spec.csv
-```
-
-### Feature setup
-
-The GBM tool uses the same sidebar Actual, Weight, FAVOURITES, and KPI controls as Line and Bar, so users can choose the modelling response before training.
-
-The Features and parameters screen uses full-bleed Feature and Parameter grids beneath a shared control strip. The Feature header keeps its importance-metric choices and select/clear commands as borderless grey/blue controls. Its sliders button opens a Feature setup panel above the Feature grid for scenarios, constraint groups, and interaction pairs; the panel starts closed, remembers its state locally, and uses the sidebar background while open. Drag the Features/Parameters divider to trade width between those tables, or drag the top edge of the Evaluation Log strip to trade height between the Parameter grid and evaluation chart. When the Feature grid narrows, the Monotonicity and Gain/SHAP columns yield width before the Feature column is heavily compressed. The Control column stays narrow and fixed. Resized table and chart boundaries last for the current app session.
-
-If a Feature Specification is loaded, the Feature table shows its `Grouping` values, and the Feature setup panel offers its scenario and multi-select interaction-constraint controls; choosing a scenario selects only that scenario's usable features.
-
-Choosing one or more interaction groups constrains the currently selected trainable features in each group so they can only interact with features in the same group, with all other selected features left together in a remainder constraint. Constrained Grouping cells show a numbered lock whose subscript is the effective selected group size; a feature constrained to its main effect is excluded from that group count.
-
-The Constraint groups menu also has an opt-in `Create constraint group LightGBM model .txt file(s)` checkbox. It is available only when at least one group and non-zero SHAP rows are selected. During training Lucidum writes one SHAP-centred sidecar beside the main `model.txt` for every selected group, using a safe name such as `model_POSTCODE.txt`. It reloads each sidecar with LightGBM and compares its raw predictions on the saved SHAP sample with the matching `<Grouping>_INTERACTION_GROUP` contribution. The menu then shows the maximum absolute difference as `Error …`; groups with no fitted trees show `No trees` and do not produce a file. These files stay in the model artifact folder and are not automatic browser downloads.
-
-Right-click an unconstrained Feature cell to choose `Constrain to main effect only (1D)` or `Add pair interaction (2D)…`. Main-effect-only features show a lock with subscript `1`; pair members show subscript `2`. The pair action opens the `Interaction pairs` control with the clicked feature preselected, and adding a pair also selects both features for training. Right-clicking a paired feature replaces the add action with one `Remove FeatureX × FeatureY pairwise interaction` action for each of its pairs. The pair manager separates `Add pair interaction` from `Allowed pair interactions (n)`, gives each saved `FeatureX × FeatureY` row an explicit `Remove` button, and summarizes the current strict-allowlist coverage.
-
-Main-effect-only features cannot be paired, and paired features cannot be placed in a selected Constraint Group; incompatible actions and group choices stay disabled until the conflicting constraint is removed. Pair constraints may overlap other pairs, but not main-effect-only or grouped features. When at least one pair is present, explicit pairs and disjoint groups are the exhaustive interaction allowlist: every uncovered selected feature is automatically constrained to its main effect and displays an automatic subscript-`1` lock. That derived lock is display-only, is not sent as an explicit main-effect constraint, and can still be added to a pair. Pair mode requires `num_leaves <= 3`; invalid scalar training requests fail validation and invalid grid-search combinations are skipped.
-
-When a saved model has both Gain and saved SHAP rows, the Feature table shows a Gain/SHAP toggle and displays one importance metric at a time; SHAP means mean absolute SHAP value over the saved SHAP rows. For saved EBM models, the same toggle also offers `EBM Gain`, replacing the Feature table with a tree-feature-combination gain summary built from the saved tree table.
-
-When an active GBM has both saved predictions and saved SHAP rows, Line and Bar can show `Partial dependence > SHAP` ribbons for the selected x-axis feature. These ribbons use the same grouping, banding, filter, denominator, low-weight grouping, and response transform as the chart. The ribbon median is scaled to the active GBM fitted prediction mean for the current chart slice, using the selected Weight when present; when `Both` is selected, the GLM line is aligned to the same fitted-mean baseline for direct comparison. Categorical x-axes also offer a SHAP sort ordered by median SHAP.
-
-When an active GLM is available, Line and Bar can show a dashed GLM overlay line. Selecting `GLM` on a current one-feature chart requests only the overlay: a no-interaction model scores the x values already used to render that chart and does not rescan the dataset. The current chart response is discarded normally when the chart changes; no historical contexts or calculated GLM overlays are cached. Main-effect fallbacks use a base-profile grid, simple two-way interactions use a collapsed partner grid, and complex interactions use the deterministic sampled marginal PDP. When an isolated worker is needed, its dependency-import lifecycle remains warm, so the first-ever overlay can be slower while later simple overlays are immediate.
-
-### Training and artifacts
-
-GBM training asks DuckDB for only the selected response, denominator, SAMPLE, init-score, and feature columns, materializes that projection in Polars, and sends numeric Arrow tables directly to LightGBM. Categorical values are encoded once with a stable shared mapping for training, test, validation, prediction, and SHAP rows. Pandas remains part of the GBM extra for compact tree tables, tabulations, and exports rather than the large training matrix.
-
-Parameter values can use grid-search braces, such as `{200, 300, 400}`, `{0.05, 0.3; 0.05}`, or `{bagging, goss}` for `data_sample_strategy`; the app samples the hypergrid deterministically, trains one model per valid sampled combination, skips invalid combinations with a notice, and activates the best completed model.
-
-`tweedie_variance_power` is always shown in the Parameters grid and defaults to `1.5`. LightGBM requires `1.0 <= tweedie_variance_power < 2.0`; it uses the value for a Tweedie objective and also for a separately selected Tweedie metric. A valid value remains accepted but has no modelling effect when neither the objective nor metric is Tweedie.
-
-The first parameter row, `init_score`, can stay as `none` for the current behavior or point at a numeric dataset column or fitted GLM prediction artifact. Supplied values are treated as prediction-space baselines, transformed to LightGBM's linear predictor space for objectives with log or logit links, and replace the automatic denominator-derived initial score. When used, the resolved baseline is saved as `init_score.parquet` beside the model.
-
-Saved GBM `parameters.json` is a LightGBM Python params dictionary intended for `json.load()` then `lgb.train(params=...)`, including objective, metric, and the generated numeric `interaction_constraints` allowlist when constraints were used. The generated allowlist is exact training provenance: it is hidden from the editable Parameters grid and Copy Parameters JSON, while the Feature controls restore the semantic main-effect-only, pairwise, and group definitions and regenerate the allowlist before retraining. New pair-model manifests record `uncovered_policy: "singletons"`; older pair models are not rewritten, and their saved numeric constraints are inspected to classify their historical policy as singleton, shared-remainder, or unknown. Lucidum-only selections such as the UI `init_score` choice, init-score provenance, EBM training mode, and phase timings live in `manifest.json`.
-
-New GBM training uses one canonical case-insensitive alphabetical feature order, independently of the Feature table's current Gain/SHAP sort or the Feature Specification row order. The external GBM builder applies the same rule. The exact fitted order lives in `features.json`, as a JSON array of feature names; existing saved models retain their historical order. This stable mapping is important because LightGBM addresses features by index, including during feature subsampling. Trained GBM display metadata lives in optional `feature_config.parquet`, enriched with kind, monotonicity, Gain, and optional SHAP importance. Prediction and SHAP data sources derive their raw dataset-column projections from the current dataset schema rather than from duplicated manifest fields.
-
-The `10k` and `100k` SHAP row options save a deterministic random sample from all scored rows using the model seed; `All` saves every scored row.
-
-Saved `shap_summary.parquet` contains one row per trained feature with `feature`, `mean_abs_shap`, `mean_shap`, and `row_count`. The model identity comes from the model folder and computed source ID, not from a repeated column inside the Parquet file.
-
-When feature interaction constraint groups are selected during training, saved `shap_values.parquet` files also include one grouped SHAP contribution column per selected grouping, named like `POSTCODE_INTERACTION_GROUP`. These grouped columns and the active model's prediction column are available in the Line and Bar Actual chooser under separate Dataset, Model predictions, and SHAP values sections.
-
-If the source dataset has a `SAMPLE` column, GBM trains on `training`, early-stops on `test`, and scores `validation` independently. After scoring all rows once, Lucidum calculates the configured LightGBM metric from the saved Validation predictions and records one Validation point at the best iteration; Validation never affects fitting or early stopping. If `SAMPLE` is missing, the tool can create one reusable generated 60/20/20 sidecar split under the current dataset workspace in `models/gbm/`; for durable modelling, add a proper `SAMPLE` column to the original Parquet file. Models are saved under the same dataset-version workspace.
-
-During training, the app shows live iteration and train/test metric progress and updates the evaluation plot while the background job runs; grid-search progress includes the current model number. The Evaluation Log keeps its live x-axis fixed to the configured iteration count, then uses the exact completed tree count and a tail-focused y-axis view so later training progress remains readable after a steep initial drop. Completed models add only one Validation marker at the best iteration, not a Validation curve. Use the borderless `Zoom tail` toggle to switch between the full history and a focused tail view, or the adjacent copy icon to place the chart image on the clipboard. Long evaluation histories are sampled only for browser rendering; saved `evaluation.parquet` artifacts remain complete.
-
-### Saved feature context
-
-When a GBM is trained directly from a feature scenario, the model records that scenario name and the training-time feature list. Selecting a saved GBM shows the recorded scenario in the dropdown. If `feature_spec.csv` has changed since training, the dropdown marks the recorded scenario as changed or missing while the Feature table still reflects the model's saved feature configuration.
-
-When a GBM is trained with feature interaction constraints, the model records the constrained group names and training-time feature lists. Selecting a saved GBM shows those constraints in the interaction dropdown, shows a numbered lock beside constrained Feature table groupings, and marks stale or missing groupings if `feature_spec.csv` has changed. The Model navigator includes a `Constraints` column, and the saved `tree_table.parquet` can be used to inspect which split features appear along each tree path.
-
-When a GBM is trained with interaction pairs, the model records the allowed pairs and the Model navigator shows `Pairs (n)`. A legacy model that used a shared uncovered-feature remainder initially displays that historical state and explains that retraining uses strict singleton semantics; editing its feature constraints switches the draft display to the strict policy. In an active EBM model's `EBM Gain` view, right-click a two-feature row and choose `Add pair interaction (2D)` to seed the pair allowlist before retraining.
-
-### EBM mode
-
-When the active sample source has both `training` and `test` rows, either from a physical dataset `SAMPLE` column or the generated sidecar split, the tool also shows an EBM mode. EBM starts with 2-leaf trees, uses learning rate `0.3` for that 2-leaf stage, then moves through 3, 4, and higher leaf counts up to `num_leaves` whenever the test metric has not improved for `early_stopping_rounds`. `num_iterations` remains the total cap across all EBM stages.
-
-### Saved models
-
-Choosing a saved GBM in the sidebar, or selecting one model in the Model navigator and clicking Activate, makes it active and refreshes the feature table, parameter table, training mode, evaluation plot, tree viewer, SHAP screen, and plot-ready model outputs.
-
-The GLM and GBM Model navigators label the saved model identifier column `Name`, show the active model with a green dot, and let users select one or more rows for model-folder actions: rename or activate one selected model folder, or delete all selected model folders from the current dataset workspace. Deleting the active model selects the newest remaining model when one exists.
-
-The tree viewer reads saved `tree_table.parquet` artifacts, shows a searchable tree list, and renders the selected tree with zoom, colour, and direction controls. Its summary reports whether an explicit saved constraint governs the displayed tree as `Singleton — Feature only`, `Pairwise — FeatureX × FeatureY`, or `Group — Grouping`; it shows every applicable definition or `None`. Pairwise and group constraints apply when any saved member appears because the line describes the training allowlist that governed the tree, not a claim that every permitted member was used. Trees start with the Divergent colour scheme and a left-to-right layout, and can also grow top-to-bottom or diagonally from top-left to bottom-right. Tree split labels use compact numeric formatting, tightly wrap categorical splits on the diagram, and summarize long categorical splits while keeping the full split in tooltips. Node cover shows count and percentage of the selected tree, and clicking a node highlights its path from the root.
-
-### SHAP plots
-
-The SHAP tab is available for GBMs trained with a nonzero SHAP row option. It lists only the active model's trained features, defaults Feature 1 to the highest-Gain feature, defaults Feature 2 to `None`, and can sort both feature choosers by Gain or name. The chart is full-bleed, with a launch-collapsed borderless settings strip and a collapsible, resizable feature pane. Feature 2 starts collapsed and can be restored from the divider row; opening a two-feature SHAP context action expands it automatically. These layout choices last for the current page session.
-
-Switching active models preserves the selected SHAP features when they exist in the next model, and preserves matching plot legend visibility when the same SHAP plot can still be shown; unavailable Feature 2 selections fall back to `None`, and unavailable Feature 1 selections fall back to the first item in the current Feature 1 sort order.
-
-One-feature plots show numeric percentile ribbons around the median or factor box plots. Flame plot x-axes show every plotted numeric band below the 200-category density limit, rotating and shrinking labels with the same responsive policy as Line/Bar; plots above 120 bands add x-axis zoom, while denser plots retain zoom but suppress unreadable labels. When a numeric feature is treated as a factor, its bands keep their natural numeric order. Two-feature plots show a dense-grid 3D surface for two continuous features, line plots for continuous-by-factor selections, and heatmaps for two factor-style selections. Two-feature plots use the sum of the two selected SHAP contributions. The settings strip groups its two independent factor overrides under `Treat as factor`; inactive choices are grey and selected choices are bold blue. The SHAP tab also includes a `-` / `0` / `1` rescale control that uses Feature Specification `Base` metadata when present. SHAP `1` rescaling exponentiates values first, then scales to the base response value and displays the result as uplift percentage.
-
-Stacked SHAP stays on the linear predictor contribution scale and uses a full-bleed chart with a launch-collapsed borderless settings strip. Its Model feature chooser can be collapsed or resized with the divider; those layout choices last for the current page session and stack above the chart on narrow screens.
-
-Once a model is active, its predictions and SHAP outputs also appear as selectable data sources so Line/Bar and UK Mapping can plot model outputs like normal columns.
-Line/Bar SHAP ribbons stay bound to the GBM shown as active in that browser page when the request is made, so activating a different GBM in another open page cannot switch the saved SHAP values underneath an existing view.
-
-## Development
-
-Maintainer notes, architecture details, timing semantics, and test commands live in `DEVELOPMENT.md`.
+Lucidum is open source under the [MIT License](https://github.com/SpeckledJim2/py_lucidum/blob/main/LICENSE).

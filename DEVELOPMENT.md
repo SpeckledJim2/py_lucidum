@@ -1,6 +1,10 @@
 # py_lucidum Development Notes
 
-This document is the durable maintainer contract for `py_lucidum`: architecture, behavior contracts, testing policy, packaging notes, data handling, and tool-extension guidance should stay current here. The public user-facing documentation lives in `README.md`.
+This document is the durable maintainer contract for `py_lucidum`: architecture,
+behavior contracts, testing policy, packaging notes, data handling, and
+tool-extension guidance should stay current here. `README.md` is the public product
+overview, installation, and first-launch guide; detailed user-facing behavior lives in
+`docs/user-guide.md`.
 
 ## Navigation
 
@@ -766,11 +770,15 @@ environment must be reproducible.
     - `git config alias.cminor '!python scripts/bump_version.py minor && git add pyproject.toml && git commit'`
 - Before committing:
   - Check `git status --short` and make sure new files, deletions, and generated artifacts are intentional.
-  - Update `README.md` if the change affects public setup, launch commands, user workflows, CLI options, Python usage, demo data, or visible behavior.
+  - Update `README.md` when a change affects the product overview, installation, or
+    first launch,
+    and update `docs/user-guide.md` when it affects detailed setup, launch commands,
+    user workflows, CLI options, Python usage, demo data, or visible behavior.
   - Update this file if the change affects architecture, behavior contracts, testing policy, packaging, data handling, or tool-extension guidance.
   - Use the smallest relevant focused checks while editing, then rely on the fast pre-commit hook and complete pre-push hook; run a focused browser scenario before committing frontend interaction changes.
   - Scan staged changes for secrets, real customer data, local-only paths, and stale references to removed files or old demo datasets.
-- Update `README.md` for public user-facing behavior changes.
+- Keep `README.md` focused on the product overview, installation, and first launch. Update
+  `docs/user-guide.md` for detailed public user-facing behavior changes.
 - Update this file when architecture, behavior contracts, testing policy, packaging, or tool-extension guidance changes.
 - Keep generated caches, local datasets other than the synthetic demo, `.lucidum/` model artifacts, virtual environments, build artifacts, and OS metadata out of git.
 - Do not commit real customer data. The bundled motor premiums dataset is synthetic.

@@ -4,7 +4,10 @@ This file gives future coding agents the shortest reliable path into `py_lucidum
 
 ## Start Here
 
-- Read `README.md` for user-facing installation, launch commands, and current tool behavior.
+- Read `README.md` for the user-facing product overview, installation, and first
+  launch, then
+  `docs/user-guide.md` for detailed installation, launch, tool, modelling, and
+  persistence behavior.
 - Read `DEVELOPMENT.md` before non-trivial changes. It is the durable maintainer context for architecture, behavior contracts, test commands, and commit rules.
 - Read the `Releasing` section in `DEVELOPMENT.md` before packaging, tagging, or publishing a release.
 - Current GBM product notes live in `docs/specs/gbm-tool.md`; `docs/specs/gbm-tool_plan.md` is historical implementation context only.
