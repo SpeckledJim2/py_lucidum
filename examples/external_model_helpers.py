@@ -65,7 +65,10 @@ CONFIG_KEYS = {
 }
 
 OPTIONAL_CONFIG_KEYS = {
-    "glm": {"model": {"family_parameter"}},
+    "glm": {
+        "dataset": {"test_value", "validation_value"},
+        "model": {"family_parameter", "training_scope"},
+    },
 }
 
 
@@ -125,7 +128,25 @@ def load_config(path: Path, model_type: str) -> dict[str, Any]:
         }
         if len(sample_values) != 3:
             raise ValueError("Training, test, and validation sample values must be distinct")
-    elif str(config["model"]["family"]).strip().casefold() == "tweedie":
+    else:
+        training_scope = str(config["model"].get("training_scope") or "training").strip().lower()
+        if training_scope not in {"all", "training", "training_test"}:
+            raise ValueError("model.training_scope must be all, training, or training_test")
+        config["model"]["training_scope"] = training_scope
+        sample_values = {
+            "training_value": str(config["dataset"]["training_value"]).strip(),
+            "test_value": str(config["dataset"].get("test_value") or "test").strip(),
+            "validation_value": str(
+                config["dataset"].get("validation_value") or "validation"
+            ).strip(),
+        }
+        if not sample_values["training_value"]:
+            raise ValueError("dataset.training_value must not be blank")
+        if len({value.lower() for value in sample_values.values()}) != 3:
+            raise ValueError("GLM Training, Test, and Validation sample values must be distinct")
+        config["dataset"].update(sample_values)
+
+    if model_type == "glm" and str(config["model"]["family"]).strip().casefold() == "tweedie":
         raw_power = config["model"].get("family_parameter", 1.5)
         try:
             power = float(raw_power)

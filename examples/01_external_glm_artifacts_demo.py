@@ -72,15 +72,26 @@ else:
 
 sample = data[sample_name].astype("string").str.strip().str.lower()
 training_value = str(dataset_settings["training_value"]).strip().lower()
-training_mask = (
+test_value = str(dataset_settings["test_value"]).strip().lower()
+training_scope = str(model_settings["training_scope"])
+eligible_fit_mask = (
     scoring_mask
     & model_target.notna()
     & np.isfinite(model_target)
-    & sample.eq(training_value).fillna(False)
 )
+if training_scope == "all":
+    fit_mask = eligible_fit_mask
+elif training_scope == "training_test":
+    training_rows = eligible_fit_mask & sample.eq(training_value).fillna(False)
+    test_rows = eligible_fit_mask & sample.eq(test_value).fillna(False)
+    if not training_rows.any() or not test_rows.any():
+        raise ValueError("Training + Test needs usable rows from both configured sample values")
+    fit_mask = training_rows | test_rows
+else:
+    fit_mask = eligible_fit_mask & sample.eq(training_value).fillna(False)
 
-if training_mask.sum() < 2:
-    raise ValueError(f"Need at least two valid {sample_name}={training_value!r} rows")
+if fit_mask.sum() < 2:
+    raise ValueError(f"Need at least two valid rows for training_scope={training_scope!r}")
 
 # Glum keeps its fitted intercept separate from the Formulaic model matrix.
 # For the special formula ``1`` that leaves zero predictor columns, which the
@@ -104,9 +115,9 @@ if intercept_only:
     estimator_formula = f"0 + `{internal_intercept_column}`"
     estimator_fit_intercept = False
 
-training_data = data.loc[training_mask]
-training_target = model_target.loc[training_mask]
-training_weights = model_weights.loc[training_mask] if model_weights is not None else None
+training_data = data.loc[fit_mask]
+training_target = model_target.loc[fit_mask]
+training_weights = model_weights.loc[fit_mask] if model_weights is not None else None
 
 
 # %% 3. Train
@@ -171,6 +182,7 @@ result = save_glm_model_results(
     formula_context=formulaic_context(),
     model=model,
     predictions=predictions,
+    fit_mask=fit_mask,
     started=started,
     intercept_only=intercept_only,
     internal_intercept_column=internal_intercept_column,

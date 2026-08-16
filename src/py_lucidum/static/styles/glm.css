@@ -305,13 +305,10 @@
         opacity: 1;
       }
 
-      .glm-header-scope-control {
-        gap: 0;
-        margin-left: 0;
-      }
-
-      .glm-header-scope-control button.glm-builder-option-button {
-        padding-inline: 6px;
+      .glm-training-scope-select {
+        flex: 0 0 118px;
+        height: 28px;
+        width: 118px;
       }
 
       .glm-builder-panel-toggles {
@@ -368,16 +365,6 @@
         color: var(--muted);
         cursor: not-allowed;
         opacity: 0.5;
-      }
-
-      .glm-header-scope-control .glm-builder-option-button::after {
-        content: attr(data-stable-label);
-        display: block;
-        font-weight: 700;
-        height: 0;
-        overflow: hidden;
-        pointer-events: none;
-        visibility: hidden;
       }
 
       #glmFormulaAssistBtn {

@@ -4,6 +4,8 @@ dataset:
   denominator: null
   sample_column: SAMPLE
   training_value: training
+  test_value: test
+  validation_value: validation
 
 model:
   id: EXTERNAL_BUILD-config-glm
@@ -13,6 +15,7 @@ model:
   family_parameter: 1.2
   link: log
   fit_intercept: true
+  training_scope: training
   regularization:
     alpha: 0.0
     l1_ratio: 0.0

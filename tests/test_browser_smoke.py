@@ -22563,7 +22563,7 @@ COPY (
                             family: document.querySelector("#glmFamilySelect")?.value || "",
                             familyParameter: document.querySelector("#glmFamilyParameter")?.value || "",
                             familyParameterDisabled: document.querySelector("#glmFamilyParameter")?.disabled ?? null,
-                            scope: document.querySelector("[data-glm-scope].active")?.dataset?.glmScope || "",
+                            scope: document.querySelector("#glmTrainingScope")?.value || "",
                             regularizationMode: document.querySelector("#glmRegularizationMode")?.value || "",
                             regularizationMix: document.querySelector("#glmRegularizationMix")?.value || "",
                             regularizationAlpha: document.querySelector("#glmRegularizationAlpha")?.value || "",
@@ -22585,7 +22585,7 @@ COPY (
                             family: document.querySelector("#glmFamilySelect")?.value || "",
                             familyParameter: document.querySelector("#glmFamilyParameter")?.value || "",
                             familyParameterDisabled: document.querySelector("#glmFamilyParameter")?.disabled ?? null,
-                            scope: document.querySelector("[data-glm-scope].active")?.dataset?.glmScope || "",
+                            scope: document.querySelector("#glmTrainingScope")?.value || "",
                             regularizationMode: document.querySelector("#glmRegularizationMode")?.value || "",
                             regularizationMix: document.querySelector("#glmRegularizationMix")?.value || "",
                             regularizationAlpha: document.querySelector("#glmRegularizationAlpha")?.value || "",
@@ -22621,7 +22621,11 @@ COPY (
                           }
                           const familyParameter = document.querySelector("#glmFamilyParameter");
                           if (familyParameter) familyParameter.value = draft.familyParameter;
-                          document.querySelector(`[data-glm-scope="${draft.scope}"]`)?.click();
+                          const trainingScope = document.querySelector("#glmTrainingScope");
+                          if (trainingScope) {
+                            trainingScope.value = draft.scope;
+                            change(trainingScope);
+                          }
                           const mode = document.querySelector("#glmRegularizationMode");
                           if (mode) {
                             mode.value = draft.regularizationMode;
@@ -22720,8 +22724,7 @@ COPY (
                       const copyFormulaIcon = copyFormula.querySelector("svg");
                       const formulaToggle = document.querySelector("#glmFormulaAssistBtn");
                       const parametersToggle = document.querySelector("#glmModelParametersBtn");
-                      const allRowsToggle = document.querySelector('[data-glm-scope="all"]');
-                      const trainingRowsToggle = document.querySelector('[data-glm-scope="training"]');
+                      const trainingScope = document.querySelector("#glmTrainingScope");
                       const resizer = document.querySelector("#glmBuilderResizer");
                       const resizerRect = resizer.getBoundingClientRect();
                       const resizerRule = getComputedStyle(resizer, "::before");
@@ -22795,11 +22798,10 @@ COPY (
                         }),
                         panelToggleGap: parametersToggle.getBoundingClientRect().left
                           - formulaToggle.getBoundingClientRect().right,
-                        panelToScopeGap: allRowsToggle.getBoundingClientRect().left
+                        panelToScopeGap: trainingScope.getBoundingClientRect().left
                           - parametersToggle.getBoundingClientRect().right,
-                        scopeToggleGap: trainingRowsToggle.getBoundingClientRect().left
-                          - allRowsToggle.getBoundingClientRect().right,
-                        scopeButtonPaddingInline: getComputedStyle(allRowsToggle).paddingLeft,
+                        scopeWidth: trainingScope.getBoundingClientRect().width,
+                        scopeOptionLabels: [...trainingScope.options].map((option) => option.textContent.trim()),
                         formulaButtonCenterDeltas: formulaButtons.map((button) => {
                           const rect = button.getBoundingClientRect();
                           return Math.abs(
@@ -22919,7 +22921,7 @@ COPY (
                 self.assertEqual(glm_builder_geometry["coefficientHeaderPaddingRight"], "8px")
                 self.assertLessEqual(glm_builder_geometry["formulaTitleCenterDelta"], 0.1)
                 self.assertLessEqual(glm_builder_geometry["coefficientTitleCenterDelta"], 0.1)
-                self.assertEqual(glm_builder_geometry["formulaButtonHeights"], [28, 28, 28, 28, 28])
+                self.assertEqual(glm_builder_geometry["formulaButtonHeights"], [28, 28, 28])
                 self.assertEqual(glm_builder_geometry["coefficientButtonHeights"], [28, 28])
                 self.assertAlmostEqual(glm_builder_geometry["coefficientButtonGap"], 0, delta=0.5)
                 self.assertEqual(
@@ -22939,8 +22941,8 @@ COPY (
                     self.assertEqual(coefficient_action["iconHeight"], 16)
                 self.assertAlmostEqual(glm_builder_geometry["panelToggleGap"], 0, delta=0.5)
                 self.assertAlmostEqual(glm_builder_geometry["panelToScopeGap"], 16, delta=0.5)
-                self.assertAlmostEqual(glm_builder_geometry["scopeToggleGap"], 0, delta=0.5)
-                self.assertEqual(glm_builder_geometry["scopeButtonPaddingInline"], "6px")
+                self.assertAlmostEqual(glm_builder_geometry["scopeWidth"], 118, delta=0.5)
+                self.assertEqual(glm_builder_geometry["scopeOptionLabels"], ["All", "Training", "Training + Test"])
                 self.assertTrue(all(delta <= 0.1 for delta in glm_builder_geometry["formulaButtonCenterDeltas"]))
                 self.assertTrue(all(delta <= 0.1 for delta in glm_builder_geometry["coefficientButtonCenterDeltas"]))
                 self.assertTrue(all(delta <= 0.1 for delta in glm_builder_geometry["formulaButtonEdgeDeltas"]))
@@ -23037,8 +23039,10 @@ COPY (
                         accent: resolvedTokenColor("--accent"),
                         formula: state("#glmFormulaAssistBtn"),
                         parameters: state("#glmModelParametersBtn"),
-                        allRows: state('[data-glm-scope="all"]'),
-                        trainingRows: state('[data-glm-scope="training"]'),
+                        trainingScope: {
+                          value: document.querySelector("#glmTrainingScope").value,
+                          width: document.querySelector("#glmTrainingScope").getBoundingClientRect().width,
+                        },
                         build: state("#glmBuildBtn"),
                         parametersVisible: document.querySelector("#glmBuilderParametersPanel").getClientRects().length > 0,
                         formulaVisible: document.querySelector("#glmFormulaAssistDrawer").getClientRects().length > 0,
@@ -23057,13 +23061,9 @@ COPY (
                 self.assertTrue(builder_option_state["parameters"]["active"])
                 self.assertEqual(builder_option_state["parameters"]["expanded"], "true")
                 self.assertEqual(builder_option_state["parameters"]["color"], builder_option_state["accent"])
-                self.assertTrue(builder_option_state["allRows"]["active"])
-                self.assertEqual(builder_option_state["allRows"]["pressed"], "true")
-                self.assertEqual(builder_option_state["allRows"]["color"], builder_option_state["accent"])
-                self.assertFalse(builder_option_state["trainingRows"]["active"])
-                self.assertEqual(builder_option_state["trainingRows"]["pressed"], "false")
-                self.assertEqual(builder_option_state["trainingRows"]["color"], builder_option_state["muted"])
-                for option in ("formula", "parameters", "allRows", "trainingRows"):
+                self.assertEqual(builder_option_state["trainingScope"]["value"], "all")
+                self.assertAlmostEqual(builder_option_state["trainingScope"]["width"], 118, delta=0.5)
+                for option in ("formula", "parameters"):
                     self.assertEqual(builder_option_state[option]["background"], builder_option_state["transparent"])
                     self.assertEqual(builder_option_state[option]["borderWidth"], "0px")
                 self.assertTrue(builder_option_state["parametersVisible"])
@@ -23185,7 +23185,7 @@ COPY (
                       return tab?.getBoundingClientRect().height === 58
                         && formula?.getBoundingClientRect().height === 58
                         && coefficients?.getBoundingClientRect().height === 58
-                        && buttons.length === 7
+                        && buttons.length === 5
                         && buttons.every((button) => button.getBoundingClientRect().height === 28);
                     }
                     """,
@@ -23224,7 +23224,7 @@ COPY (
                 self.assertTrue(all(strip["titleCenterDelta"] <= 0.1 for strip in scaled_control_geometry))
                 self.assertEqual(
                     [strip["buttonHeights"] for strip in scaled_control_geometry],
-                    [[28, 28, 28, 28, 28], [28, 28]],
+                    [[28, 28, 28], [28, 28]],
                 )
                 self.assertTrue(
                     all(

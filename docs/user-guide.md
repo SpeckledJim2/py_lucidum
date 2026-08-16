@@ -708,9 +708,10 @@ to cross-validate ridge, elastic-net, and lasso mixes, or **Manual** to set the 
 and alpha. Penalised models show coefficients but omit standard errors and p-values
 because those values are not equivalent to unpenalised GLM inference.
 
-**All** fits every valid row. **Training** uses only rows whose physical `SAMPLE`
-column equals `training`, case-insensitively. GLM does not create a generated sample
-split.
+Choose **All** to fit every valid row, **Training** to fit rows whose physical
+`SAMPLE` column equals `training`, or **Training + Test** to fit both `training`
+and `test` rows. Sample matching is trimmed and case-insensitive. GLM does not
+create a generated sample split.
 
 ### Results and saved models
 
@@ -1081,6 +1082,21 @@ Install the example dependencies from a checkout:
 ```bash
 python -m pip install -e ".[glm,gbm,examples]"
 ```
+
+To refresh an existing client workflow directory from an installed release, upgrade
+Lucidum and sync its maintained Python files:
+
+```bash
+pipx upgrade py-lucidum
+lucidum --sync-examples /path/to/client/examples
+```
+
+The destination directory is created when necessary. The command creates or
+overwrites the six numbered scripts and four Python helpers, but never changes YAML,
+formula, specification, data, unknown Python, or other client files. Use
+`lucidum --sync-examples /path/to/client/examples --dry-run` to list the changes
+without writing them. A virtual-environment installation can use the same
+`lucidum` command after upgrading with `python -m pip install --upgrade`.
 
 The numbered scripts under `examples/` can be run normally or as `# %%` cells in
 Positron. See

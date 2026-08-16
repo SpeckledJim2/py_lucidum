@@ -68,6 +68,10 @@ write_glm_summary_report(
     model_id=settings["model_id"],
     kpi_spec_path=settings["kpi_spec_path"],
     tabulation_export=workbook,
+    sample_column=settings["sample_column"],
+    training_value=settings["training_value"],
+    test_value=settings["test_value"],
+    validation_value=settings["validation_value"],
     model_folder=settings["model_folder"],
     metadata=glm_summary_header(
         settings,

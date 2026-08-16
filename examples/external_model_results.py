@@ -51,6 +51,7 @@ def save_glm_model_results(
     formula_context: dict[str, Any],
     model: Any,
     predictions: pd.Series,
+    fit_mask: pd.Series,
     started: float,
     intercept_only: bool = False,
     internal_intercept_column: str = "",
@@ -76,18 +77,11 @@ def save_glm_model_results(
         target = response
         weights = None
 
-    sample = data[str(dataset["sample_column"])].astype("string").str.strip().str.lower()
-    training_value = str(dataset["training_value"]).strip().lower()
-    training_mask = (
-        scoring_mask
-        & target.notna()
-        & np.isfinite(target)
-        & sample.eq(training_value).fillna(False)
-    )
-    fit_frame = data.loc[training_mask]
-    training_target = target.loc[training_mask].to_numpy(dtype=float)
+    fitted_rows = pd.Series(fit_mask, index=data.index).fillna(False).astype(bool)
+    fit_frame = data.loc[fitted_rows]
+    training_target = target.loc[fitted_rows].to_numpy(dtype=float)
     training_weights = (
-        weights.loc[training_mask].to_numpy(dtype=float) if weights is not None else None
+        weights.loc[fitted_rows].to_numpy(dtype=float) if weights is not None else None
     )
     fit_predictions = np.asarray(
         model.predict(fit_frame, context=formula_context),
@@ -175,7 +169,7 @@ def save_glm_model_results(
         "response_column": str(dataset["response_numerator"]),
         "denominator_column": denominator_name,
         "offset_terms": [],
-        "training_scope": "training",
+        "training_scope": str(model_config.get("training_scope") or "training"),
         "formula": {
             "drop_first": drop_first,
             "fit_intercept": bool(model_config["fit_intercept"]),

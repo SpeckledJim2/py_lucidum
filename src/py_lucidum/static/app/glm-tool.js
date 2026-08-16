@@ -345,7 +345,7 @@ export function createGlmTool({
   }
 
   function shellHtml(data = {}) {
-    const trainingDisabled = formulaBuilder.ensureTrainingScope(data);
+    const { trainingDisabled, trainingTestDisabled } = formulaBuilder.ensureTrainingScope(data);
     const predictionDenominator = getDenominatorSelection().metricKind === "prediction";
     const activeModel = modelForActiveModel(data.active_model_id);
     const diagnostics = activeModel?.diagnostics || activeModel?.metrics || {};
@@ -381,10 +381,11 @@ export function createGlmTool({
                       </svg>
                     </button>
                   </div>
-                  <div class="segmented glm-scope-control glm-header-scope-control" role="group" aria-label="Rows to fit">
-                    <button type="button" data-glm-scope="all" data-stable-label="All" class="app-control-button glm-builder-option-button ${formulaBuilder.selectedTrainingScope === "all" ? "active" : ""}" aria-pressed="${formulaBuilder.selectedTrainingScope === "all" ? "true" : "false"}">All</button>
-                    <button type="button" data-glm-scope="training" data-stable-label="Training" class="app-control-button glm-builder-option-button ${formulaBuilder.selectedTrainingScope === "training" ? "active" : ""}" aria-pressed="${formulaBuilder.selectedTrainingScope === "training" ? "true" : "false"}" ${trainingDisabled ? "disabled" : ""}>Training</button>
-                  </div>
+                  <select id="glmTrainingScope" class="glm-training-scope-select" aria-label="Rows to fit">
+                    <option value="all" ${formulaBuilder.selectedTrainingScope === "all" ? "selected" : ""}>All</option>
+                    <option value="training" ${formulaBuilder.selectedTrainingScope === "training" ? "selected" : ""} ${trainingDisabled ? "disabled" : ""}>Training</option>
+                    <option value="training_test" ${formulaBuilder.selectedTrainingScope === "training_test" ? "selected" : ""} ${trainingTestDisabled ? "disabled" : ""}>Training + Test</option>
+                  </select>
                   <button id="glmBuildBtn" class="tab app-control-button model-busy-button glm-build-button ${isBuilding ? "building" : ""}" type="button" ${isBuilding || predictionDenominator ? "disabled" : ""} ${isBuilding ? "aria-busy=\"true\"" : ""}>${isBuilding ? "Building..." : "Build GLM"}</button>
                 </div>
               </div>

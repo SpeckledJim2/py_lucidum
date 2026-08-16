@@ -441,6 +441,56 @@ class ExternalModelExampleTests(unittest.TestCase):
         self.assertEqual(config["model"]["family"], "tweedie")
         self.assertEqual(config["model"]["family_parameter"], 1.2)
         self.assertEqual(config["model"]["link"], "log")
+        self.assertEqual(config["model"]["training_scope"], "training")
+        self.assertEqual(config["dataset"]["test_value"], "test")
+        self.assertEqual(config["dataset"]["validation_value"], "validation")
+
+    def test_external_glm_config_defaults_to_training_scope(self) -> None:
+        helpers = load_model_helpers()
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            config_path, _, _ = write_example_configs(root, root / "dataset.parquet")
+
+            config = helpers.load_config(config_path, "glm")
+
+            self.assertEqual(config["model"]["training_scope"], "training")
+            self.assertEqual(config["dataset"]["test_value"], "test")
+            self.assertEqual(config["dataset"]["validation_value"], "validation")
+
+    def test_external_glm_config_and_summary_accept_custom_sample_labels(self) -> None:
+        import yaml
+
+        model_helpers = load_model_helpers()
+        report_helpers = load_report_helpers()
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            config_path, _, _ = write_example_configs(root, root / "dataset.parquet")
+            payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+            payload["dataset"].update(
+                {
+                    "training_value": "Fit Rows",
+                    "test_value": "Test Rows",
+                    "validation_value": "Future Rows",
+                }
+            )
+            config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+            _, _, summary_path, _ = write_report_configs(root)
+
+            config = model_helpers.load_config(config_path, "glm")
+            summary = report_helpers.load_glm_summary_settings(summary_path)
+
+            self.assertEqual(config["dataset"]["training_value"], "Fit Rows")
+            self.assertEqual(config["dataset"]["test_value"], "Test Rows")
+            self.assertEqual(config["dataset"]["validation_value"], "Future Rows")
+            self.assertEqual(summary["sample_column"], "SAMPLE")
+            self.assertEqual(summary["training_value"], "Fit Rows")
+            self.assertEqual(summary["test_value"], "Test Rows")
+            self.assertEqual(summary["validation_value"], "Future Rows")
+
+            payload["dataset"]["validation_value"] = "test rows"
+            config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "sample values must be distinct"):
+                model_helpers.load_config(config_path, "glm")
 
     def test_external_gbm_categories_use_denominator_eligible_rows(self) -> None:
         helpers = load_model_helpers()
@@ -959,7 +1009,9 @@ COPY (
             self.assertIn("model.id must contain only", unsafe.stderr)
 
     @unittest.skipUnless(HAS_EXAMPLE_DEPENDENCIES, "external-model example dependencies are not installed")
-    def test_external_glm_intercept_only_runs_complete_standalone_workflow(self) -> None:
+    def test_external_glm_intercept_only_runs_training_test_and_all_workflows(self) -> None:
+        import yaml
+
         self.addCleanup(stop_persistent_glm_overlay_worker)
         with TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
@@ -968,14 +1020,64 @@ COPY (
                 ROOT / "datasets" / "motor_premiums.parquet",
                 dataset_path,
             )
+            relabelled_path = root / "motor_fixture_relabelled.parquet"
+            con = duckdb.connect(database=":memory:")
+            try:
+                con.execute(
+                    f"""
+COPY (
+  SELECT * REPLACE (
+    CASE LOWER(TRIM(SAMPLE))
+      WHEN 'training' THEN 'Fit Rows'
+      WHEN 'test' THEN 'Test Rows'
+      WHEN 'validation' THEN 'Future Rows'
+      ELSE SAMPLE
+    END AS SAMPLE
+  )
+  FROM read_parquet({sql_literal(str(dataset_path))})
+) TO {sql_literal(str(relabelled_path))} (FORMAT PARQUET)
+"""
+                )
+            finally:
+                con.close()
+            relabelled_path.replace(dataset_path)
             glm_config, _, _ = write_example_configs(
                 root,
                 dataset_path,
                 install_in_lucidum=False,
             )
+            glm_payload = yaml.safe_load(glm_config.read_text(encoding="utf-8"))
+            glm_payload["dataset"].update(
+                {
+                    "training_value": "Fit Rows",
+                    "test_value": "Test Rows",
+                    "validation_value": "Future Rows",
+                }
+            )
+            glm_payload["model"]["training_scope"] = "training_test"
+            glm_config.write_text(yaml.safe_dump(glm_payload, sort_keys=False), encoding="utf-8")
             (root / "formula.txt").write_text("1\n", encoding="utf-8")
             glm_report_config, _, glm_summary_config, _ = write_report_configs(root)
+            glm_report_payload = yaml.safe_load(glm_report_config.read_text(encoding="utf-8"))
+            glm_report_payload["reports"][0]["sample_values"] = ["Future Rows"]
+            glm_report_config.write_text(
+                yaml.safe_dump(glm_report_payload, sort_keys=False),
+                encoding="utf-8",
+            )
 
+            training_test_run = run_builder(GLM_SCRIPT, glm_config)
+            glm_dir = root / "model_results" / "glm" / GLM_MODEL_ID
+            training_test_manifest = json.loads(
+                (glm_dir / "manifest.json").read_text(encoding="utf-8")
+            )
+            training_test_diagnostics = json.loads(
+                (glm_dir / "diagnostics.json").read_text(encoding="utf-8")
+            )
+            self.assertIn(GLM_MODEL_ID, training_test_run.stdout)
+            self.assertEqual(training_test_manifest["training_scope"], "training_test")
+
+            glm_payload["model"]["training_scope"] = "all"
+            glm_config.write_text(yaml.safe_dump(glm_payload, sort_keys=False), encoding="utf-8")
             glm_run = run_builder(GLM_SCRIPT, glm_config)
             glm_report_run = run_builder(GLM_REPORT_SCRIPT, glm_report_config)
             glm_summary_run = run_builder(GLM_SUMMARY_SCRIPT, glm_summary_config)
@@ -983,12 +1085,19 @@ COPY (
             self.assertIn(GLM_MODEL_ID, glm_run.stdout)
             self.assertFalse((root / ".lucidum").exists())
 
-            glm_dir = root / "model_results" / "glm" / GLM_MODEL_ID
             manifest = json.loads(
                 (glm_dir / "manifest.json").read_text(encoding="utf-8")
             )
+            diagnostics = json.loads(
+                (glm_dir / "diagnostics.json").read_text(encoding="utf-8")
+            )
             formula = manifest["formula"]
 
+            self.assertEqual(manifest["training_scope"], "all")
+            self.assertGreater(
+                diagnostics["training_rows"],
+                training_test_diagnostics["training_rows"],
+            )
             self.assertTrue(formula["fit_intercept"])
             self.assertFalse(formula["estimator_fit_intercept"])
             self.assertTrue(formula["intercept_only"])
@@ -1029,6 +1138,10 @@ FROM read_parquet({sql_literal(str(glm_dir / 'predictions.parquet'))})
             )
 
             summary = report_payload(summary_path)
+            self.assertEqual(
+                summary["metadata"]["SAMPLE_ROWS"],
+                ["Fit Rows", "Test Rows", "Future Rows"],
+            )
             self.assertEqual(
                 [row["term"] for row in summary["coefficients"]["rows"]],
                 ["(Intercept)"],

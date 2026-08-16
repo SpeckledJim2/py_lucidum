@@ -69,6 +69,7 @@ export function createGlmFormulaBuilder({
   let editorFontSize = Number(localStorage.getItem("py_lucidum_glm_font_size")) || 11;
   let selectedFamily = localStorage.getItem("py_lucidum_glm_family") || "normal";
   let selectedTrainingScope = localStorage.getItem("py_lucidum_glm_training_scope") || "all";
+  if (!["all", "training", "training_test"].includes(selectedTrainingScope)) selectedTrainingScope = "all";
   let selectedRegularizationMode = localStorage.getItem("py_lucidum_glm_regularization_mode") || "none";
   let selectedRegularizationMix = localStorage.getItem("py_lucidum_glm_regularization_mix") || "0.5";
   let selectedRegularizationAlpha = localStorage.getItem("py_lucidum_glm_regularization_alpha") || "0.01";
@@ -100,8 +101,13 @@ export function createGlmFormulaBuilder({
   function ensureTrainingScope(data = {}) {
     const sample = data.sample || {};
     const trainingDisabled = !sample.available || !Number(sample.training_rows || 0);
-    if (trainingDisabled && selectedTrainingScope === "training" && !data.active_model_id) selectedTrainingScope = "all";
-    return trainingDisabled;
+    const trainingTestDisabled = trainingDisabled || !Number(sample.test_rows || 0);
+    if (
+      !data.active_model_id
+      && ((selectedTrainingScope === "training" && trainingDisabled)
+        || (selectedTrainingScope === "training_test" && trainingTestDisabled))
+    ) selectedTrainingScope = "all";
+    return { trainingDisabled, trainingTestDisabled };
   }
 
   function familyOptionsHtml(families = []) {
@@ -690,17 +696,11 @@ export function createGlmFormulaBuilder({
       selectedRegularizationAlpha = event.target.value.trim() || "0.01";
       localStorage.setItem("py_lucidum_glm_regularization_alpha", selectedRegularizationAlpha);
     });
-    document.querySelectorAll("[data-glm-scope]").forEach((button) => {
-      button.addEventListener("click", () => {
-        if (button.disabled) return;
-        selectedTrainingScope = button.dataset.glmScope || "all";
-        localStorage.setItem("py_lucidum_glm_training_scope", selectedTrainingScope);
-        document.querySelectorAll("[data-glm-scope]").forEach((item) => {
-          const active = item === button;
-          item.classList.toggle("active", active);
-          item.setAttribute("aria-pressed", active ? "true" : "false");
-        });
-      });
+    el("glmTrainingScope")?.addEventListener("change", (event) => {
+      const scope = event.target.value || "all";
+      if (!["all", "training", "training_test"].includes(scope)) return;
+      selectedTrainingScope = scope;
+      localStorage.setItem("py_lucidum_glm_training_scope", selectedTrainingScope);
     });
     el("glmClearFormulaBtn")?.addEventListener("click", () => setFormulaText(""));
     el("glmFormulaAssistBtn")?.addEventListener("click", () => toggleBuilderPanel("formula"));
@@ -1042,9 +1042,9 @@ export function createGlmFormulaBuilder({
       localStorage.setItem(`py_lucidum_glm_family_parameter_${selectedFamily}`, familyParameter.value.trim());
     }
 
-    const activeScope = document.querySelector("[data-glm-scope].active")?.dataset?.glmScope;
-    if (activeScope === "all" || activeScope === "training") {
-      selectedTrainingScope = activeScope;
+    const trainingScope = el("glmTrainingScope")?.value;
+    if (["all", "training", "training_test"].includes(trainingScope)) {
+      selectedTrainingScope = trainingScope;
       localStorage.setItem("py_lucidum_glm_training_scope", selectedTrainingScope);
     }
 
@@ -1145,14 +1145,11 @@ export function createGlmFormulaBuilder({
     }
 
     const trainingScope = String(manifest.training_scope || "").trim().toLowerCase();
-    if (trainingScope === "all" || trainingScope === "training") {
+    if (["all", "training", "training_test"].includes(trainingScope)) {
       selectedTrainingScope = trainingScope;
       localStorage.setItem("py_lucidum_glm_training_scope", selectedTrainingScope);
-      document.querySelectorAll("[data-glm-scope]").forEach((button) => {
-        const active = button.dataset.glmScope === selectedTrainingScope;
-        button.classList.toggle("active", active);
-        button.setAttribute("aria-pressed", active ? "true" : "false");
-      });
+      const select = el("glmTrainingScope");
+      if (select) select.value = selectedTrainingScope;
     }
 
     const regularization = manifest.regularization || {};

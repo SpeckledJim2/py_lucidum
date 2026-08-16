@@ -19,6 +19,16 @@ PROJECT_NAME = "py-lucidum"
 DIST_PREFIX = "py_lucidum"
 REQUIRED_WHEEL_PATHS = (
     "py_lucidum/datasets/motor_premiums.parquet",
+    "py_lucidum/example_workflows/01_external_gbm_artifacts_demo.py",
+    "py_lucidum/example_workflows/01_external_glm_artifacts_demo.py",
+    "py_lucidum/example_workflows/02_external_gbm_report_demo.py",
+    "py_lucidum/example_workflows/02_external_glm_report_demo.py",
+    "py_lucidum/example_workflows/03_external_gbm_summary_report_demo.py",
+    "py_lucidum/example_workflows/03_external_glm_summary_report_demo.py",
+    "py_lucidum/example_workflows/external_model_helpers.py",
+    "py_lucidum/example_workflows/external_model_results.py",
+    "py_lucidum/example_workflows/external_report_helpers.py",
+    "py_lucidum/example_workflows/lucidum_install.py",
     "py_lucidum/specs/feature_spec.csv",
     "py_lucidum/specs/filter_spec.csv",
     "py_lucidum/specs/kpi_spec.csv",
@@ -32,6 +42,16 @@ REQUIRED_SDIST_PATHS = (
     "README.md",
     "pyproject.toml",
     "datasets/motor_premiums.parquet",
+    "examples/01_external_gbm_artifacts_demo.py",
+    "examples/01_external_glm_artifacts_demo.py",
+    "examples/02_external_gbm_report_demo.py",
+    "examples/02_external_glm_report_demo.py",
+    "examples/03_external_gbm_summary_report_demo.py",
+    "examples/03_external_glm_summary_report_demo.py",
+    "examples/external_model_helpers.py",
+    "examples/external_model_results.py",
+    "examples/external_report_helpers.py",
+    "examples/lucidum_install.py",
     "src/py_lucidum/static/index.html",
 )
 

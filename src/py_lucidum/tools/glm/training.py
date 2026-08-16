@@ -25,7 +25,7 @@ from py_lucidum.core import Dataset, quote_ident, sql_literal
 
 from .store import GlmModelStore, json_safe_number
 from .terms import column_tokens, model_matrix, term_groups
-from .validation import TARGET_COLUMN, physical_sample_column, validate_request
+from .validation import TARGET_COLUMN, physical_sample_column, training_scope_sample_values, validate_request
 
 
 ProgressCallback = Callable[[dict[str, Any]], None]
@@ -732,7 +732,7 @@ def required_training_columns(dataset: Dataset, validation: dict[str, Any]) -> l
         requested.update(formula_source_columns(str(formula.get("fitted") or "1"), source_columns))
         for expression in formula.get("offset_terms") or []:
             requested.update(column_tokens(str(expression), source_columns))
-    if str(validation.get("training_scope") or "all") == "training":
+    if training_scope_sample_values(validation.get("training_scope") or "all"):
         sample_column = physical_sample_column(dataset)
         if sample_column:
             requested.add(sample_column)
@@ -1399,25 +1399,32 @@ def _train_model_impl(
         fit_weight = None
 
     fit_mask = eligible_mask & np.isfinite(target)
-    sample_column = physical_sample_column(dataset)
-    if training_scope == "training":
-        if not sample_column:
-            raise ValueError("Training rows require a physical SAMPLE column")
-        training_rows = (
-            frame.get_column(sample_column)
-            .cast(pl.String)
-            .str.strip_chars()
-            .str.to_lowercase()
-            .eq("training")
-            .fill_null(False)
-            .to_numpy()
-        )
-        fit_mask = fit_mask & training_rows
-
     if fit_weight is not None:
         fit_mask = fit_mask & np.isfinite(fit_weight) & (fit_weight > 0)
     if offset_values is not None:
         fit_mask = fit_mask & np.isfinite(offset_values)
+
+    sample_column = physical_sample_column(dataset)
+    fit_sample_values = training_scope_sample_values(training_scope)
+    if fit_sample_values:
+        if not sample_column:
+            raise ValueError("Restricted training rows require a physical SAMPLE column")
+        sample_values = (
+            frame.get_column(sample_column)
+            .cast(pl.String)
+            .str.strip_chars()
+            .str.to_lowercase()
+            .fill_null("")
+            .to_numpy()
+        )
+        training_rows = sample_values == "training"
+        if not bool((fit_mask & training_rows).any()):
+            raise ValueError("No usable rows have SAMPLE = training")
+        if training_scope == "training_test":
+            test_rows = sample_values == "test"
+            if not bool((fit_mask & test_rows).any()):
+                raise ValueError("No usable rows have SAMPLE = test")
+        fit_mask = fit_mask & np.isin(sample_values, fit_sample_values)
 
     if int(fit_mask.sum()) < 2:
         raise ValueError("GLM fitting needs at least two valid rows")

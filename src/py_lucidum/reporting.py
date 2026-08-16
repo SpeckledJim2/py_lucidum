@@ -370,6 +370,10 @@ def write_glm_summary_report(
     model_id: str,
     kpi_spec_path: str | Path,
     tabulation_export: Mapping[str, Any],
+    sample_column: str = "SAMPLE",
+    training_value: str = "training",
+    test_value: str = "test",
+    validation_value: str = "validation",
     model_folder: str | Path | None = None,
     metadata: Mapping[str, Any] | None = None,
 ) -> Path:
@@ -404,12 +408,27 @@ def write_glm_summary_report(
 
         response = str(manifest.get("response_column") or "").strip()
         denominator = str(manifest.get("denominator_column") or "").strip()
+        resolved_sample_column = str(sample_column).strip()
+        sample_values = {
+            "training": str(training_value).strip(),
+            "test": str(test_value).strip(),
+            "validation": str(validation_value).strip(),
+        }
+        if not resolved_sample_column:
+            raise ValueError("sample_column must not be blank")
+        if any(not value for value in sample_values.values()):
+            raise ValueError("Training, Test, and Validation sample values must not be blank")
+        if len({value.lower() for value in sample_values.values()}) != 3:
+            raise ValueError("Training, Test, and Validation sample values must be distinct")
+        _require_column(dataset.column_map(), resolved_sample_column, "SAMPLE")
         kpi = _glm_summary_kpi(load_kpis(kpi_spec_path), response, denominator, Path(kpi_spec_path))
         performance = _glm_performance(
             dataset,
             store.artifact_path(model_id, "predictions"),
             response=response,
             denominator=denominator,
+            sample_column=resolved_sample_column,
+            sample_values=sample_values,
             estimator=estimator,
             kpi=kpi,
         )
@@ -422,7 +441,7 @@ def write_glm_summary_report(
             "response": response,
             "weight": denominator or "None",
             "expected": "glm_prediction",
-            "SAMPLE_ROWS": ["training", "test", "validation"],
+            "SAMPLE_ROWS": list(sample_values.values()),
             "model label": manifest.get("label") or model_id,
             "family / link": _glm_family_link_label(manifest, estimator, actual_link),
             **dict(metadata or {}),
@@ -965,13 +984,21 @@ def _glm_performance(
     *,
     response: str,
     denominator: str,
+    sample_column: str = "SAMPLE",
+    sample_values: Mapping[str, str] | None = None,
     estimator: Any,
     kpi: Mapping[str, Any],
 ) -> dict[str, Any]:
     if not prediction_path.is_file():
         raise ValueError("Fitted GLM predictions are unavailable.")
     actual = quote_ident(response)
-    sample = quote_ident("SAMPLE")
+    sample = quote_ident(sample_column)
+    selected_samples = {
+        "training": "training",
+        "test": "test",
+        "validation": "validation",
+        **dict(sample_values or {}),
+    }
     weight = quote_ident(denominator) if denominator else ""
     weight_projection = f", TRY_CAST(source.{weight} AS DOUBLE) AS report_weight" if denominator else ", 1.0 AS report_weight"
     valid_weight = f"AND isfinite(TRY_CAST(source.{weight} AS DOUBLE)) AND TRY_CAST(source.{weight} AS DOUBLE) > 0" if denominator else ""
@@ -1006,10 +1033,14 @@ WHERE isfinite(TRY_CAST(source.{actual} AS DOUBLE))
 
     is_binomial = "binomial" in type(estimator.family_instance).__name__.casefold()
     rows = []
-    for label, sample_value in (("Training", "training"), ("Test", "test"), ("Validation", "validation")):
+    for label, role in (("Training", "training"), ("Test", "test"), ("Validation", "validation")):
+        sample_value = str(selected_samples[role]).strip().lower()
         values = grouped.get(sample_value)
         if not values:
-            raise ValueError(f"The {label} SAMPLE value has no eligible fitted predictions: {sample_value}")
+            raise ValueError(
+                f"The {label} {sample_column} value has no eligible fitted predictions: "
+                f"{selected_samples[role]}"
+            )
         array = np.asarray(values, dtype=float)
         y = array[:, 0]
         prediction = array[:, 1]

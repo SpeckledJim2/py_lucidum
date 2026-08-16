@@ -667,6 +667,8 @@ if result.get("iteration") != 10:
         self.assertEqual(status, 200)
         self.assertEqual(payload["status"], "ready")
         self.assertEqual(payload["sample"]["available"], True)
+        self.assertEqual(payload["sample"]["training_rows"], 4)
+        self.assertEqual(payload["sample"]["test_rows"], 2)
         self.assertIn("tweedie", [row["value"] for row in payload["families"]])
         self.assertIn("regularization", payload)
         self.assertEqual(payload["regularization"]["auto_l1_ratio"], [0.0, 0.5, 1.0])
@@ -1070,6 +1072,45 @@ if result.get("iteration") != 10:
 
         self.assertFalse(result["ok"])
         self.assertIn("physical SAMPLE column", "; ".join(result["errors"]))
+
+    def test_training_test_scope_requires_test_rows(self) -> None:
+        no_test_path = self.root / "no_test.csv"
+        no_test_path.write_text(
+            "actualNumerator,Age,SAMPLE\n1,10,training\n2,20,validation\n",
+            encoding="utf-8",
+        )
+        dataset = Dataset(no_test_path)
+
+        result = validate_request(
+            dataset,
+            {
+                "formula": "Age",
+                "response_column": "actualNumerator",
+                "family": "normal",
+                "training_scope": "training_test",
+            },
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertIn("SAMPLE = test", "; ".join(result["errors"]))
+
+    def test_training_test_scope_limits_tabulation_domains_to_fit_rows(self) -> None:
+        import pandas as pd
+
+        frame = pd.DataFrame(
+            {
+                "SAMPLE": ["training", "Test", "validation"],
+                "Segment": ["training-only", "test-only", "validation-only"],
+            }
+        )
+
+        fit_frame = glm_tabulation._fit_frame_for_levels(
+            frame,
+            {"training_scope": "training_test"},
+            pd,
+        )
+
+        self.assertEqual(fit_frame["Segment"].tolist(), ["training-only", "test-only"])
 
     def test_glm_training_projection_uses_only_required_formula_columns(self) -> None:
         self.require_glm_dependencies()
@@ -2203,6 +2244,7 @@ ORDER BY __lucidum_row_id
             "regularization": {"mode": "manual", "alpha": 0.001, "l1_ratio": 0.0},
         }
         training_result = train_model(dataset, store, {**payload, "training_scope": "training"}, activate=False)
+        training_test_result = train_model(dataset, store, {**payload, "training_scope": "training_test"}, activate=False)
         all_result = train_model(dataset, store, {**payload, "training_scope": "all"}, activate=False)
 
         try:
@@ -2216,10 +2258,16 @@ ORDER BY __lucidum_row_id
         self.assertIsNone(_shared_prediction_design_matrix(predictor_matrix, training_fit_mask, score_mask, np))
         self.assertIsNone(_shared_prediction_design_matrix(predictor_matrix, all_fit_mask, score_mask, np))
         self.assertEqual(training_result["diagnostics"]["training_rows"], 2)
+        self.assertEqual(training_test_result["diagnostics"]["training_rows"], 3)
+        self.assertEqual(store.manifest(training_test_result["model_id"])["training_scope"], "training_test")
         self.assertEqual(all_result["diagnostics"]["training_rows"], 3)
         _, _, _, _, pd, pl = glm_training_dependencies()
         source_frame = data_frame_from_dataset(dataset, ["y", "denominator", "x", "log_offset", "SAMPLE"])
-        for result, fit_ids in ((training_result, [1, 6]), (all_result, [1, 2, 6])):
+        for result, fit_ids in (
+            (training_result, [1, 6]),
+            (training_test_result, [1, 2, 6]),
+            (all_result, [1, 2, 6]),
+        ):
             prediction_rows = store.read_parquet_records(store.artifact_path(result["model_id"], "predictions"))
             self.assertEqual([row["__lucidum_row_id"] for row in prediction_rows], [1, 2, 3, 6])
             self.assertTrue(all(row["glm_prediction"] is not None for row in prediction_rows))

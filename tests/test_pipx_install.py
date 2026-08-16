@@ -12,6 +12,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from urllib.request import urlopen
 
+from py_lucidum.example_sync import EXAMPLE_SCRIPT_NAMES
+
 
 RUN_PIPX_INSTALL_TESTS = os.environ.get("PY_LUCIDUM_RUN_PIPX_INSTALL_TESTS") == "1"
 PIPX_SPEC_ENV = "PY_LUCIDUM_PIPX_SPEC"
@@ -51,6 +53,20 @@ class PipxInstallTests(unittest.TestCase):
             [],
             "Files under src/py_lucidum are already included by the wheel package mapping; "
             "force-include them only from outside the package tree.",
+        )
+
+    def test_wheel_force_includes_maintained_example_scripts(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        pyproject = tomllib.loads((repo_root / "pyproject.toml").read_text(encoding="utf-8"))
+        force_include = pyproject["tool"]["hatch"]["build"]["targets"]["wheel"]["force-include"]
+        expected = {
+            f"examples/{name}": f"py_lucidum/example_workflows/{name}"
+            for name in EXAMPLE_SCRIPT_NAMES
+        }
+
+        self.assertEqual(
+            {source: target for source, target in force_include.items() if source.startswith("examples/")},
+            expected,
         )
 
     @unittest.skipUnless(RUN_PIPX_INSTALL_TESTS, "set PY_LUCIDUM_RUN_PIPX_INSTALL_TESTS=1 to run pipx install tests")
@@ -119,6 +135,27 @@ class PipxInstallTests(unittest.TestCase):
             )
             if expected_version:
                 self.assertEqual(version.stdout.strip(), f"lucidum {expected_version}")
+
+            synced_examples = root / "synced-examples"
+            sync = subprocess.run(
+                [str(lucidum), "--sync-examples", str(synced_examples)],
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=30,
+                check=False,
+            )
+            self.assertEqual(
+                sync.returncode,
+                0,
+                f"lucidum --sync-examples failed\nSTDOUT:\n{sync.stdout}\nSTDERR:\n{sync.stderr}",
+            )
+            self.assertEqual(
+                sorted(path.name for path in synced_examples.iterdir()),
+                sorted(EXAMPLE_SCRIPT_NAMES),
+            )
+            self.assertTrue(all(synced_examples.joinpath(name).stat().st_size > 0 for name in EXAMPLE_SCRIPT_NAMES))
 
             with socket.socket() as sock:
                 sock.bind(("127.0.0.1", 0))

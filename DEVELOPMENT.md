@@ -51,6 +51,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
   - `lucidum path/to/data.parquet`
   - `lucidum path/to/data.csv`
   - `lucidum path/to/parquet-folder/`
+  - `lucidum --sync-examples path/to/client/examples [--dry-run]`
   - common options include `--open`, `--host`, `--port`, `--no-token`, `--buttons`, `--title-prefix`, `--x`, `--actual`, `--expected`, `--expected2`, `--denominator`, `--line-bar-favourite`, `--line-bar-favourites`, `--filters`, `--no-filters`, `--kpis`, `--no-kpis`, `--features`, `--no-features`, `--tools`, and UK map column overrides.
 - Python:
   - `py_lucidum.serve(...)`
@@ -306,6 +307,12 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
   IDs, unsupported dataset kinds, invalid sample partitions, and invalid
   formula/scenario references. Keep `PyYAML` in the `examples` optional extra;
   a checkout that runs both examples uses `.[glm,gbm,examples]`.
+- The wheel force-includes exactly the six numbered external workflows and four
+  shared Python helpers under `py_lucidum/example_workflows/`.
+  `lucidum --sync-examples PATH` is an exclusive maintenance action that
+  atomically creates or overwrites only those filenames. It never launches the
+  app, deletes files, or changes client YAML, formulas, specifications, data, or
+  unknown Python files; `--dry-run` performs no writes.
 - External builders must remain independent of `py_lucidum`. The neutral
   writer assigns one-based `__lucidum_row_id` before any filtering and writes
   only below `model_results_root/<type>/<model-id>`. The optional installer
@@ -346,12 +353,13 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
   call fitted-model prediction. Auto XLSX scale must inspect the fitted link:
   `LogLink` means `exp`; all other links mean `linear`.
 - The 03 GLM report performance table uses fitted `glm_prediction`, never
-  `glm_tabulated_prediction`. It matches literal training/test/validation
-  values from `SAMPLE` case-insensitively, applies denominator rate/weight
-  semantics, always reports deviance and explained deviance, and adds weighted
-  AUC/Gini/log loss for binomial families or weighted RMSE/MAE for other
-  families. Its Family / Link metadata includes the fitted Tweedie variance
-  power for Tweedie models, falling back to the estimator for older manifests.
+  `glm_tabulated_prediction`. It matches the build config's sample column and
+  configured Training, Test, and Validation values case-insensitively, applies
+  denominator rate/weight semantics, always reports deviance and explained
+  deviance, and adds weighted AUC/Gini/log loss for binomial families or
+  weighted RMSE/MAE for other families. Its Family / Link metadata includes the
+  fitted Tweedie variance power for Tweedie models, falling back to the
+  estimator for older manifests.
   The coefficient row order and visible columns mirror the GLM tool. The HTML
   tabulation index and XLSX index originate from one shared value structure.
 - The 03 GBM summary counts only rows joined to a saved prediction with a
@@ -386,8 +394,8 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 - GLM families are `normal`, `poisson`, `gamma`, `tweedie`, `binomial`, `inverse.gaussian`, and `negative.binomial`; the first implementation uses `link="auto"`. Tweedie power and negative-binomial theta are the only exposed family parameters.
 - GLM regularization is optional and defaults to unpenalized `alpha=0`. Auto regularization uses glum cross-validation over ridge, elastic net, and lasso mixes with predictor scaling; manual regularization accepts a positive alpha and `0 <= l1_ratio <= 1`. Penalized GLMs must store selected penalty metadata and suppress coefficient standard errors/p-values in the frontend.
 - GLM uses the sidebar Actual, Weight, FAVOURITES, and KPI controls as the model response and denominator inputs. If a denominator is selected, training fits `response / denominator` with `sample_weight=denominator`, writes `glm_prediction` on the original response scale, and exposes `glm_prediction_rate = glm_prediction / denominator`.
-- GLM `All` fits all valid rows. GLM `Training` fits only a physical uppercase/lowercase-insensitive `SAMPLE = training` column and does not create generated sample splits.
-- The GLM Formula builder header uses borderless option controls for Formula tools, Model parameters, and the `All`/`Training` fit scope; inactive options are muted and active/open options are bold accent text, while `Build GLM` remains the solid primary action. Formula tools and Model parameters are mutually exclusive, either may be collapsed to an editor-only state, and the selected panel persists as frontend-only session state with Model parameters as the fresh-session default. Both open panels use `var(--sidebar-bg)` so their expanded state remains visible in light and dark themes. The Ace overlay is a vertical clear/font-size/copy command rail; Copy reads the live editor value and uses the shared clipboard feedback path.
+- GLM `All` fits all valid rows, `Training` fits physical case-insensitive `SAMPLE = training` rows, and `Training + Test` fits the union of physical `training` and `test` rows. Restricted scopes require their named samples and never create generated splits.
+- The GLM Formula builder header uses borderless option controls for Formula tools and Model parameters, a fixed-width `All`/`Training`/`Training + Test` fit-scope select, and a solid primary `Build GLM` action. Formula tools and Model parameters are mutually exclusive, either may be collapsed to an editor-only state, and the selected panel persists as frontend-only session state with Model parameters as the fresh-session default. Both open panels use `var(--sidebar-bg)` so their expanded state remains visible in light and dark themes. The Ace overlay is a vertical clear/font-size/copy command rail; Copy reads the live editor value and uses the shared clipboard feedback path.
 - GLM artifacts are stored under the current dataset workspace in `models/glm/`, with compact `manifest.json`, `estimator.pkl`, `formula.txt`, `coefficients.parquet`, `feature_importance.parquet`, `predictions.parquet`, and `diagnostics.json`. New diagnostics persist `n_terms` as the fitted coefficient-row count including the intercept, `n_features` as the distinct source features referenced by those rows, and `n_interactions` as the number of distinct normalized source-feature combinations containing at least two features. Model-list payloads expose those keys only when captured and must not infer them for older artifacts. Tabulation builds add `tabulations/tabulation_manifest.json`, `tabulations/*.parquet`, and top-level `tabulated_predictions.parquet`; model-list payloads report `tabulated` from the completed manifest's presence.
 - GLM model manifests persist only compact Lucidum metadata: identity, response/denominator, family/link, regularization, training scope, offset expressions, minimal formula execution flags, and `timings.elapsed_ms`. Model diagnostics and warnings live in `diagnostics.json`; raw formula text lives in `formula.txt`; raw source columns are derived from the dataset schema. When LightGBM/glum load-order protection is required, GLM fitting uses a persistent isolated worker after the first build and caches the worker-side dataset handle by source-file signature. Keep `PY_LUCIDUM_GLM_FIT_ONE_SHOT=1` as the debugging fallback for the old one-shot worker path.
 - GLM training persists feature-level importances in `feature_importance.parquet`. The metric is weighted mean absolute centered feature contribution on the fitted GLM linear-predictor scale. Formulaic term metadata maps model-matrix columns to source dataset features; interaction and multi-feature transform contributions are split evenly across participating features before feature-level aggregation.

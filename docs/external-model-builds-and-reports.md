@@ -85,6 +85,28 @@ From a source checkout, install the dependencies used by both model types:
 python -m pip install -e ".[glm,gbm,examples]"
 ```
 
+### Keep client scripts up to date
+
+An installed Lucidum release includes the six numbered workflow scripts and their
+four Python helpers. After upgrading Lucidum, sync those maintained files into an
+existing client workflow directory:
+
+```bash
+pipx upgrade py-lucidum
+lucidum --sync-examples /path/to/client/examples
+```
+
+The command creates the directory when needed and overwrites only those ten Python
+files. Client YAML, formulas, specifications, datasets, unknown Python files, and
+other files are left unchanged. Preview the exact create/update/unchanged list
+without writing anything by adding `--dry-run`:
+
+```bash
+lucidum --sync-examples /path/to/client/examples --dry-run
+```
+
+The same sync command works after upgrading Lucidum in a normal virtual environment.
+
 Run the GLM workflow in order:
 
 ```bash
@@ -180,6 +202,11 @@ The supplied `config_glm.yaml` demonstrates these fields:
 - `dataset.sample_column` — column that identifies Training, Test, and
   Validation rows.
 - `dataset.training_value` — value used to select fitting rows.
+- `dataset.test_value` — value added to fitting rows for a `training_test`
+  scope; it defaults to `test` for older configs.
+- `dataset.validation_value` — value used for the Validation row in the GLM
+  summary report; it defaults to `validation` for older configs and is never
+  included in fitting.
 - `model.id` — stable name used to find or replace this model.
 - `model.label` — display name used in reports and Lucidum.
 - `model.formula_path` — text file containing the right-hand side of the
@@ -188,6 +215,8 @@ The supplied `config_glm.yaml` demonstrates these fields:
 - `model.family_parameter` — the Tweedie variance power when `family` is
   `tweedie`; it defaults to `1.5` when omitted.
 - `model.fit_intercept` — whether to fit an intercept.
+- `model.training_scope` — `all`, `training`, or `training_test`; it defaults
+  to `training` for older configs.
 - `model.regularization` — `alpha`, `l1_ratio`, and predictor-scaling
   settings.
 - `output.model_results_root` — root of the authoritative saved model results;
@@ -196,6 +225,11 @@ The supplied `config_glm.yaml` demonstrates these fields:
   the source dataset's Lucidum workspace. Reports do not depend on this copy.
 - `output.replace_existing` — allow this model ID to replace an earlier build
   with the same ID.
+
+GLM sample-value matching is trimmed and case-insensitive, and the configured
+Training, Test, and Validation values must be distinct. The 02 chart-report YAML
+continues to select literal dataset values through `reports[].sample_values`, so
+use the configured Validation value there when producing a Validation report.
 
 The formula file contains the model expression without `response ~`. It may
 include Python-style `#` comments. Comments are removed for fitting, while the

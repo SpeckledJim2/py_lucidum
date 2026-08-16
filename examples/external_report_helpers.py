@@ -217,6 +217,13 @@ def load_glm_summary_settings(path: Path) -> dict[str, Any]:
     build_path = _resolve(path.parent, report_config["build_config"])
     build_config = _read_yaml(build_path)
     dataset_config = build_config["dataset"]
+    sample_values = {
+        "training_value": str(dataset_config["training_value"]).strip(),
+        "test_value": str(dataset_config.get("test_value") or "test").strip(),
+        "validation_value": str(
+            dataset_config.get("validation_value") or "validation"
+        ).strip(),
+    }
     report = dict(report_config["report"])
     model_id = str(build_config["model"]["id"])
     model_results_root = _resolve(
@@ -229,6 +236,8 @@ def load_glm_summary_settings(path: Path) -> dict[str, Any]:
         "install_in_lucidum": bool(build_config["output"]["install_in_lucidum"]),
         "replace_existing": bool(build_config["output"]["replace_existing"]),
         "dataset_path": _resolve(build_path.parent, dataset_config["path"]),
+        "sample_column": str(dataset_config["sample_column"]),
+        **sample_values,
         "feature_spec_path": _resolve(path.parent, report_config["feature_spec"]),
         "kpi_spec_path": _resolve(path.parent, report_config["kpi_spec"]),
         "report_name": str(report["name"]),

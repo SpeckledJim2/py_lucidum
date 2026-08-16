@@ -371,6 +371,18 @@ From a source checkout, install the dependencies used by both example workflows:
 python -m pip install -e ".[glm,gbm,examples]"
 ```
 
+For a client machine with an existing workflow folder, upgrade Lucidum and refresh
+the maintained Python scripts without copying them by hand:
+
+```bash
+pipx upgrade py-lucidum
+lucidum --sync-examples /path/to/client/examples
+```
+
+The sync creates or overwrites only the six numbered workflow scripts and four
+Python helpers. It does not change client YAML, formulas, specifications, data, or
+other files. Add `--dry-run` to preview the result without writing files.
+
 The `examples/` folder contains parallel three-step GLM and GBM workflows that:
 
 1. Train and score a model outside the Lucidum application.

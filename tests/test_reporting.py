@@ -281,10 +281,10 @@ COPY (
             root = Path(tmp_dir)
             dataset_path = root / "data.csv"
             dataset_path.write_text(
-                "Y,W,SAMPLE\n"
-                "10,1,training\n20,2,training\n"
-                "30,3,test\n40,4,test\n"
-                "50,5,validation\n60,6,validation\n",
+                "Y,W,Partition\n"
+                "10,1,FIT\n20,2,FIT\n"
+                "30,3,check\n40,4,check\n"
+                "50,5,Future\n60,6,Future\n",
                 encoding="utf-8",
             )
             kpi_path = root / "kpi.csv"
@@ -374,6 +374,10 @@ TO {sql_literal(str(store.artifact_path(model_id, 'coefficients')))} (FORMAT PAR
                 model_id=model_id,
                 kpi_spec_path=kpi_path,
                 tabulation_export=tabulation_export,
+                sample_column="Partition",
+                training_value="fit",
+                test_value="CHECK",
+                validation_value="future",
             )
 
             document = output_path.read_text(encoding="utf-8")
@@ -384,6 +388,7 @@ TO {sql_literal(str(store.artifact_path(model_id, 'coefficients')))} (FORMAT PAR
             )
             self.assertIsNotNone(payload_match)
             payload = json.loads(payload_match.group(1))
+            self.assertEqual(payload["metadata"]["SAMPLE_ROWS"], ["fit", "CHECK", "future"])
             self.assertEqual(payload["performance"]["prediction_source"], "glm_prediction")
             self.assertEqual(payload["performance"]["rows"][0]["prediction"], "£10.33")
             self.assertNotIn("999", json.dumps(payload["performance"]))

@@ -512,6 +512,102 @@ class CliRuntimeTests(unittest.TestCase):
         self.assertEqual(stdout.getvalue(), f"lucidum {__version__}\n")
         self.assertEqual(stderr.getvalue(), "")
 
+    def test_main_syncs_examples_without_launching_the_app(self) -> None:
+        stdout = io.StringIO()
+
+        with TemporaryDirectory() as tmp_dir:
+            destination = Path(tmp_dir) / "client-examples"
+            with (
+                patch("sys.argv", ["lucidum", "--sync-examples", str(destination)]),
+                patch("py_lucidum.cli.serve", side_effect=AssertionError("unexpected app launch")),
+                redirect_stdout(stdout),
+            ):
+                result = main()
+
+            self.assertEqual(result, 0)
+            self.assertIn("10 created", stdout.getvalue())
+            self.assertEqual(
+                sorted(path.name for path in destination.iterdir()),
+                [
+                    "01_external_gbm_artifacts_demo.py",
+                    "01_external_glm_artifacts_demo.py",
+                    "02_external_gbm_report_demo.py",
+                    "02_external_glm_report_demo.py",
+                    "03_external_gbm_summary_report_demo.py",
+                    "03_external_glm_summary_report_demo.py",
+                    "external_model_helpers.py",
+                    "external_model_results.py",
+                    "external_report_helpers.py",
+                    "lucidum_install.py",
+                ],
+            )
+
+    def test_main_sync_examples_is_exclusive(self) -> None:
+        stderr = io.StringIO()
+
+        with TemporaryDirectory() as tmp_dir:
+            destination = Path(tmp_dir) / "client-examples"
+            with (
+                patch("sys.argv", ["lucidum", "--sync-examples", str(destination), "--demo"]),
+                redirect_stderr(stderr),
+                self.assertRaises(SystemExit) as exit_context,
+            ):
+                main()
+
+            self.assertFalse(destination.exists())
+
+        self.assertEqual(exit_context.exception.code, 2)
+        self.assertIn("unrecognized arguments: --demo", stderr.getvalue())
+
+    def test_main_sync_examples_dry_run_does_not_create_destination(self) -> None:
+        stdout = io.StringIO()
+
+        with TemporaryDirectory() as tmp_dir:
+            destination = Path(tmp_dir) / "client-examples"
+            with (
+                patch(
+                    "sys.argv",
+                    ["lucidum", "--sync-examples", str(destination), "--dry-run"],
+                ),
+                redirect_stdout(stdout),
+            ):
+                result = main()
+
+            self.assertFalse(destination.exists())
+
+        self.assertEqual(result, 0)
+        self.assertIn("10 to create", stdout.getvalue())
+
+    def test_main_sync_examples_reports_invalid_destination(self) -> None:
+        stderr = io.StringIO()
+
+        with TemporaryDirectory() as tmp_dir:
+            destination = Path(tmp_dir) / "not-a-directory"
+            destination.write_text("client file\n", encoding="utf-8")
+            with (
+                patch("sys.argv", ["lucidum", "--sync-examples", str(destination)]),
+                redirect_stderr(stderr),
+                self.assertRaises(SystemExit) as exit_context,
+            ):
+                main()
+
+        self.assertEqual(exit_context.exception.code, 1)
+        self.assertIn("Example script destination is not a directory", stderr.getvalue())
+        self.assertNotIn("Traceback", stderr.getvalue())
+
+    def test_main_dry_run_requires_sync_examples(self) -> None:
+        stderr = io.StringIO()
+
+        with (
+            patch("sys.argv", ["lucidum", "--dry-run"]),
+            redirect_stderr(stderr),
+            self.assertRaises(SystemExit) as exit_context,
+        ):
+            main()
+
+        self.assertEqual(exit_context.exception.code, 2)
+        self.assertIn("--dry-run requires --sync-examples", stderr.getvalue())
+
     def test_main_rejects_demo_with_path(self) -> None:
         stdout = io.StringIO()
         stderr = io.StringIO()

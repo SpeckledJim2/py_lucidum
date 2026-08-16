@@ -34,7 +34,7 @@ FAMILY_PARAMETER_DEFAULTS = {
     "tweedie": 1.5,
     "negative.binomial": 1.0,
 }
-TRAINING_SCOPES = ("all", "training")
+TRAINING_SCOPES = ("all", "training", "training_test")
 REGULARIZATION_MODES = ("none", "auto", "manual")
 REGULARIZATION_MIXES = {
     "ridge": 0.0,
@@ -154,8 +154,17 @@ def normalise_family(value: Any) -> str:
 def normalise_training_scope(value: Any) -> str:
     scope = str(value or "all").strip().lower()
     if scope not in TRAINING_SCOPES:
-        raise ValueError("Choose whether to fit all rows or training rows")
+        raise ValueError("Choose whether to fit All, Training, or Training + Test rows")
     return scope
+
+
+def training_scope_sample_values(scope: Any) -> tuple[str, ...]:
+    normalized = normalise_training_scope(scope)
+    if normalized == "training":
+        return ("training",)
+    if normalized == "training_test":
+        return ("training", "test")
+    return ()
 
 
 def normalise_denominator(value: Any) -> str:
@@ -697,12 +706,14 @@ def sample_metadata(dataset: Dataset) -> dict[str, Any]:
             "available": False,
             "column": None,
             "training_rows": 0,
+            "test_rows": 0,
             "non_training_rows": 0,
         }
     column_sql = quote_ident(sample_column)
     sql = f"""
 SELECT
   SUM(CASE WHEN LOWER(TRIM(CAST({column_sql} AS VARCHAR))) = 'training' THEN 1 ELSE 0 END) AS training_rows,
+  SUM(CASE WHEN LOWER(TRIM(CAST({column_sql} AS VARCHAR))) = 'test' THEN 1 ELSE 0 END) AS test_rows,
   SUM(CASE WHEN LOWER(TRIM(CAST({column_sql} AS VARCHAR))) != 'training' OR {column_sql} IS NULL THEN 1 ELSE 0 END) AS non_training_rows
 FROM {dataset.relation_sql()}
 """
@@ -712,7 +723,8 @@ FROM {dataset.relation_sql()}
         "available": True,
         "column": sample_column,
         "training_rows": int(row[0] or 0),
-        "non_training_rows": int(row[1] or 0),
+        "test_rows": int(row[1] or 0),
+        "non_training_rows": int(row[2] or 0),
     }
 
 
@@ -770,11 +782,13 @@ def validate_request(dataset: Dataset, payload: dict[str, Any]) -> dict[str, Any
             errors.append("Choose a numeric denominator column")
 
     sample = sample_metadata(dataset)
-    if training_scope == "training":
+    if training_scope in {"training", "training_test"}:
         if not sample["available"]:
-            errors.append("Training rows require a physical SAMPLE column")
+            errors.append("Restricted training rows require a physical SAMPLE column")
         elif not sample["training_rows"]:
             errors.append("No rows have SAMPLE = training")
+        elif training_scope == "training_test" and not sample["test_rows"]:
+            errors.append("No rows have SAMPLE = test")
 
     result: dict[str, Any] = {
         "ok": not errors,

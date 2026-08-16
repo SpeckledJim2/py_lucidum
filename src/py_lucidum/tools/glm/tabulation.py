@@ -35,7 +35,7 @@ from .training import (
     offset_values_for_frame,
     write_dataframe_parquet,
 )
-from .validation import TARGET_COLUMN, parse_formula, top_level_formula_terms
+from .validation import TARGET_COLUMN, parse_formula, top_level_formula_terms, training_scope_sample_values
 
 
 ProgressCallback = Callable[[dict[str, Any]], None]
@@ -119,9 +119,10 @@ def _sample_column_from_columns(columns: list[str]) -> str:
 
 def _fit_frame_for_levels(frame: Any, manifest: dict[str, Any], pd: Any) -> Any:
     sample_column = _sample_column_from_columns([str(column) for column in frame.columns])
-    training_scope = str(manifest.get("training_scope") or "all")
-    if training_scope == "training" and sample_column and sample_column in frame.columns:
-        return frame.loc[frame[sample_column].astype(str).str.strip().str.lower() == "training"].copy()
+    sample_values = training_scope_sample_values(manifest.get("training_scope") or "all")
+    if sample_values and sample_column and sample_column in frame.columns:
+        normalized = frame[sample_column].astype(str).str.strip().str.lower()
+        return frame.loc[normalized.isin(sample_values)].copy()
     return frame
 
 
@@ -136,7 +137,7 @@ def _required_tabulation_columns(
     if denominator_column:
         requested.add(denominator_column)
     sample_column = _sample_column_from_columns(source_columns)
-    if str(manifest.get("training_scope") or "all") == "training" and sample_column:
+    if training_scope_sample_values(manifest.get("training_scope") or "all") and sample_column:
         requested.add(sample_column)
     for expression in offset_terms:
         requested.update(_column_tokens(expression, source_columns))

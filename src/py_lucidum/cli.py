@@ -5,6 +5,7 @@ import asyncio
 import ipaddress
 import secrets
 import socket
+import sys
 import threading
 import webbrowser
 from collections.abc import Callable, Sequence
@@ -17,6 +18,7 @@ from ._version import __version__
 from .app import create_app
 from .app.servers import safe_display_url
 from .demo import demo_dataset_path, demo_feature_spec_path, demo_filter_spec_path, demo_kpi_spec_path
+from .example_sync import format_example_sync_result, sync_example_scripts
 
 
 DEFAULT_URL_KEYS = {
@@ -41,6 +43,34 @@ DEFAULT_SPEC_CANDIDATES = {
 }
 
 DEMO_TITLE_PREFIX = "Lucidum Demo Dataset"
+
+
+def _example_sync_requested(argv: Sequence[str]) -> bool:
+    return any(argument == "--sync-examples" or argument.startswith("--sync-examples=") for argument in argv)
+
+
+def _run_example_sync(argv: Sequence[str]) -> int:
+    parser = argparse.ArgumentParser(
+        description="Copy Lucidum's maintained external-workflow Python scripts to a directory."
+    )
+    parser.add_argument(
+        "--sync-examples",
+        required=True,
+        metavar="PATH",
+        help="Directory in which to create or overwrite the maintained example Python scripts.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="List the changes without writing any files.",
+    )
+    args = parser.parse_args(argv)
+    try:
+        result = sync_example_scripts(args.sync_examples, dry_run=args.dry_run)
+    except (OSError, ValueError) as error:
+        parser.exit(1, f"lucidum: error: {error}\n")
+    print(format_example_sync_result(result), flush=True)
+    return 0
 
 
 class LucidumServer(uvicorn.Server):
@@ -443,10 +473,25 @@ def features_status(app: object) -> str:
 
 
 def main() -> int:
+    argv = sys.argv[1:]
+    if _example_sync_requested(argv):
+        return _run_example_sync(argv)
+
     parser = argparse.ArgumentParser(
         description="Launch py_lucidum for a local CSV file, Parquet file, Parquet folder, or bundled demo file."
     )
     parser.add_argument("--version", action="version", version=f"lucidum {__version__}")
+    maintenance_group = parser.add_argument_group("example maintenance")
+    maintenance_group.add_argument(
+        "--sync-examples",
+        metavar="PATH",
+        help="Create or overwrite Lucidum's maintained example Python scripts in PATH, then exit.",
+    )
+    maintenance_group.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="With --sync-examples, list changes without writing files.",
+    )
     parser.add_argument(
         "path",
         nargs="?",
@@ -510,6 +555,8 @@ def main() -> int:
         help="Comma-separated app tabs to load exactly as specified, or 'all' for every tab. Omit to load normal tabs except GLM/GBM. GLM and GBM require line-bar.",
     )
     args = parser.parse_args()
+    if args.dry_run:
+        parser.error("--dry-run requires --sync-examples")
     if args.demo and args.path:
         parser.error("choose either a dataset path or --demo, not both")
     if not args.demo and not args.path:
