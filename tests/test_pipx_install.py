@@ -12,12 +12,21 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from urllib.request import urlopen
 
-from py_lucidum.example_sync import EXAMPLE_SCRIPT_NAMES
-
-
 RUN_PIPX_INSTALL_TESTS = os.environ.get("PY_LUCIDUM_RUN_PIPX_INSTALL_TESTS") == "1"
 PIPX_SPEC_ENV = "PY_LUCIDUM_PIPX_SPEC"
 EXPECTED_VERSION_ENV = "PY_LUCIDUM_EXPECTED_VERSION"
+EXPECTED_EXAMPLE_SCRIPT_NAMES = (
+    "01_external_gbm_artifacts_demo.py",
+    "01_external_glm_artifacts_demo.py",
+    "02_external_gbm_report_demo.py",
+    "02_external_glm_report_demo.py",
+    "03_external_gbm_summary_report_demo.py",
+    "03_external_glm_summary_report_demo.py",
+    "external_model_helpers.py",
+    "external_model_results.py",
+    "external_report_helpers.py",
+    "lucidum_install.py",
+)
 
 
 class PipxInstallTests(unittest.TestCase):
@@ -61,7 +70,7 @@ class PipxInstallTests(unittest.TestCase):
         force_include = pyproject["tool"]["hatch"]["build"]["targets"]["wheel"]["force-include"]
         expected = {
             f"examples/{name}": f"py_lucidum/example_workflows/{name}"
-            for name in EXAMPLE_SCRIPT_NAMES
+            for name in EXPECTED_EXAMPLE_SCRIPT_NAMES
         }
 
         self.assertEqual(
@@ -153,9 +162,14 @@ class PipxInstallTests(unittest.TestCase):
             )
             self.assertEqual(
                 sorted(path.name for path in synced_examples.iterdir()),
-                sorted(EXAMPLE_SCRIPT_NAMES),
+                sorted(EXPECTED_EXAMPLE_SCRIPT_NAMES),
             )
-            self.assertTrue(all(synced_examples.joinpath(name).stat().st_size > 0 for name in EXAMPLE_SCRIPT_NAMES))
+            self.assertTrue(
+                all(
+                    synced_examples.joinpath(name).stat().st_size > 0
+                    for name in EXPECTED_EXAMPLE_SCRIPT_NAMES
+                )
+            )
 
             with socket.socket() as sock:
                 sock.bind(("127.0.0.1", 0))
