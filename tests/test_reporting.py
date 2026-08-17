@@ -140,6 +140,102 @@ class ReportingTests(unittest.TestCase):
             self.assertEqual(payload["charts"][0]["presentation"]["content"], "actual_expected")
             self.assertEqual(len(payload["charts"][0]["data"]["rows"]), 2)
 
+    def test_line_bar_chart_serializes_optional_kpi_formats(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            dataset_path = root / "data.csv"
+            dataset_path.write_text(
+                "X,Y,E,W,SAMPLE\n"
+                "A,10,12,2,validation\n"
+                "B,20,18,4,validation\n",
+                encoding="utf-8",
+            )
+            currency_chart = None
+            cases = (
+                ("number", 1, "N", None),
+                ("currency", 2, "W", "W"),
+                ("percent", 1, "Average row value", None),
+            )
+            for value_format, decimals, spec_denominator, chart_denominator in cases:
+                with self.subTest(value_format=value_format, denominator=spec_denominator):
+                    kpi_path = root / f"{value_format}.csv"
+                    kpi_path.write_text(
+                        "group,name,actual,denominator,decimals,format\n"
+                        f"REPORT,Response,Y,{spec_denominator},{decimals},{value_format}\n",
+                        encoding="utf-8",
+                    )
+                    chart = line_bar_chart(
+                        dataset_path,
+                        x="X",
+                        actual="Y",
+                        expected="E",
+                        denominator=chart_denominator,
+                        sample_values=["validation"],
+                        kpi_spec=kpi_path,
+                    )
+                    self.assertEqual(
+                        chart["presentation"]["kpiFormat"],
+                        {"decimals": decimals, "format": value_format},
+                    )
+                    if value_format == "currency":
+                        currency_chart = chart
+
+            unformatted = line_bar_chart(
+                dataset_path,
+                x="X",
+                actual="Y",
+                expected="E",
+                sample_values=["validation"],
+            )
+            self.assertNotIn("kpiFormat", unformatted["presentation"])
+
+            output_path = root / "formatted.html"
+            write_echarts_report([currency_chart], output_path, title="Formatted report")
+            document = output_path.read_text(encoding="utf-8")
+            match = re.search(
+                r'<script id="lucidum-report-data" type="application/json">(.*?)</script>',
+                document,
+                flags=re.DOTALL,
+            )
+            self.assertIsNotNone(match)
+            payload = json.loads(match.group(1))
+            self.assertEqual(
+                payload["charts"][0]["presentation"]["kpiFormat"],
+                {"decimals": 2, "format": "currency"},
+            )
+
+    def test_line_bar_chart_rejects_unusable_supplied_kpi_specs(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            dataset_path = root / "data.csv"
+            dataset_path.write_text(
+                "X,Y,E,SAMPLE\nA,10,12,validation\n",
+                encoding="utf-8",
+            )
+            common = {
+                "x": "X",
+                "actual": "Y",
+                "expected": "E",
+                "sample_values": ["validation"],
+            }
+
+            with self.assertRaisesRegex(FileNotFoundError, "does not exist"):
+                line_bar_chart(dataset_path, **common, kpi_spec=root / "missing.csv")
+
+            malformed_path = root / "malformed.csv"
+            malformed_path.write_text("wrong,columns\n1,2\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "must have exactly these columns"):
+                line_bar_chart(dataset_path, **common, kpi_spec=malformed_path)
+
+            mismatch_path = root / "mismatch.csv"
+            mismatch_path.write_text(
+                "group,name,actual,denominator,decimals,format\n"
+                "REPORT,Other response,OTHER,N,0,number\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "no row for Actual 'Y'"):
+                line_bar_chart(dataset_path, **common, kpi_spec=mismatch_path)
+
     def test_report_filename_is_stable_and_readable(self) -> None:
         self.assertEqual(
             report_filename("/tmp/Motor Premiums.parquet", "GBM", "All rows - rebased SHAP"),

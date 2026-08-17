@@ -53,6 +53,12 @@ def load_report_settings(path: Path, model_type: str) -> tuple[dict[str, Any], l
 
     dataset_path = _resolve(build_path.parent, build_config["dataset"]["path"])
     feature_spec_path = _resolve(path.parent, report_config["features"]["spec_path"])
+    kpi_spec_value = report_config.get("kpi_spec")
+    kpi_spec_path = (
+        _resolve(path.parent, kpi_spec_value)
+        if kpi_spec_value is not None and str(kpi_spec_value).strip()
+        else None
+    )
     output_directory = _resolve(path.parent, report_config["output"]["directory"])
     scenario = str(report_config["features"]["scenario_column"])
     feature_rows = _read_feature_spec(feature_spec_path, scenario)
@@ -112,6 +118,7 @@ def load_report_settings(path: Path, model_type: str) -> tuple[dict[str, Any], l
         "expected_label": str(report_config["chart"].get("expected_label") or "Expected"),
         "expected_source": str(report_config["chart"].get("expected_source") or model_type),
         "feature_spec_path": feature_spec_path,
+        "kpi_spec_path": kpi_spec_path,
         "scenario": scenario,
         "reports": reports,
         "output_directory": output_directory,
@@ -329,6 +336,8 @@ def report_header(settings: dict[str, Any], report: dict[str, Any], script_file:
     }
     if report["show_feature_importance"] or report["sort_by_feature_importance"]:
         header["importance measure"] = settings["importance_measure"]
+    if settings["kpi_spec_path"] is not None:
+        header["KPI spec"] = settings["kpi_spec_path"].name
     return header
 
 

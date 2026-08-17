@@ -37,7 +37,7 @@ export function lineBarChartOption(data, options = {}) {
   const theme = { ...DEFAULT_THEME, ...(presentation.themeColors || {}) };
   const transform = String(data?.transform?.mode || presentation.transform || "none");
   const formatNumber = presentation.formatNumber || defaultNumberFormatter;
-  const formatResponse = presentation.formatResponse || responseFormatter(transform);
+  const formatResponse = presentation.formatResponse || responseFormatter(transform, presentation.kpiFormat);
   const escapeHtml = presentation.escapeHtml || escapeHtmlText;
   const labels = presentation.labelsArray || rows.map((row) => formatXValue(row, data, formatNumber));
   const labelMode = String(presentation.labels || "none");
@@ -603,8 +603,27 @@ function seriesValue(params) {
   return Array.isArray(params?.value) ? params.value[1] : params?.value;
 }
 
-function responseFormatter(transform) {
-  return transform === "one" ? formatUpliftPercent : defaultNumberFormatter;
+function responseFormatter(transform, kpiFormat = null) {
+  if (transform === "one") return formatUpliftPercent;
+  return kpiFormat ? (value) => formatKpiValue(value, kpiFormat) : defaultNumberFormatter;
+}
+
+function formatKpiValue(value, kpiFormat) {
+  if (value === null || value === undefined || Number.isNaN(value)) return "";
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "";
+  const decimals = Number(kpiFormat?.decimals);
+  const fractionDigits = Number.isInteger(decimals) ? Math.max(0, Math.min(12, decimals)) : 2;
+  const valueFormat = String(kpiFormat?.format || "number").toLowerCase();
+  const displayNumber = valueFormat === "percent" ? number * 100 : number;
+  const formatted = Math.abs(displayNumber).toLocaleString(undefined, {
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits,
+  });
+  const sign = displayNumber < 0 ? "-" : "";
+  if (valueFormat === "currency") return `${sign}£${formatted}`;
+  const signed = `${sign}${formatted}`;
+  return valueFormat === "percent" ? `${signed}%` : signed;
 }
 
 function formatUpliftPercent(value) {

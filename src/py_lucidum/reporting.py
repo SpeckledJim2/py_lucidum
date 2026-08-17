@@ -12,7 +12,7 @@ from typing import Any
 from uuid import uuid4
 
 from py_lucidum._version import __version__
-from py_lucidum.core import Dataset, is_numeric_kind, load_features, quote_ident, sql_literal
+from py_lucidum.core import Dataset, is_numeric_kind, load_features, load_kpis, quote_ident, sql_literal
 
 
 REPORT_CONTENT_VALUES = {"actual_expected", "shap_only"}
@@ -45,13 +45,15 @@ def line_bar_chart(
     transform: str | None = None,
     partial_dependence: str = "none",
     feature_spec: str | Path | Mapping[str, Any] | None = None,
+    kpi_spec: str | Path | None = None,
     title: str | None = None,
 ) -> dict[str, Any]:
     """Build one static Line/Bar chart specification without starting Lucidum.
 
     The returned dictionary is deliberately consumed by
     :func:`write_echarts_report`; callers do not need to understand Lucidum's
-    internal request or ECharts payload formats.
+    internal request or ECharts payload formats.  When ``kpi_spec`` is supplied,
+    its exact Actual/Denominator match controls response-value formatting.
     """
 
     path = Path(dataset_path).expanduser().resolve()
@@ -69,6 +71,17 @@ def line_bar_chart(
         raise ValueError(f"{partial_dependence.upper()} partial dependence requires a model ID")
     if expected_source in {"glm", "gbm"} and not str(model_id or "").strip():
         raise ValueError(f"{expected_source.upper()} Expected values require a model ID")
+
+    kpi_spec_path = None
+    kpi = None
+    if kpi_spec is not None and str(kpi_spec).strip():
+        kpi_spec_path = Path(kpi_spec).expanduser().resolve()
+        kpi = _matching_kpi(
+            load_kpis(kpi_spec_path),
+            actual,
+            str(denominator or "").strip(),
+            kpi_spec_path,
+        )
 
     dataset = Dataset(path)
     try:
@@ -169,6 +182,16 @@ def line_bar_chart(
                 "transform": settings["transform"],
                 "sigma": settings["sigma"],
                 "theme": "light",
+                **(
+                    {
+                        "kpiFormat": {
+                            "decimals": int(kpi["decimals"]),
+                            "format": str(kpi["format"]),
+                        }
+                    }
+                    if kpi is not None
+                    else {}
+                ),
             },
             "metadata": {
                 "feature": x,
@@ -421,7 +444,7 @@ def write_glm_summary_report(
         if len({value.lower() for value in sample_values.values()}) != 3:
             raise ValueError("Training, Test, and Validation sample values must be distinct")
         _require_column(dataset.column_map(), resolved_sample_column, "SAMPLE")
-        kpi = _glm_summary_kpi(load_kpis(kpi_spec_path), response, denominator, Path(kpi_spec_path))
+        kpi = _matching_kpi(load_kpis(kpi_spec_path), response, denominator, Path(kpi_spec_path))
         performance = _glm_performance(
             dataset,
             store.artifact_path(model_id, "predictions"),
@@ -1168,7 +1191,7 @@ def _weighted_auc(y: Any, prediction: Any, weights: Any) -> float | None:
     return concordance / (total_positive * total_negative)
 
 
-def _glm_summary_kpi(
+def _matching_kpi(
     kpis: Sequence[Mapping[str, Any]],
     response: str,
     denominator: str,

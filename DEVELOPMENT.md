@@ -96,7 +96,10 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
   - The 02 report scripts do import the public reporting functions. They pass
     the exact `model_results_root/<type>/<model-id>` folder from the 01 config,
     do not start the app, and write self-contained static-data HTML with the
-    shared Line/Bar renderer.
+    shared Line/Bar renderer. Their optional config-relative `kpi_spec` is
+    matched exactly on Actual/Denominator and serialized into chart presentation
+    metadata; omission retains generic numeric formatting, while transform `one`
+    continues to use uplift percentages.
   - The 03 GBM summary script names the exact model ID from the 01 config and
     writes eligible split performance, KPI-formatted Actual/prediction values,
     SHAP-preferred whole-model importance, parameters, and saved evaluation

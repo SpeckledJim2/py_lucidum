@@ -1,4 +1,5 @@
 build_config: config_gbm.yaml
+kpi_spec: ../specs/kpi_spec.csv
 
 features:
   spec_path: ../specs/feature_spec.csv

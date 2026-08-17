@@ -49,6 +49,7 @@ for report in settings["reports"]:
             transform=report["transform"],
             partial_dependence=report["partial_dependence"],
             feature_spec=settings["feature_spec_path"],
+            kpi_spec=settings["kpi_spec_path"],
             title=feature["title"],
         )
         charts.append(chart)

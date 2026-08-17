@@ -220,6 +220,7 @@ def write_report_configs(root: Path) -> tuple[Path, Path, Path, Path]:
         "empty_periods": "show",
     }
     common = {
+        "kpi_spec": "kpi_spec.csv",
         "features": {"spec_path": "feature_spec.csv", "scenario_column": "report_demo"},
         "chart_defaults": defaults,
         "output": {"directory": "reports"},
@@ -402,6 +403,71 @@ class ExternalModelExampleTests(unittest.TestCase):
                     with patch.object(sys, "argv", [str(script), str(explicit_config)]):
                         command_path = helpers.config_path_from_command_line(str(script), default_name)
                     self.assertEqual(command_path, explicit_config.resolve())
+
+    def test_report_settings_resolve_optional_config_relative_kpi_spec(self) -> None:
+        import yaml
+
+        helpers = load_report_helpers()
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            specs = root / "specs"
+            specs.mkdir()
+            feature_path = specs / "features.csv"
+            feature_path.write_text(
+                "Feature,Grouping,report\nX,TEST,feature\n",
+                encoding="utf-8",
+            )
+            kpi_path = specs / "kpis.csv"
+            kpi_path.write_text(
+                "group,name,actual,denominator,decimals,format\n"
+                "REPORT,Response,Y,N,2,currency\n",
+                encoding="utf-8",
+            )
+            build_path = root / "build.yaml"
+            build_path.write_text(
+                yaml.safe_dump(
+                    {
+                        "dataset": {
+                            "path": "data.csv",
+                            "response_numerator": "Y",
+                            "denominator": None,
+                            "sample_column": "SAMPLE",
+                        },
+                        "model": {"id": "report-model", "label": "Report model"},
+                        "output": {"model_results_root": "model-results"},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            report_payload = {
+                "build_config": build_path.name,
+                "kpi_spec": "specs/kpis.csv",
+                "features": {"spec_path": "specs/features.csv", "scenario_column": "report"},
+                "chart": {"expected": "E", "expected_source": "dataset"},
+                "reports": [{"name": "report", "sample_values": "all"}],
+                "output": {"directory": "reports"},
+            }
+            report_path = root / "report.yaml"
+            report_path.write_text(yaml.safe_dump(report_payload, sort_keys=False), encoding="utf-8")
+
+            with patch.object(
+                helpers,
+                "_model_details",
+                return_value=(root / "model-results" / "glm" / "report-model", None),
+            ):
+                settings, _ = helpers.load_report_settings(report_path, "glm")
+            self.assertEqual(settings["kpi_spec_path"], kpi_path.resolve())
+
+            report_payload.pop("kpi_spec")
+            report_path.write_text(yaml.safe_dump(report_payload, sort_keys=False), encoding="utf-8")
+            with patch.object(
+                helpers,
+                "_model_details",
+                return_value=(root / "model-results" / "glm" / "report-model", None),
+            ):
+                legacy_settings, _ = helpers.load_report_settings(report_path, "glm")
+            self.assertIsNone(legacy_settings["kpi_spec_path"])
 
     def test_external_workflows_do_not_read_undefined_file_in_code_cells(self) -> None:
         scripts = (
@@ -1251,6 +1317,9 @@ FROM read_parquet({sql_literal(str(glm_dir / 'coefficients.parquet'))})
             self.assertEqual(glm_report["metadata"]["model"], str(glm_dir.resolve()))
             self.assertEqual(gbm_report["metadata"]["model"], str(gbm_dir.resolve()))
             self.assertEqual(shap_report["metadata"]["model"], str(gbm_dir.resolve()))
+            self.assertEqual(glm_report["metadata"]["KPI spec"], "kpi_spec.csv")
+            self.assertEqual(gbm_report["metadata"]["KPI spec"], "kpi_spec.csv")
+            self.assertEqual(shap_report["metadata"]["KPI spec"], "kpi_spec.csv")
             self.assertEqual(summary_report["metadata"]["model"], str(gbm_dir.resolve()))
             self.assertEqual(glm_summary_report["metadata"]["model"], str(glm_dir.resolve()))
             self.assertEqual(
@@ -1418,6 +1487,10 @@ FROM read_parquet({sql_literal(str(glm_dir / 'coefficients.parquet'))})
                 self.assertEqual(chart_spec["metadata"]["model_id"], GLM_MODEL_ID)
                 self.assertEqual(chart_spec["presentation"]["content"], "actual_expected")
                 self.assertEqual(chart_spec["presentation"]["sigma"], 2)
+                self.assertEqual(
+                    chart_spec["presentation"]["kpiFormat"],
+                    {"decimals": 0, "format": "currency"},
+                )
                 self.assertEqual(chart_spec["data"]["partial_dependence"]["model_id"], GLM_MODEL_ID)
                 self.assertTrue(chart_spec["data"]["partial_dependence"]["rows"])
             for chart_spec in gbm_report["charts"]:
@@ -1425,6 +1498,10 @@ FROM read_parquet({sql_literal(str(glm_dir / 'coefficients.parquet'))})
                 self.assertEqual(chart_spec["metadata"]["selected_rows"], 350)
                 self.assertEqual(chart_spec["presentation"]["content"], "actual_expected")
                 self.assertEqual(chart_spec["presentation"]["sigma"], 2)
+                self.assertEqual(
+                    chart_spec["presentation"]["kpiFormat"],
+                    {"decimals": 0, "format": "currency"},
+                )
                 self.assertNotIn("partial_dependence", chart_spec["data"])
             for chart_spec in shap_report["charts"]:
                 overlay = chart_spec["data"]["partial_dependence"]
@@ -1433,6 +1510,10 @@ FROM read_parquet({sql_literal(str(glm_dir / 'coefficients.parquet'))})
                 self.assertEqual(chart_spec["presentation"]["content"], "shap_only")
                 self.assertEqual(chart_spec["presentation"]["sigma"], 0)
                 self.assertEqual(chart_spec["presentation"]["transform"], "one")
+                self.assertEqual(
+                    chart_spec["presentation"]["kpiFormat"],
+                    {"decimals": 0, "format": "currency"},
+                )
                 self.assertEqual(overlay["model_id"], GBM_MODEL_ID)
                 self.assertEqual(overlay["transform"]["mode"], "one")
                 self.assertEqual(overlay["transform"]["reference"], "base")

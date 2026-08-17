@@ -58,7 +58,7 @@ For your own analysis, copy and edit these inputs:
 - The GLM formula text file.
 - The Feature Specification CSV used to choose model features and report
   charts.
-- The KPI Specification CSV used to format values in summary reports.
+- The KPI Specification CSV used to format values in chart and summary reports.
 - Your source CSV or Parquet data, including the required sample column.
 
 The numbered scripts read those settings and perform the work. They are kept
@@ -104,6 +104,11 @@ without writing anything by adding `--dry-run`:
 ```bash
 lucidum --sync-examples /path/to/client/examples --dry-run
 ```
+
+Because client YAML is deliberately preserved, existing `02` report configs can
+opt in to KPI formatting after a sync by adding a config-relative path such as
+`kpi_spec: ../specs/kpi_spec.csv`. Configs without that entry remain valid and
+keep generic numeric chart formatting.
 
 The same sync command works after upgrading Lucidum in a normal virtual environment.
 
@@ -351,6 +356,8 @@ model happens to be active in Lucidum.
 `config_glm_report.yaml` and `config_gbm_report.yaml` contain:
 
 - `build_config` — YAML used for the corresponding `01` build.
+- `kpi_spec` — optional, config-relative KPI Specification CSV used to format
+  response values.
 - `features.spec_path` — Feature Specification CSV.
 - `features.scenario_column` — scenario choosing which features become charts.
 - `chart.expected` — prediction or other numeric column used as Expected.
@@ -378,6 +385,13 @@ The supplied reports demonstrate:
   partial-dependence line.
 - GBM Actual versus Expected on Validation, with two-sigma bars.
 - GBM SHAP-only charts on all rows, rebased to 1 and with no error bars.
+
+When `kpi_spec` is supplied, its first exact Actual/Denominator match controls
+response-axis ticks, Actual/Expected labels, and tooltips using Lucidum's fixed
+decimal, `number`, `currency`, or `percent` formatting. The report fails clearly
+if the supplied file is missing, malformed, or has no exact match. Omitting the
+setting preserves the historical generic numeric formatting, and rebased-to-one
+charts always use uplift percentages.
 
 Each report header records the full source-data and model-folder paths, the
 response, denominator, Expected column, included sample rows, configurations,
@@ -555,8 +569,9 @@ outputs and are ignored by Git.
 The numbered report scripts are usually the simplest interface. If you are
 writing a different Python workflow, the same public functions are available:
 
-- `py_lucidum.line_bar_chart(..., model_folder=...)` prepares one serializable
-  Line/Bar chart from an exact saved model folder.
+- `py_lucidum.line_bar_chart(..., model_folder=..., kpi_spec=...)` prepares one
+  serializable Line/Bar chart from an exact saved model folder, with optional
+  KPI-spec response formatting.
 - `py_lucidum.write_echarts_report(...)` combines charts into a self-contained
   HTML report.
 - `py_lucidum.report_filename(...)` creates the standard output filename.

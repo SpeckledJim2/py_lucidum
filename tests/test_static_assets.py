@@ -212,6 +212,31 @@ const glmNames = glm.series.map((series) => series.name);
 if (!glmNames.includes("Actual") || !glmNames.includes("GBM prediction") || !glmNames.includes("Weight") || !glmNames.includes("GLM")) throw new Error(glmNames.join("|"));
 if (glm.yAxis.length !== 2) throw new Error("A/E needs a response and weight axis");
 
+const currency = lineBarChartOption({{
+  ...base,
+  transform: {{ mode: "none" }},
+}}, {{ content: "actual_expected", labels: "line", kpiFormat: {{ decimals: 2, format: "currency" }} }}).option;
+if (currency.yAxis[0].axisLabel.formatter(-12.5) !== "-£12.50") throw new Error("currency y-axis formatting failed");
+if (currency.series.find((series) => series.name === "Actual").label.formatter({{ value: 12.5 }}) !== "£12.50") throw new Error("currency line-label formatting failed");
+const currencyTooltip = currency.tooltip.formatter([
+  {{ axisValueLabel: "20", seriesName: "Actual", value: 12.5, marker: "" }},
+  {{ axisValueLabel: "20", seriesName: "Weight", value: 10, marker: "" }},
+]);
+if (!currencyTooltip.includes("Actual: £12.50") || !currencyTooltip.includes("Weight: 10")) throw new Error(currencyTooltip);
+if (currency.yAxis[1].axisLabel.formatter(12.5).includes("£")) throw new Error("Weight must keep generic formatting");
+
+const percent = lineBarChartOption({{
+  ...base,
+  transform: {{ mode: "none" }},
+}}, {{ content: "actual_expected", kpiFormat: {{ decimals: 1, format: "percent" }} }}).option;
+if (percent.yAxis[0].axisLabel.formatter(0.125) !== "12.5%") throw new Error("percent y-axis formatting failed");
+
+const upliftWithKpi = lineBarChartOption({{
+  ...base,
+  transform: {{ mode: "one" }},
+}}, {{ content: "actual_expected", kpiFormat: {{ decimals: 2, format: "currency" }} }}).option;
+if (upliftWithKpi.yAxis[0].axisLabel.formatter(1.25) !== "+25%") throw new Error("uplift formatting must override KPI formatting");
+
 const shapRows = [
   {{ x: "20", p0: .7, p5: .75, p10: .8, p20: .85, p30: .9, p40: .95, p50: 1, p60: 1.05, p70: 1.1, p80: 1.15, p90: 1.2, p95: 1.25, p100: 1.3 }},
   {{ x: "30", p0: .8, p5: .82, p10: .84, p20: .88, p30: .92, p40: .97, p50: 1.02, p60: 1.07, p70: 1.12, p80: 1.18, p90: 1.24, p95: 1.28, p100: 1.35 }},
