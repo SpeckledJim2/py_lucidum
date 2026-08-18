@@ -277,6 +277,65 @@ COPY (
         self.assertEqual(payload["denominator"]["value"], 100)
         self.assertEqual(payload["response_summaries"][0]["value"], 10)
 
+    def test_sector_smoothing_sidecar_uses_prediction_denominator(self) -> None:
+        app = create_app(
+            self.data_path,
+            token="",
+            tools=["uk_map"],
+            use_saved_filters=False,
+            use_kpis=False,
+        )
+        app.state.dataset.register_data_source_provider(
+            PredictionProvider(self.dataset.model_prediction_source(MODEL_SOURCE))
+        )
+
+        status, payload = asgi_post_json(
+            app,
+            "/api/uk-map/sector-smoothing",
+            {
+                "source": "dataset",
+                "level": "sector",
+                "numerator": "Actual",
+                **self.denominator_fields(),
+                "filter": "",
+            },
+        )
+
+        self.assertEqual(status, 200)
+        con = duckdb.connect(database=":memory:")
+        try:
+            row = con.execute(
+                f"SELECT numerator_sum, denominator_sum, unsmoothed "
+                f"FROM read_parquet({sql_literal(payload['path'])}) "
+                "WHERE postcode_sector = 'AB10 1'"
+            ).fetchone()
+        finally:
+            con.close()
+        self.assertEqual(row, (300, 30, 10))
+
+        status, payload = asgi_post_json(
+            app,
+            "/api/uk-map/sector-smoothing",
+            {
+                "source": MODEL_SOURCE,
+                "level": "sector",
+                "numerator": "gbm_prediction",
+                "denominator": "__none__",
+                "filter": "",
+            },
+        )
+        self.assertEqual(status, 200)
+        con = duckdb.connect(database=":memory:")
+        try:
+            model_row = con.execute(
+                f"SELECT numerator_sum, denominator_sum, unsmoothed "
+                f"FROM read_parquet({sql_literal(payload['path'])}) "
+                "WHERE postcode_sector = 'AB10 1'"
+            ).fetchone()
+        finally:
+            con.close()
+        self.assertEqual(model_row, (30, 2, 15))
+
     def test_mixed_model_response_and_denominator_sources_join_once(self) -> None:
         glm_source_id = "glm:model-numerator:predictions"
         prediction_path = self.root / "glm_predictions.parquet"

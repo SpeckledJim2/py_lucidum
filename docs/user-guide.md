@@ -495,7 +495,8 @@ Set the active metric and filter, then choose Area, Sector, or Units in UK Mappi
 Configure the postcode fields at launch when the recognised defaults are unavailable.
 
 **In this section:** [Postcode columns](#postcode-columns) ·
-[Area and sector maps](#area-and-sector-maps) · [Unit maps](#unit-maps) ·
+[Area and sector maps](#area-and-sector-maps) ·
+[Smoothing Parquet exports](#smoothing-parquet-exports) · [Unit maps](#unit-maps) ·
 [Search, filtering, and saved views](#search-filtering-and-saved-views)
 
 ### Postcode columns
@@ -535,6 +536,27 @@ geometry that can be drawn.
 ![Lucidum UK Postcode Area map](https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/postcode_area.png)
 
 ![Lucidum UK Postcode Sector map](https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/postcode_sector_light.png)
+
+### Smoothing Parquet exports
+
+In Sector mode, choose **-> .parquet** beside the **Smooth** heading to create a
+reusable table for the active Numerator, Denominator, and global filter. The map
+calculates only the selected smoothing depth while you explore it; saving deliberately
+calculates all five depths, regardless of which one is displayed. A temporary popup
+reports the result with a compact filename while retaining the absolute path as its
+accessible detail. Saving does not redraw or refresh the map.
+
+Lucidum stores the generated file under the current dataset-version workspace:
+
+```text
+.lucidum/datasets/<dataset-slug>/<dataset-signature>/uk_map/sector_smoothing/
+```
+
+The readable filename includes a 12-character identity for the complete source,
+metric, postcode column, and normalized filter specification. Repeating an identical
+save atomically replaces that artifact; changing the filter or metric creates a
+different file. The Parquet is a standalone result and does not appear as another
+Lucidum data source.
 
 ### Unit maps
 
@@ -1042,6 +1064,56 @@ app = create_app(
 py_lucidum.run_app(app, host="127.0.0.1", port=8000, open_browser=True)
 ```
 
+### Postcode-sector smoothing
+
+`smooth_postcode_sectors()` runs the same smoothing implementation without starting
+the Lucidum app. It reads one source Parquet and atomically writes an explicit output
+path, creating missing parent directories:
+
+```python
+from py_lucidum import demo_dataset_path, smooth_postcode_sectors
+
+output_path = smooth_postcode_sectors(
+    demo_dataset_path(),
+    "local/postcode_sector_smoothing/motor_premiums_training.parquet",
+    postcode_sector="POSTCODE_SECTOR",
+    numerator="PREMIUM",
+    filter="SAMPLE = 'training'",
+)
+print(output_path)
+```
+
+Pass a numeric column as `denominator` for a weighted ratio. If it is omitted, each
+valid Numerator row contributes one to the denominator, producing Lucidum's
+**Average row value** calculation. `filter` is an optional DuckDB `WHERE` expression.
+The selected columns must be physical columns in the source Parquet.
+
+The result is ordered by postcode sector and has one row per bundled geometry sector,
+plus any valid source-sector key absent from the geometry:
+
+```text
+postcode_sector, numerator_sum, denominator_sum, unsmoothed,
+smooth_n1, smooth_n2, smooth_n3, smooth_n4, smooth_n5
+```
+
+The two sums are the unsmoothed source aggregates. A geometry sector with no source
+rows can still receive a value from its neighbours. A valid source sector outside
+the bundled geometry is retained and each smoothed value falls back to `unsmoothed`.
+Blank sector values are ignored; other filtered sector values must be uppercase
+canonical sectors with one space, such as `AB10 1`.
+
+The source and output paths must differ. An existing output is replaced only after a
+complete successful calculation, so validation and calculation failures leave it
+untouched. Run the complete demo from a source checkout with:
+
+```bash
+python examples/postcode_sector_smoothing_demo.py
+```
+
+It smooths average `PREMIUM` for `SAMPLE = 'training'` and writes beneath the
+git-ignored `local/` directory. This standalone example is intentionally not part of
+the numbered GLM/GBM files installed by `lucidum --sync-examples`.
+
 ### Reporting and modelling helpers
 
 The public package also provides:
@@ -1053,6 +1125,7 @@ The public package also provides:
 - `write_echarts_report()`, `write_glm_summary_report()`, and
   `write_gbm_summary_report()`.
 - `report_filename()`.
+- `smooth_postcode_sectors()`.
 - `extract_lightgbm_interaction_group()`.
 
 The interaction-group extractor works directly on a LightGBM text model without

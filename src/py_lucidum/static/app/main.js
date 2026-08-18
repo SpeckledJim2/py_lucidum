@@ -762,7 +762,7 @@
         }
       }
 
-      function showClipboardToast(message, isError = false) {
+      function showClipboardToast(message, isError = false, detail = "") {
         let toast = document.getElementById("clipboardToast");
         if (!toast) {
           toast = document.createElement("div");
@@ -779,6 +779,8 @@
         }
         toast.textContent = message || "";
         toast.classList.toggle("error", isError);
+        toast.title = detail || "";
+        toast.setAttribute("aria-label", detail ? `${message}. ${detail}` : (message || ""));
         toast.hidden = !message;
         if (!message) return;
         clipboardToastTimer = window.setTimeout(() => {

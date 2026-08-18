@@ -5,7 +5,8 @@ import math
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
+from uuid import uuid4
 
 from py_lucidum.core import json_number, sql_literal
 
@@ -180,39 +181,48 @@ def smooth_sector_rows(
     return smoothed_rows, metadata, None
 
 
-def build_smoothed_sector_sql(
+def build_sector_smoothing_relation_sql(
     raw_summary_sql: str,
-    smoothing_level: int,
+    smoothing_levels: Iterable[int],
     *,
     pool_path: str = str(DEFAULT_SECTOR_SMOOTHING_POOLS_PATH),
 ) -> str:
-    level = normalise_smoothing_level(smoothing_level)
-    if level <= 0:
-        raise ValueError("Smoothing SQL requires a positive smoothing level.")
+    levels = tuple(dict.fromkeys(normalise_smoothing_level(level) for level in smoothing_levels))
+    if not levels or any(level <= 0 for level in levels):
+        raise ValueError("Smoothing SQL requires at least one positive smoothing level.")
 
     raw_sql = raw_summary_sql.strip().rstrip(";")
     pool_literal = sql_literal(str(pool_path))
+    requested_level_rows = ",\n    ".join(f"({level})" for level in levels)
+    requested_level_list = ", ".join(str(level) for level in levels)
     return f"""
 WITH raw_summary AS (
 {raw_sql}
 ),
+requested_levels(smoothing_level) AS (
+  VALUES
+    {requested_level_rows}
+),
 pool_rows AS (
   SELECT
+    CAST(level AS INTEGER) AS smoothing_level,
     CAST(target_key AS VARCHAR) AS target_key,
     CAST(pool_key AS VARCHAR) AS pool_key,
-    ROW_NUMBER() OVER () AS __pair_order
+    ROW_NUMBER() OVER (PARTITION BY CAST(level AS INTEGER)) AS __pair_order
   FROM read_parquet({pool_literal})
-  WHERE level = {level}
+  WHERE level IN ({requested_level_list})
 ),
 targets AS (
   SELECT
+    smoothing_level,
     target_key AS key,
     MIN(__pair_order) AS __target_order
   FROM pool_rows
-  GROUP BY target_key
+  GROUP BY smoothing_level, target_key
 ),
 pooled AS (
   SELECT
+    pool_rows.smoothing_level,
     pool_rows.target_key AS key,
     SUM(raw_summary.resp0_num) AS numerator,
     SUM(raw_summary.resp0_den) AS denominator,
@@ -226,10 +236,11 @@ pooled AS (
     AND isfinite(raw_summary.resp0)
     AND isfinite(raw_summary.resp0_num)
     AND isfinite(raw_summary.resp0_den)
-  GROUP BY pool_rows.target_key
+  GROUP BY pool_rows.smoothing_level, pool_rows.target_key
 ),
 target_rows AS (
   SELECT
+    targets.smoothing_level,
     targets.key,
     COALESCE(raw_summary.row_count, 0) AS row_count,
     CASE
@@ -267,10 +278,13 @@ target_rows AS (
     NULL::VARCHAR AS __unknown_order
   FROM targets
   LEFT JOIN raw_summary ON raw_summary.key = targets.key
-  LEFT JOIN pooled ON pooled.key = targets.key
+  LEFT JOIN pooled
+    ON pooled.smoothing_level = targets.smoothing_level
+   AND pooled.key = targets.key
 ),
 unknown_rows AS (
   SELECT
+    requested_levels.smoothing_level,
     raw_summary.key,
     raw_summary.row_count,
     raw_summary.resp0_num AS numerator,
@@ -286,8 +300,11 @@ unknown_rows AS (
     FALSE AS __smoothed,
     NULL::BIGINT AS __target_order,
     raw_summary.key AS __unknown_order
-  FROM raw_summary
-  LEFT JOIN targets ON targets.key = raw_summary.key
+  FROM requested_levels
+  CROSS JOIN raw_summary
+  LEFT JOIN targets
+    ON targets.smoothing_level = requested_levels.smoothing_level
+   AND targets.key = raw_summary.key
   WHERE targets.key IS NULL
 ),
 final_rows AS (
@@ -297,13 +314,35 @@ final_rows AS (
 ),
 metadata AS (
   SELECT
+    requested_levels.smoothing_level,
     (SELECT COUNT(*) FROM raw_summary) AS __matched_rows,
-    (SELECT COUNT(*) FROM targets) AS __target_rows,
-    (SELECT COUNT(*) FROM final_rows WHERE __smoothed) AS __smoothed_rows,
-    (SELECT COUNT(*) FROM final_rows WHERE NOT __smoothed) AS __fallback_rows,
-    COALESCE((SELECT SUM(smoothing_contributing_sectors) FROM final_rows WHERE __smoothed), 0) AS __contributing_rows
+    (
+      SELECT COUNT(*)
+      FROM targets
+      WHERE targets.smoothing_level = requested_levels.smoothing_level
+    ) AS __target_rows,
+    (
+      SELECT COUNT(*)
+      FROM final_rows
+      WHERE final_rows.smoothing_level = requested_levels.smoothing_level
+        AND final_rows.__smoothed
+    ) AS __smoothed_rows,
+    (
+      SELECT COUNT(*)
+      FROM final_rows
+      WHERE final_rows.smoothing_level = requested_levels.smoothing_level
+        AND NOT final_rows.__smoothed
+    ) AS __fallback_rows,
+    COALESCE((
+      SELECT SUM(smoothing_contributing_sectors)
+      FROM final_rows
+      WHERE final_rows.smoothing_level = requested_levels.smoothing_level
+        AND final_rows.__smoothed
+    ), 0) AS __contributing_rows
+  FROM requested_levels
 )
 SELECT
+  final_rows.smoothing_level,
   final_rows.key,
   final_rows.row_count,
   final_rows.numerator,
@@ -320,14 +359,115 @@ SELECT
   metadata.__target_rows,
   metadata.__smoothed_rows,
   metadata.__fallback_rows,
-  metadata.__contributing_rows
-FROM final_rows
-CROSS JOIN metadata
-ORDER BY
-  CASE WHEN final_rows.__target_order IS NULL THEN 1 ELSE 0 END,
+  metadata.__contributing_rows,
   final_rows.__target_order,
   final_rows.__unknown_order
+FROM final_rows
+INNER JOIN metadata USING (smoothing_level)
 """
+
+
+def build_smoothed_sector_sql(
+    raw_summary_sql: str,
+    smoothing_level: int,
+    *,
+    pool_path: str = str(DEFAULT_SECTOR_SMOOTHING_POOLS_PATH),
+) -> str:
+    level = normalise_smoothing_level(smoothing_level)
+    if level <= 0:
+        raise ValueError("Smoothing SQL requires a positive smoothing level.")
+
+    smoothing_relation = build_sector_smoothing_relation_sql(
+        raw_summary_sql,
+        (level,),
+        pool_path=pool_path,
+    )
+    return f"""
+WITH smoothed_sector_rows AS (
+{smoothing_relation}
+)
+SELECT
+  key,
+  row_count,
+  numerator,
+  denominator,
+  volume,
+  value,
+  raw_numerator,
+  raw_denominator,
+  raw_volume,
+  raw_value,
+  raw_row_count,
+  smoothing_contributing_sectors,
+  __matched_rows,
+  __target_rows,
+  __smoothed_rows,
+  __fallback_rows,
+  __contributing_rows
+FROM smoothed_sector_rows
+WHERE smoothing_level = {level}
+ORDER BY
+  CASE WHEN __target_order IS NULL THEN 1 ELSE 0 END,
+  __target_order,
+  __unknown_order
+"""
+
+
+def build_sector_smoothing_output_sql(
+    raw_summary_sql: str,
+    *,
+    pool_path: str = str(DEFAULT_SECTOR_SMOOTHING_POOLS_PATH),
+) -> str:
+    smoothing_relation = build_sector_smoothing_relation_sql(
+        raw_summary_sql,
+        range(1, MAX_SMOOTHING_LEVEL + 1),
+        pool_path=pool_path,
+    )
+    smooth_columns = ",\n  ".join(
+        f"MAX(CASE WHEN smoothing_level = {level} THEN value END) AS smooth_n{level}"
+        for level in range(1, MAX_SMOOTHING_LEVEL + 1)
+    )
+    return f"""
+WITH smoothed_sector_rows AS (
+{smoothing_relation}
+)
+SELECT
+  key AS postcode_sector,
+  MAX(raw_numerator) AS numerator_sum,
+  MAX(raw_denominator) AS denominator_sum,
+  MAX(raw_value) AS unsmoothed,
+  {smooth_columns}
+FROM smoothed_sector_rows
+GROUP BY key
+ORDER BY key
+"""
+
+
+def write_sector_smoothing_parquet(
+    connection: Any,
+    raw_summary_sql: str,
+    output_path: str | Path,
+    *,
+    pool_path: str = str(DEFAULT_SECTOR_SMOOTHING_POOLS_PATH),
+) -> tuple[Path, int]:
+    output = Path(output_path).expanduser().resolve()
+    if output.suffix.lower() != ".parquet":
+        raise ValueError("Sector smoothing output must use a .parquet filename.")
+    if output.exists() and not output.is_file():
+        raise ValueError(f"Sector smoothing output is not a file: {output}")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_name(f".{output.stem}.tmp-{uuid4().hex}.parquet")
+    output_sql = build_sector_smoothing_output_sql(raw_summary_sql, pool_path=pool_path)
+    try:
+        copied = connection.execute(
+            f"COPY ({output_sql}) TO {sql_literal(str(temporary))} "
+            "(FORMAT PARQUET, COMPRESSION ZSTD)"
+        ).fetchone()
+        row_count = int((copied or (0,))[0] or 0)
+        temporary.replace(output)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return output, row_count
 
 
 def empty_sector_row(key: str) -> dict[str, Any]:
@@ -363,9 +503,12 @@ __all__ = [
     "MAX_SMOOTHING_LEVEL",
     "SECTOR_SMOOTHING_LOAD_WARNING",
     "SectorAdjacency",
+    "build_sector_smoothing_output_sql",
+    "build_sector_smoothing_relation_sql",
     "build_smoothed_sector_sql",
     "load_sector_adjacency",
     "normalise_smoothing_level",
     "sector_smoothing_pools",
     "smooth_sector_rows",
+    "write_sector_smoothing_parquet",
 ]

@@ -30257,6 +30257,151 @@ COPY (
                 )
                 wait_for_map_view(stable_map_view)
 
+                self.assertFalse(page.locator("#mapSaveSmoothingBtn").is_disabled())
+                self.assertEqual(page.locator("#mapSaveSmoothingBtn").get_attribute("aria-busy"), "false")
+                self.assertEqual(page.locator("#mapSaveSmoothingBtn").text_content().strip(), "-> .parquet")
+                smoothing_layout_before_save = page.evaluate(
+                    """
+                    () => {
+                      const toolbar = document.querySelector("#mapToolbar").getBoundingClientRect();
+                      const control = document.querySelector("#mapSmoothingControl").getBoundingClientRect();
+                      const heading = document.querySelector("#mapSmoothingControl h3").getBoundingClientRect();
+                      const save = document.querySelector("#mapSaveSmoothingBtn").getBoundingClientRect();
+                      const choices = document.querySelector("#mapSmoothing").getBoundingClientRect();
+                      return {
+                        toolbarHeight: toolbar.height,
+                        controlHeight: control.height,
+                        controlTop: control.top,
+                        headingTop: heading.top,
+                        headingRight: heading.right,
+                        saveTop: save.top,
+                        saveLeft: save.left,
+                        saveWidth: save.width,
+                        choicesTop: choices.top,
+                        choicesLeft: choices.left,
+                      };
+                    }
+                    """
+                )
+                self.assertAlmostEqual(smoothing_layout_before_save["toolbarHeight"], 50, delta=0.5)
+                self.assertGreater(
+                    smoothing_layout_before_save["saveLeft"],
+                    smoothing_layout_before_save["headingRight"],
+                )
+                summary_requests_during_save: list[str] = []
+                page.on(
+                    "request",
+                    lambda request: summary_requests_during_save.append(request.url)
+                    if request.url.endswith("/api/uk-map/summary")
+                    else None,
+                )
+                page.evaluate(
+                    """
+                    () => {
+                      const originalFetch = window.fetch.bind(window);
+                      window.fetch = async (...args) => {
+                        const response = await originalFetch(...args);
+                        const url = String(args[0]?.url || args[0] || "");
+                        if (url.includes("/api/uk-map/sector-smoothing")) {
+                          await new Promise((resolve) => window.setTimeout(resolve, 250));
+                        }
+                        return response;
+                      };
+                    }
+                    """
+                )
+                with page.expect_response(
+                    lambda response: response.url.endswith("/api/uk-map/sector-smoothing")
+                    and response.status == 200,
+                    timeout=10_000,
+                ) as smoothing_save_response_info:
+                    page.locator("#mapSaveSmoothingBtn").click()
+                    page.wait_for_function(
+                        '() => document.querySelector("#mapSaveSmoothingBtn")?.getAttribute("aria-busy") === "true"'
+                    )
+                    self.assertTrue(page.locator("#mapSaveSmoothingBtn").is_disabled())
+                    self.assertEqual(page.locator("#mapSaveSmoothingBtn").text_content().strip(), "… .parquet")
+                    smoothing_layout_while_saving = page.evaluate(
+                        """
+                        () => {
+                          const toolbar = document.querySelector("#mapToolbar").getBoundingClientRect();
+                          const control = document.querySelector("#mapSmoothingControl").getBoundingClientRect();
+                          const heading = document.querySelector("#mapSmoothingControl h3").getBoundingClientRect();
+                          const save = document.querySelector("#mapSaveSmoothingBtn").getBoundingClientRect();
+                          const choices = document.querySelector("#mapSmoothing").getBoundingClientRect();
+                          return {
+                            toolbarHeight: toolbar.height,
+                            controlHeight: control.height,
+                            controlTop: control.top,
+                            headingTop: heading.top,
+                            headingRight: heading.right,
+                            saveTop: save.top,
+                            saveLeft: save.left,
+                            saveWidth: save.width,
+                            choicesTop: choices.top,
+                            choicesLeft: choices.left,
+                          };
+                        }
+                        """
+                    )
+                    for key, value in smoothing_layout_before_save.items():
+                        self.assertAlmostEqual(smoothing_layout_while_saving[key], value, delta=0.5)
+                smoothing_save_payload = smoothing_save_response_info.value.json()
+                page.wait_for_function(
+                    '() => !document.querySelector("#clipboardToast")?.hidden'
+                    ' && document.querySelector("#clipboardToast")?.textContent.includes("sectors ·")'
+                )
+                self.assertTrue(Path(smoothing_save_payload["path"]).is_file())
+                self.assertEqual(
+                    smoothing_save_payload["columns"],
+                    [
+                        "postcode_sector",
+                        "numerator_sum",
+                        "denominator_sum",
+                        "unsmoothed",
+                        "smooth_n1",
+                        "smooth_n2",
+                        "smooth_n3",
+                        "smooth_n4",
+                        "smooth_n5",
+                    ],
+                )
+                self.assertFalse(summary_requests_during_save)
+                self.assertEqual(page.locator("#mapSaveSmoothingBtn").get_attribute("aria-busy"), "false")
+                self.assertEqual(page.locator("#mapSaveSmoothingBtn").text_content().strip(), "-> .parquet")
+                self.assertTrue(page.locator("#status").is_hidden())
+                smoothing_toast = page.locator("#clipboardToast")
+                self.assertNotIn(smoothing_save_payload["path"], smoothing_toast.text_content())
+                self.assertEqual(smoothing_toast.get_attribute("title"), smoothing_save_payload["path"])
+                self.assertIn(
+                    smoothing_save_payload["path"],
+                    smoothing_toast.get_attribute("aria-label"),
+                )
+                self.assertTrue(page.locator("#mapSmoothing2").get_attribute("aria-pressed") == "true")
+                wait_for_map_view(stable_map_view)
+
+                page.route(
+                    "**/api/uk-map/sector-smoothing",
+                    lambda route: route.fulfill(
+                        status=400,
+                        content_type="application/json",
+                        body=json.dumps({"detail": "Test smoothing export failure"}),
+                    ),
+                )
+                with page.expect_response(
+                    lambda response: response.url.endswith("/api/uk-map/sector-smoothing")
+                    and response.status == 400,
+                    timeout=10_000,
+                ):
+                    page.locator("#mapSaveSmoothingBtn").click()
+                page.wait_for_function(
+                    '() => document.querySelector("#clipboardToast")?.textContent === "Test smoothing export failure"'
+                    ' && document.querySelector("#clipboardToast")?.classList.contains("error")'
+                    ' && document.querySelector("#mapSaveSmoothingBtn")?.getAttribute("aria-busy") === "false"'
+                )
+                self.assertFalse(summary_requests_during_save)
+                self.assertTrue(page.locator("#status").is_hidden())
+
                 with page.expect_response(lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200, timeout=10_000):
                     page.locator('#mapLevelTiles input[name="mapLevel"][value="unit"]').check()
                 page.wait_for_function('() => document.querySelector("#mapGroupMeta")?.textContent.includes("units plotted")')
@@ -30286,6 +30431,8 @@ COPY (
                     page.locator(f"#mapSmoothing{level}").is_disabled()
                     for level in range(6)
                 ))
+                self.assertTrue(page.locator("#mapSaveSmoothingBtn").is_hidden())
+                self.assertTrue(page.locator("#mapSaveSmoothingBtn").is_disabled())
                 page.locator("#ukMap .maplibre-unit-point-layer").wait_for(timeout=10_000)
                 page.evaluate(
                     """

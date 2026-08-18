@@ -235,6 +235,50 @@ def summary(dataset: Dataset, request: dict[str, Any], defaults: dict[str, str] 
         return payload
 
 
+def sector_smoothing_export_request(
+    dataset: Dataset,
+    request: dict[str, Any],
+    defaults: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    if normalise_level(request.get("level")) != "sector":
+        raise ValueError("Sector smoothing Parquet is available only for the Sector map level")
+    source_id = dataset.normalise_source(request.get("source"))
+    raw_response = str(request.get("numerator") or request.get("actual") or "").strip()
+    raw_denominator = request.get("denominator", request.get("weight"))
+    denominator_source = normalise_denominator_source(
+        dataset,
+        request.get("denominatorSource"),
+        raw_denominator,
+    )
+    fields = [(raw_response, source_id)]
+    if has_denominator_column(raw_denominator):
+        fields.append((str(raw_denominator), denominator_source))
+    context = metric_relation_context(dataset, source_id=source_id, fields=fields)
+    relation = context["relation"]
+    columns = context["columns"]
+    response = normalise_response(request, columns)
+    denominator = normalise_denominator(raw_denominator, columns)
+    join_column = normalise_join_column("sector", request, defaults or {}, columns)
+    filter_sql = dataset.normalise_filter_for_relation(request.get("filter"), relation)
+    raw_summary_sql = build_summary_sql(
+        relation,
+        join_column,
+        response,
+        denominator,
+        filter_sql,
+        order_by=False,
+    )
+    return {
+        "source": source_id,
+        "numerator": response["numerator"],
+        "denominator": denominator["column"],
+        "denominator_source": denominator_source,
+        "postcode_sector": join_column,
+        "filter": filter_sql,
+        "raw_summary_sql": raw_summary_sql,
+    }
+
+
 def smoothing_metadata(level: int, requested_level: int, matched_rows: int) -> dict[str, Any]:
     return {
         "level": level,
@@ -744,6 +788,7 @@ __all__ = [
     "normalise_level",
     "normalise_response",
     "normalise_unit_viewport_bounds",
+    "sector_smoothing_export_request",
     "summary",
     "unit_viewport_filter_sql",
 ]

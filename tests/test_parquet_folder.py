@@ -188,6 +188,20 @@ class ParquetFolderTests(unittest.TestCase):
         self.assertEqual(uk_map["row_count"], 50_000)
         self.assertGreater(len(uk_map["rows"]), 0)
 
+        status, smoothing_export = asgi_post_json(
+            app,
+            "/api/uk-map/sector-smoothing",
+            {
+                "level": "sector",
+                "actual": "PREMIUM",
+                "denominator": "__none__",
+                "filter": filter_sql,
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(Path(smoothing_export["path"]).is_file())
+        self.assertIn("/.lucidum/datasets/monthly/", Path(smoothing_export["path"]).as_posix())
+
     def test_schema_auto_refreshes_added_folder_parquet_on_app_join(self) -> None:
         folder = self.root / "daily"
         folder.mkdir()

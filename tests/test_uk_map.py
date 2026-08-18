@@ -10,18 +10,22 @@ from unittest.mock import patch
 
 import duckdb
 
+from py_lucidum import smooth_postcode_sectors
 from py_lucidum.app import create_app, normalise_tools
 from py_lucidum.core import Dataset, sql_literal
+from py_lucidum.tools.uk_map.export import SECTOR_SMOOTHING_OUTPUT_COLUMNS
 from py_lucidum.tools.uk_map import query as uk_map_query
 from py_lucidum.tools.uk_map.query import summary
 from py_lucidum.tools.uk_map.smoothing import (
     DEFAULT_SECTOR_ADJACENCY_PATH,
     DEFAULT_SECTOR_SMOOTHING_POOLS_PATH,
     MAX_SMOOTHING_LEVEL,
+    build_smoothed_sector_sql,
     load_sector_adjacency,
     normalise_smoothing_level,
     sector_smoothing_pools,
     smooth_sector_rows,
+    write_sector_smoothing_parquet,
 )
 
 
@@ -116,6 +120,20 @@ class UkMapToolTests(unittest.TestCase):
         request.update(overrides)
         return request
 
+    def parquet_source(self) -> Path:
+        path = self.root / "sample.parquet"
+        if path.exists():
+            return path
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                f"COPY (SELECT * FROM read_csv_auto({sql_literal(str(self.data_path))}, header=true)) "
+                f"TO {sql_literal(str(path))} (FORMAT PARQUET)"
+            )
+        finally:
+            con.close()
+        return path
+
     def test_default_tools_include_uk_map(self) -> None:
         self.assertEqual(normalise_tools(None), ["line_bar", "dataset_viewer", "column_profile", "histogram", "uk_map", "specs"])
 
@@ -127,7 +145,273 @@ class UkMapToolTests(unittest.TestCase):
         self.assertIn("/api/column-profile/summary", paths)
         self.assertIn("/api/histogram/chart", paths)
         self.assertIn("/api/uk-map/summary", paths)
+        self.assertIn("/api/uk-map/sector-smoothing", paths)
         self.assertIn("/tools/uk-map/static", paths)
+
+    def test_public_sector_smoothing_writes_all_levels_and_matches_map(self) -> None:
+        source_path = self.parquet_source()
+        output_path = self.root / "outputs" / "smoothed.parquet"
+        result_path = smooth_postcode_sectors(
+            source_path,
+            output_path,
+            postcode_sector="PostcodeSector",
+            numerator="Actual",
+            denominator="Weight",
+            filter="Flag = 1",
+        )
+
+        self.assertEqual(result_path, output_path.resolve())
+        self.assertTrue(result_path.is_file())
+        con = duckdb.connect(database=":memory:")
+        try:
+            cursor = con.execute(f"SELECT * FROM read_parquet({sql_literal(str(result_path))})")
+            columns = [item[0] for item in cursor.description]
+            output_rows = {
+                row[0]: dict(zip(columns, row))
+                for row in cursor.fetchall()
+            }
+        finally:
+            con.close()
+
+        self.assertEqual(columns, list(SECTOR_SMOOTHING_OUTPUT_COLUMNS))
+        self.assertGreaterEqual(len(output_rows), len(load_sector_adjacency().keys))
+        self.assertEqual(output_rows["AB10 1"]["numerator_sum"], 300)
+        self.assertEqual(output_rows["AB10 1"]["denominator_sum"], 30)
+        self.assertEqual(output_rows["AB10 1"]["unsmoothed"], 10)
+
+        dataset = Dataset(source_path)
+        self.addCleanup(dataset.con.close)
+        for level in range(1, MAX_SMOOTHING_LEVEL + 1):
+            with self.subTest(level=level):
+                map_result = summary(
+                    dataset,
+                    self.request(
+                        level="sector",
+                        denominator="Weight",
+                        filter="Flag = 1",
+                        smoothingLevel=level,
+                    ),
+                )
+                map_rows = {row["key"]: row for row in map_result["rows"]}
+                for key in ("AB10 1", "AL1 1", "AL1 2"):
+                    self.assertEqual(output_rows[key][f"smooth_n{level}"], map_rows[key]["value"])
+
+    def test_public_sector_smoothing_uses_row_count_without_denominator(self) -> None:
+        output_path = self.root / "average.parquet"
+        smooth_postcode_sectors(
+            self.parquet_source(),
+            output_path,
+            postcode_sector="PostcodeSector",
+            numerator="Actual",
+            filter="PostcodeArea = 'AB'",
+        )
+
+        con = duckdb.connect(database=":memory:")
+        try:
+            row = con.execute(
+                f"SELECT numerator_sum, denominator_sum, unsmoothed "
+                f"FROM read_parquet({sql_literal(str(output_path))}) "
+                "WHERE postcode_sector = 'AB10 1'"
+            ).fetchone()
+        finally:
+            con.close()
+        self.assertEqual(row, (300, 2, 150))
+
+    def test_public_sector_smoothing_ignores_blanks_and_keeps_unknown_valid_sector(self) -> None:
+        source_path = self.root / "unknown_sector.parquet"
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                "CREATE TABLE sectors(PostcodeSector VARCHAR, Actual DOUBLE, Weight DOUBLE)"
+            )
+            con.execute(
+                "INSERT INTO sectors VALUES "
+                "('ZZ99 9', 30, 3), ('ZZ99 9', NULL, 4), ('', 50, 5), (NULL, 70, 7)"
+            )
+            con.execute(f"COPY sectors TO {sql_literal(str(source_path))} (FORMAT PARQUET)")
+        finally:
+            con.close()
+
+        output_path = self.root / "unknown_sector_output.parquet"
+        smooth_postcode_sectors(
+            source_path,
+            output_path,
+            postcode_sector="PostcodeSector",
+            numerator="Actual",
+            denominator="Weight",
+        )
+        con = duckdb.connect(database=":memory:")
+        try:
+            unknown = con.execute(
+                f"SELECT * FROM read_parquet({sql_literal(str(output_path))}) "
+                "WHERE postcode_sector = 'ZZ99 9'"
+            ).fetchone()
+            blank_count = con.execute(
+                f"SELECT COUNT(*) FROM read_parquet({sql_literal(str(output_path))}) "
+                "WHERE postcode_sector IS NULL OR postcode_sector = ''"
+            ).fetchone()[0]
+            no_contributor = con.execute(
+                f"SELECT unsmoothed, smooth_n1, smooth_n5 "
+                f"FROM read_parquet({sql_literal(str(output_path))}) "
+                "WHERE postcode_sector = 'AB10 1'"
+            ).fetchone()
+        finally:
+            con.close()
+
+        self.assertEqual(unknown, ("ZZ99 9", 30, 3, 10, 10, 10, 10, 10, 10))
+        self.assertEqual(blank_count, 0)
+        self.assertEqual(no_contributor, (None, None, None))
+
+    def test_public_sector_smoothing_validates_format_and_preserves_output(self) -> None:
+        source_path = self.root / "invalid_sector.parquet"
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute(
+                "CREATE TABLE invalid_sector(PostcodeSector VARCHAR, Actual DOUBLE, Keep INTEGER)"
+            )
+            con.execute("INSERT INTO invalid_sector VALUES ('ab10 1', 10, 1), ('AB10 1', 20, 0)")
+            con.execute(
+                f"COPY invalid_sector TO {sql_literal(str(source_path))} (FORMAT PARQUET)"
+            )
+        finally:
+            con.close()
+        output_path = self.root / "existing.parquet"
+        output_path.write_bytes(b"original")
+
+        with self.assertRaisesRegex(ValueError, "uppercase with one space"):
+            smooth_postcode_sectors(
+                source_path,
+                output_path,
+                postcode_sector="PostcodeSector",
+                numerator="Actual",
+            )
+        self.assertEqual(output_path.read_bytes(), b"original")
+
+        smooth_postcode_sectors(
+            source_path,
+            output_path,
+            postcode_sector="PostcodeSector",
+            numerator="Actual",
+            filter="Keep = 0",
+        )
+        self.assertNotEqual(output_path.read_bytes(), b"original")
+
+    def test_public_sector_smoothing_rejects_invalid_inputs(self) -> None:
+        source_path = self.parquet_source()
+        with self.assertRaisesRegex(ValueError, "one Parquet file"):
+            smooth_postcode_sectors(
+                self.root / "missing.parquet",
+                self.root / "missing-output.parquet",
+                postcode_sector="PostcodeSector",
+                numerator="Actual",
+            )
+        with self.assertRaisesRegex(ValueError, "must not overwrite"):
+            smooth_postcode_sectors(
+                source_path,
+                source_path,
+                postcode_sector="PostcodeSector",
+                numerator="Actual",
+            )
+        with self.assertRaisesRegex(ValueError, "numeric numerator"):
+            smooth_postcode_sectors(
+                source_path,
+                self.root / "bad-numerator.parquet",
+                postcode_sector="PostcodeSector",
+                numerator="PostcodeArea",
+            )
+        with self.assertRaisesRegex(ValueError, "numeric denominator"):
+            smooth_postcode_sectors(
+                source_path,
+                self.root / "bad-denominator.parquet",
+                postcode_sector="PostcodeSector",
+                numerator="Actual",
+                denominator="PostcodeArea",
+            )
+        with self.assertRaisesRegex(ValueError, "valid postcode-sector"):
+            smooth_postcode_sectors(
+                source_path,
+                self.root / "bad-sector-column.parquet",
+                postcode_sector="MissingSector",
+                numerator="Actual",
+            )
+        with self.assertRaisesRegex(ValueError, "Invalid filter"):
+            smooth_postcode_sectors(
+                source_path,
+                self.root / "bad-filter.parquet",
+                postcode_sector="PostcodeSector",
+                numerator="Actual",
+                filter="MissingColumn = 1",
+            )
+        with self.assertRaisesRegex(ValueError, r"\.parquet filename"):
+            smooth_postcode_sectors(
+                source_path,
+                self.root / "not-parquet.csv",
+                postcode_sector="PostcodeSector",
+                numerator="Actual",
+            )
+
+    def test_sector_smoothing_writer_preserves_existing_output_on_calculation_failure(self) -> None:
+        output_path = self.root / "calculation-failure.parquet"
+        output_path.write_bytes(b"original")
+        con = duckdb.connect(database=":memory:")
+        try:
+            with self.assertRaises(duckdb.Error):
+                write_sector_smoothing_parquet(
+                    con,
+                    "SELECT * FROM missing_smoothing_source",
+                    output_path,
+                )
+        finally:
+            con.close()
+        self.assertEqual(output_path.read_bytes(), b"original")
+        self.assertEqual(list(self.root.glob(".calculation-failure.tmp-*.parquet")), [])
+
+    def test_interactive_smoothing_sql_reads_only_selected_level(self) -> None:
+        sql = build_smoothed_sector_sql(
+            "SELECT 'AB10 1' AS key, 1 AS row_count, 10.0 AS resp0_num, "
+            "2.0 AS resp0_den, 5.0 AS resp0",
+            3,
+        )
+
+        self.assertIn("WHERE level IN (3)", sql)
+        self.assertNotIn("WHERE level IN (1, 2, 3, 4, 5)", sql)
+
+    def test_sector_smoothing_endpoint_saves_and_replaces_deterministic_sidecar(self) -> None:
+        app = create_app(self.data_path, token="", tools=["uk_map"], use_saved_filters=False, use_kpis=False)
+        request = self.request(level="sector", filter="Flag = 1")
+
+        status, _, body = asgi_post_json(app, "/api/uk-map/sector-smoothing", request)
+        first = json.loads(body)
+        first_path = Path(first["path"])
+
+        self.assertEqual(status, 200)
+        self.assertFalse(first["replaced"])
+        self.assertEqual(first["columns"], list(SECTOR_SMOOTHING_OUTPUT_COLUMNS))
+        self.assertTrue(first_path.is_file())
+        self.assertIn(".lucidum/datasets/sample.csv/", first_path.as_posix())
+        self.assertIn("/uk_map/sector_smoothing/", first_path.as_posix())
+
+        status, _, body = asgi_post_json(app, "/api/uk-map/sector-smoothing", request)
+        second = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertTrue(second["replaced"])
+        self.assertEqual(second["path"], first["path"])
+        self.assertEqual(second["row_count"], first["row_count"])
+
+        changed_request = {**request, "filter": "Flag = 0"}
+        status, _, body = asgi_post_json(app, "/api/uk-map/sector-smoothing", changed_request)
+        changed = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertFalse(changed["replaced"])
+        self.assertNotEqual(changed["path"], first["path"])
+
+        status, _, body = asgi_post_json(
+            app,
+            "/api/uk-map/sector-smoothing",
+            self.request(level="area"),
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("only for the Sector map level", json.loads(body)["detail"])
 
     def test_create_app_persists_unit_point_defaults(self) -> None:
         app = create_app(

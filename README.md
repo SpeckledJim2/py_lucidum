@@ -269,11 +269,18 @@ outputs.
   palettes.
 - Smooth neighbouring sectors, control polygon outlines and area labels, or adjust
   point size for dense unit maps.
+- Save the active sector metric and filter as a Parquet containing raw values and
+  all five smoothing levels.
 - Search for postcodes and turn a selected map region into a global filter.
 - Save the map presentation, metric, filter, and camera as a Map view favourite.
 
 Lucidum reports blank and unmatched postcode rows separately so the map does not
 hide missing geometry behind apparently complete results.
+
+Sector Parquet saves are standalone artifacts under
+`.lucidum/datasets/<slug>/<signature>/uk_map/sector_smoothing/`. Repeating the same
+metric/filter save atomically replaces the same file; changing the specification
+creates a separate file.
 
 ![Lucidum UK Postcode Sector map](https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/postcode_sector_light.png)
 
@@ -359,9 +366,29 @@ in the background and returns its URL. In a normal Python shell, it blocks until
 server is stopped.
 
 Lucidum also exposes chart/report writers, GLM tabulation functions, and a standalone
-LightGBM interaction-group extractor. See
+postcode-sector smoother and LightGBM interaction-group extractor. For example:
+
+```python
+from py_lucidum import smooth_postcode_sectors
+
+output = smooth_postcode_sectors(
+    "motor.parquet",
+    "local/premium_training_smoothing.parquet",
+    postcode_sector="POSTCODE_SECTOR",
+    numerator="PREMIUM",
+    filter="SAMPLE = 'training'",
+)
+```
+
+Omitting `denominator` calculates average row value. The output contains the raw
+numerator and denominator sums, `unsmoothed`, and `smooth_n1` through `smooth_n5`.
+See `examples/postcode_sector_smoothing_demo.py` for the complete demo workflow and
 [Python usage in the User Guide](https://github.com/SpeckledJim2/py_lucidum/blob/main/docs/user-guide.md#python-usage)
-for examples and the public entry points.
+for the full contract and other public entry points.
+
+```bash
+python examples/postcode_sector_smoothing_demo.py
+```
 
 ## External models and reports
 

@@ -501,6 +501,7 @@ export function createUkMapTool({
   let mapPendingMetaRequestSeq = null;
   let mapInitPromise = null;
   let mapAreaLabelSizeFrame = null;
+  let sectorSmoothingSavePending = false;
 
   function clearActiveMapFavourite(options = {}) {
     if (state.mapFavouriteRestoreInProgress && !options.force) return;
@@ -575,6 +576,54 @@ export function createUkMapTool({
       );
     }
     return request;
+  }
+
+  function smoothingArtifactFilename(path) {
+    const parts = String(path || "").split(/[\\/]/);
+    return parts[parts.length - 1] || "sector-smoothing.parquet";
+  }
+
+  function compactSmoothingArtifactFilename(path, maxLength = 42) {
+    const filename = smoothingArtifactFilename(path);
+    if (filename.length <= maxLength) return filename;
+    const suffixLength = 19;
+    const prefixLength = Math.max(1, maxLength - suffixLength - 1);
+    return `${filename.slice(0, prefixLength)}…${filename.slice(-suffixLength)}`;
+  }
+
+  async function saveSectorSmoothingParquet() {
+    if (sectorSmoothingSavePending || state.mapLevel !== "sector") return;
+    const request = buildMapRequest();
+    if (!request) return;
+    const button = el("mapSaveSmoothingBtn");
+    sectorSmoothingSavePending = true;
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    button.textContent = "… .parquet";
+    button.title = "Saving sector smoothing Parquet";
+    button.setAttribute("aria-label", "Saving sector smoothing Parquet");
+    try {
+      const result = await api("/api/uk-map/sector-smoothing", {
+        method: "POST",
+        body: JSON.stringify(request),
+      });
+      const verb = result.replaced ? "Replaced" : "Saved";
+      const filename = compactSmoothingArtifactFilename(result.path);
+      showClipboardToast(
+        `${verb} ${formatNumber(result.row_count)} sectors · ${filename}`,
+        false,
+        result.path,
+      );
+    } catch (error) {
+      showClipboardToast(error.message, true);
+    } finally {
+      sectorSmoothingSavePending = false;
+      button.setAttribute("aria-busy", "false");
+      button.textContent = "-> .parquet";
+      button.title = "Save N1-N5 sector smoothing Parquet";
+      button.setAttribute("aria-label", "Save N1-N5 sector smoothing Parquet");
+      button.disabled = state.mapLevel !== "sector";
+    }
   }
 
   function unitGeometryRequestKey(request) {
@@ -2950,6 +2999,8 @@ export function createUkMapTool({
     const smoothingHidden = state.mapLevel !== "sector";
     const smoothingControl = el("mapSmoothingControl");
     if (smoothingControl) smoothingControl.hidden = smoothingHidden;
+    const smoothingSaveButton = el("mapSaveSmoothingBtn");
+    if (smoothingSaveButton) smoothingSaveButton.disabled = smoothingHidden || sectorSmoothingSavePending;
     document.querySelectorAll("[data-map-smoothing]").forEach((button) => {
       const active = Number(button.dataset.mapSmoothing) === Number(state.mapSmoothingLevel);
       button.classList.toggle("active", active);
@@ -3248,6 +3299,7 @@ export function createUkMapTool({
         refreshMap();
       });
     });
+    el("mapSaveSmoothingBtn").addEventListener("click", saveSectorSmoothingParquet);
     el("mapPostcodeSearch").addEventListener("click", searchMapPostcode);
     el("mapPostcodeClear").addEventListener("click", () => {
       el("mapPostcodeInput").value = "";

@@ -446,7 +446,10 @@
                 </div>
               </div>
               <div id="mapSmoothingControl" class="control map-strip-mode-control" hidden>
-                <h3>Smooth</h3>
+                <div class="map-smoothing-heading">
+                  <h3>Smooth</h3>
+                  <button id="mapSaveSmoothingBtn" class="app-command-button map-sector-save-button" type="button" title="Save N1-N5 sector smoothing Parquet" aria-label="Save N1-N5 sector smoothing Parquet" aria-busy="false">-&gt; .parquet</button>
+                </div>
                 <div id="mapSmoothing" class="segmented map-smoothing-mode" role="group" aria-label="Sector smoothing">
                   <button id="mapSmoothing0" class="active" type="button" data-map-smoothing="0" data-stable-label="-" aria-pressed="true">-</button>
                   <button id="mapSmoothing1" type="button" data-map-smoothing="1" data-stable-label="N1" aria-pressed="false">N1</button>

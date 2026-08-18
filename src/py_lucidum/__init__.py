@@ -13,6 +13,7 @@ from .reporting import (
     write_glm_summary_report,
 )
 from .tools.gbm.interaction_group_model import extract_lightgbm_interaction_group
+from .uk_map_api import smooth_postcode_sectors
 
 __all__ = [
     "__version__",
@@ -27,6 +28,7 @@ __all__ = [
     "score_glm_tabulations",
     "serve",
     "serve_line_bar",
+    "smooth_postcode_sectors",
     "write_echarts_report",
     "write_gbm_summary_report",
     "write_glm_summary_report",

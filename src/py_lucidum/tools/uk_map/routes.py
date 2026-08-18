@@ -4,11 +4,14 @@ import time
 from pathlib import Path
 from typing import Any
 
+import duckdb
 from fastapi import FastAPI, HTTPException, Request
 
 from py_lucidum.app.context import AppContext
 from py_lucidum.app.assets import NoStoreStaticFiles
+from py_lucidum.core import duckdb_error_message
 
+from .export import save_sector_smoothing_sidecar
 from .query import summary
 
 
@@ -79,4 +82,23 @@ def register(app: FastAPI, context: AppContext) -> None:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    async def sector_smoothing_endpoint(request: Request) -> dict:
+        context.check_token(request)
+        payload = await request.json()
+        try:
+            with context.dataset.lock:
+                return save_sector_smoothing_sidecar(
+                    context.dataset,
+                    payload,
+                    defaults=getattr(app.state, "defaults", {}),
+                )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except (duckdb.Error, OSError) as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Could not save sector smoothing Parquet: {duckdb_error_message(exc)}",
+            ) from exc
+
     app.add_api_route("/api/uk-map/summary", summary_endpoint, methods=["POST"])
+    app.add_api_route("/api/uk-map/sector-smoothing", sector_smoothing_endpoint, methods=["POST"])

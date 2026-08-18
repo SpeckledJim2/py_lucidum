@@ -264,6 +264,39 @@
         padding-inline: 6px;
       }
 
+      .map-settings-scroll.app-settings-strip > .map-strip-mode-control .map-smoothing-heading {
+        align-items: center;
+        display: flex;
+        flex: 0 0 11px;
+        gap: 7px;
+        height: 11px;
+        margin: 0 0 5px;
+        padding-inline-start: var(--app-control-button-padding-inline);
+        white-space: nowrap;
+      }
+
+      .map-settings-scroll.app-settings-strip > .map-strip-mode-control .map-smoothing-heading h3 {
+        flex: 0 0 auto;
+        margin: 0;
+        padding: 0;
+      }
+
+      .map-sector-save-button {
+        align-items: center;
+        border-radius: 3px;
+        box-sizing: border-box;
+        display: inline-flex;
+        flex: 0 0 66px;
+        font-size: 10px;
+        height: 15px;
+        justify-content: center;
+        line-height: 1;
+        margin-block: -2px;
+        min-height: 15px;
+        padding: 0 3px;
+        width: 66px;
+      }
+
       .map-strength-mode button {
         padding-inline: 8px;
       }
