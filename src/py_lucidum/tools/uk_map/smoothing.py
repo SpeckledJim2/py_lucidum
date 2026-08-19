@@ -427,6 +427,14 @@ def build_sector_smoothing_output_sql(
         f"MAX(CASE WHEN smoothing_level = {level} THEN value END) AS smooth_n{level}"
         for level in range(1, MAX_SMOOTHING_LEVEL + 1)
     )
+    numerator_columns = ",\n  ".join(
+        f"MAX(CASE WHEN smoothing_level = {level} THEN numerator END) AS numerator_n{level}"
+        for level in range(1, MAX_SMOOTHING_LEVEL + 1)
+    )
+    denominator_columns = ",\n  ".join(
+        f"MAX(CASE WHEN smoothing_level = {level} THEN denominator END) AS denominator_n{level}"
+        for level in range(1, MAX_SMOOTHING_LEVEL + 1)
+    )
     return f"""
 WITH smoothed_sector_rows AS (
 {smoothing_relation}
@@ -436,7 +444,9 @@ SELECT
   MAX(raw_numerator) AS numerator_sum,
   MAX(raw_denominator) AS denominator_sum,
   MAX(raw_value) AS unsmoothed,
-  {smooth_columns}
+  {smooth_columns},
+  {numerator_columns},
+  {denominator_columns}
 FROM smoothed_sector_rows
 GROUP BY key
 ORDER BY key

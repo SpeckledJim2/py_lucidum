@@ -195,6 +195,14 @@ class UkMapToolTests(unittest.TestCase):
                 map_rows = {row["key"]: row for row in map_result["rows"]}
                 for key in ("AB10 1", "AL1 1", "AL1 2"):
                     self.assertEqual(output_rows[key][f"smooth_n{level}"], map_rows[key]["value"])
+                    self.assertEqual(
+                        output_rows[key][f"numerator_n{level}"],
+                        map_rows[key]["numerator"],
+                    )
+                    self.assertEqual(
+                        output_rows[key][f"denominator_n{level}"],
+                        map_rows[key]["denominator"],
+                    )
 
     def test_public_sector_smoothing_uses_row_count_without_denominator(self) -> None:
         output_path = self.root / "average.parquet"
@@ -208,14 +216,35 @@ class UkMapToolTests(unittest.TestCase):
 
         con = duckdb.connect(database=":memory:")
         try:
-            row = con.execute(
-                f"SELECT numerator_sum, denominator_sum, unsmoothed "
+            cursor = con.execute(
+                f"SELECT * "
                 f"FROM read_parquet({sql_literal(str(output_path))}) "
                 "WHERE postcode_sector = 'AB10 1'"
-            ).fetchone()
+            )
+            row = dict(zip((item[0] for item in cursor.description), cursor.fetchone()))
         finally:
             con.close()
-        self.assertEqual(row, (300, 2, 150))
+        self.assertEqual(
+            (row["numerator_sum"], row["denominator_sum"], row["unsmoothed"]),
+            (300, 2, 150),
+        )
+
+        dataset = Dataset(self.parquet_source())
+        self.addCleanup(dataset.con.close)
+        for level in range(1, MAX_SMOOTHING_LEVEL + 1):
+            with self.subTest(level=level):
+                map_result = summary(
+                    dataset,
+                    self.request(
+                        level="sector",
+                        filter="PostcodeArea = 'AB'",
+                        smoothingLevel=level,
+                    ),
+                )
+                map_row = {item["key"]: item for item in map_result["rows"]}["AB10 1"]
+                self.assertEqual(row[f"numerator_n{level}"], map_row["numerator"])
+                self.assertEqual(row[f"denominator_n{level}"], map_row["denominator"])
+                self.assertEqual(row[f"smooth_n{level}"], map_row["value"])
 
     def test_public_sector_smoothing_ignores_blanks_and_keeps_unknown_valid_sector(self) -> None:
         source_path = self.root / "unknown_sector.parquet"
@@ -251,16 +280,40 @@ class UkMapToolTests(unittest.TestCase):
                 "WHERE postcode_sector IS NULL OR postcode_sector = ''"
             ).fetchone()[0]
             no_contributor = con.execute(
-                f"SELECT unsmoothed, smooth_n1, smooth_n5 "
+                f"SELECT unsmoothed, smooth_n1, numerator_n1, denominator_n1, "
+                "smooth_n5, numerator_n5, denominator_n5 "
                 f"FROM read_parquet({sql_literal(str(output_path))}) "
                 "WHERE postcode_sector = 'AB10 1'"
             ).fetchone()
         finally:
             con.close()
 
-        self.assertEqual(unknown, ("ZZ99 9", 30, 3, 10, 10, 10, 10, 10, 10))
+        self.assertEqual(
+            unknown,
+            (
+                "ZZ99 9",
+                30,
+                3,
+                10,
+                10,
+                10,
+                10,
+                10,
+                10,
+                30,
+                30,
+                30,
+                30,
+                30,
+                3,
+                3,
+                3,
+                3,
+                3,
+            ),
+        )
         self.assertEqual(blank_count, 0)
-        self.assertEqual(no_contributor, (None, None, None))
+        self.assertEqual(no_contributor, (None, None, None, None, None, None, None))
 
     def test_public_sector_smoothing_validates_format_and_preserves_output(self) -> None:
         source_path = self.root / "invalid_sector.parquet"

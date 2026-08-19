@@ -305,13 +305,14 @@ COPY (
         con = duckdb.connect(database=":memory:")
         try:
             row = con.execute(
-                f"SELECT numerator_sum, denominator_sum, unsmoothed "
+                f"SELECT numerator_sum, denominator_sum, unsmoothed, "
+                "numerator_n1, denominator_n1, smooth_n1 "
                 f"FROM read_parquet({sql_literal(payload['path'])}) "
                 "WHERE postcode_sector = 'AB10 1'"
             ).fetchone()
         finally:
             con.close()
-        self.assertEqual(row, (300, 30, 10))
+        self.assertEqual(row, (300, 30, 10, 300, 30, 10))
 
         status, payload = asgi_post_json(
             app,
@@ -328,13 +329,14 @@ COPY (
         con = duckdb.connect(database=":memory:")
         try:
             model_row = con.execute(
-                f"SELECT numerator_sum, denominator_sum, unsmoothed "
+                f"SELECT numerator_sum, denominator_sum, unsmoothed, "
+                "numerator_n1, denominator_n1, smooth_n1 "
                 f"FROM read_parquet({sql_literal(payload['path'])}) "
                 "WHERE postcode_sector = 'AB10 1'"
             ).fetchone()
         finally:
             con.close()
-        self.assertEqual(model_row, (30, 2, 15))
+        self.assertEqual(model_row, (30, 2, 15, 30, 2, 15))
 
     def test_mixed_model_response_and_denominator_sources_join_once(self) -> None:
         glm_source_id = "glm:model-numerator:predictions"

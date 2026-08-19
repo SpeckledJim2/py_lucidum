@@ -18,6 +18,8 @@ SECTOR_SMOOTHING_OUTPUT_COLUMNS = (
     "denominator_sum",
     "unsmoothed",
     *(f"smooth_n{level}" for level in range(1, MAX_SMOOTHING_LEVEL + 1)),
+    *(f"numerator_n{level}" for level in range(1, MAX_SMOOTHING_LEVEL + 1)),
+    *(f"denominator_n{level}" for level in range(1, MAX_SMOOTHING_LEVEL + 1)),
 )
 
 

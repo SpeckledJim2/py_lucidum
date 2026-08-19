@@ -22,7 +22,7 @@ def smooth_postcode_sectors(
     denominator: str | None = None,
     filter: str = "",
 ) -> Path:
-    """Write raw and N1-N5 postcode-sector values to a Parquet file.
+    """Write raw and N1-N5 postcode-sector values and sums to a Parquet file.
 
     Omitting ``denominator`` uses one per valid numerator row, matching
     Lucidum's Average row value calculation.

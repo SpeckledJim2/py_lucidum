@@ -30364,6 +30364,16 @@ COPY (
                         "smooth_n3",
                         "smooth_n4",
                         "smooth_n5",
+                        "numerator_n1",
+                        "numerator_n2",
+                        "numerator_n3",
+                        "numerator_n4",
+                        "numerator_n5",
+                        "denominator_n1",
+                        "denominator_n2",
+                        "denominator_n3",
+                        "denominator_n4",
+                        "denominator_n5",
                     ],
                 )
                 self.assertFalse(summary_requests_during_save)

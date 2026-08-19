@@ -1093,14 +1093,18 @@ plus any valid source-sector key absent from the geometry:
 
 ```text
 postcode_sector, numerator_sum, denominator_sum, unsmoothed,
-smooth_n1, smooth_n2, smooth_n3, smooth_n4, smooth_n5
+smooth_n1, smooth_n2, smooth_n3, smooth_n4, smooth_n5,
+numerator_n1, numerator_n2, numerator_n3, numerator_n4, numerator_n5,
+denominator_n1, denominator_n2, denominator_n3, denominator_n4, denominator_n5
 ```
 
-The two sums are the unsmoothed source aggregates. A geometry sector with no source
-rows can still receive a value from its neighbours. A valid source sector outside
-the bundled geometry is retained and each smoothed value falls back to `unsmoothed`.
-Blank sector values are ignored; other filtered sector values must be uppercase
-canonical sectors with one space, such as `AB10 1`.
+The raw sums are the unsmoothed source aggregates. Each `numerator_n*` and
+`denominator_n*` pair contains the pooled sums used for the matching `smooth_n*`
+value. A geometry sector with no source rows can still receive values from its
+neighbours. A valid source sector outside the bundled geometry is retained and each
+smoothed value and its component sums fall back to the unsmoothed values. Blank
+sector values are ignored; other filtered sector values must be uppercase canonical
+sectors with one space, such as `AB10 1`.
 
 The source and output paths must differ. An existing output is replaced only after a
 complete successful calculation, so validation and calculation failures leave it
