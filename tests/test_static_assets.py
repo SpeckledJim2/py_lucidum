@@ -456,6 +456,17 @@ result = warnings(request({{
 if (result.length !== 1 || !result[0].includes("GBM SHAP was trained for num_b / den_b")) throw new Error("SHAP mismatch was not detected");
 
 result = warnings(request({{
+  partialDependence: {{ mode: "both", gbm_model_id: "gbm-b", glm_model_id: "glm-a" }},
+}}));
+if (result.length !== 1 || !result[0].includes("GBM SHAP was trained for num_b / den_b")) throw new Error("family-specific Both models were not resolved");
+
+result = warnings(request({{
+  actual: {{ numerator: "num_b" }}, denominator: "den_b",
+  partialDependence: {{ mode: "both", model_id: "gbm-b" }},
+}}));
+if (result.length !== 1 || !result[0].includes("GLM partial dependence was trained for num_a / den_a")) throw new Error("legacy Both model_id was not treated as GBM-only");
+
+result = warnings(request({{
   expected: [{{ numerator: "glm_prediction", source: "glm:missing:predictions" }}],
   partialDependence: {{ mode: "shap", model_id: "missing" }},
 }}), []);

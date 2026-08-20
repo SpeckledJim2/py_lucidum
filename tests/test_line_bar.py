@@ -1216,13 +1216,22 @@ COPY (
         current = json.loads(body)
         self.assertEqual(status, 200)
         self.assertTrue(current["glm_overlay_context"]["eligible"])
+        self.write_active_fake_glm_for_overlay(
+            model_dataset,
+            term_variables={"UseofVan": {"UseofVan"}},
+            model_id="new-active-glm",
+        )
+        self.assertEqual(store.active_model_id(), "new-active-glm")
 
         with patch("py_lucidum.tools.glm.overlay.should_isolate_glm_overlay", return_value=False):
             status, _, body = asgi_post_json(
                 app,
                 "/api/line-bar/glm-overlay",
                 {
-                    "request": {**request, "partialDependence": {"mode": "glm"}},
+                    "request": {
+                        **request,
+                        "partialDependence": {"mode": "glm", "glm_model_id": model_id},
+                    },
                     "chart_context": current["glm_overlay_context"],
                 },
             )
@@ -3496,12 +3505,21 @@ COPY (
 
     def test_chart_both_mode_returns_shap_and_glm_overlays(self) -> None:
         dataset = self.dataset_with_gbm_ribbons(objective="regression")
-        _store, _model_id = self.write_active_fake_glm_for_overlay(
+        _store, glm_model_id = self.write_active_fake_glm_for_overlay(
             dataset,
             term_variables={"UseofVan": {"UseofVan"}},
         )
+        gbm_model_id = next(
+            str(source["model_id"])
+            for source in dataset.data_sources()
+            if source.get("kind") == "gbm_shap_long" and source.get("active")
+        )
         request = self.request()
-        request["partialDependence"] = {"mode": "both"}
+        request["partialDependence"] = {
+            "mode": "both",
+            "gbm_model_id": gbm_model_id,
+            "glm_model_id": glm_model_id,
+        }
 
         result = self.chart_with_in_process_glm_overlay(dataset, request)
 
@@ -3510,10 +3528,69 @@ COPY (
         self.assertEqual(set(partial["overlays"]), {"shap", "glm"})
         self.assertEqual(partial["overlays"]["shap"]["mode"], "shap")
         self.assertEqual(partial["overlays"]["glm"]["mode"], "glm")
+        self.assertEqual(partial["overlays"]["shap"]["model_id"], gbm_model_id)
+        self.assertEqual(partial["overlays"]["glm"]["model_id"], glm_model_id)
         self.assertGreater(len(partial["overlays"]["shap"]["rows"]), 0)
         self.assertGreater(len(partial["overlays"]["glm"]["rows"]), 0)
         self.assertEqual([row["x"] for row in partial["overlays"]["shap"]["rows"]], [row["x"] for row in result["rows"]])
         self.assertEqual([row["x"] for row in partial["overlays"]["glm"]["rows"]], [row["x"] for row in result["rows"]])
+
+    def test_chart_legacy_both_model_id_is_gbm_only(self) -> None:
+        dataset = self.dataset_with_gbm_ribbons(objective="regression")
+        _store, glm_model_id = self.write_active_fake_glm_for_overlay(
+            dataset,
+            term_variables={"UseofVan": {"UseofVan"}},
+        )
+        gbm_model_id = next(
+            str(source["model_id"])
+            for source in dataset.data_sources()
+            if source.get("kind") == "gbm_shap_long" and source.get("active")
+        )
+        request = self.request()
+        request["partialDependence"] = {"mode": "both", "model_id": gbm_model_id}
+
+        result = self.chart_with_in_process_glm_overlay(dataset, request)
+
+        overlays = result["partial_dependence"]["overlays"]
+        self.assertEqual(overlays["shap"]["model_id"], gbm_model_id)
+        self.assertEqual(overlays["glm"]["model_id"], glm_model_id)
+        self.assertGreater(len(overlays["shap"]["rows"]), 0)
+        self.assertGreater(len(overlays["glm"]["rows"]), 0)
+        self.assertFalse(any(gbm_model_id in warning for warning in overlays["glm"]["warnings"]))
+
+    def test_chart_both_mode_stays_bound_to_requested_models_when_active_models_change(self) -> None:
+        gbm_store = self.write_active_gbm_for_shap_ribbons(
+            objective="regression",
+            shap_values=[(1, 10.0, 10.0), (2, 10.0, 10.0), (3, 20.0, 20.0), (4, 20.0, 20.0)],
+        )
+        requested_gbm_model_id = str(gbm_store.active_model_id())
+        self.write_active_gbm_for_shap_ribbons(objective="poisson")
+        dataset = Dataset(self.data_path)
+        dataset.register_data_source_provider(GbmSourceProvider(gbm_store))
+        _store, requested_glm_model_id = self.write_active_fake_glm_for_overlay(
+            dataset,
+            term_variables={"UseofVan": {"UseofVan"}},
+            model_id="requested-glm",
+        )
+        self.write_active_fake_glm_for_overlay(
+            dataset,
+            term_variables={"UseofVan": {"UseofVan"}},
+            model_id="new-active-glm",
+        )
+        request = self.request()
+        request["partialDependence"] = {
+            "mode": "both",
+            "gbm_model_id": requested_gbm_model_id,
+            "glm_model_id": requested_glm_model_id,
+        }
+
+        result = self.chart_with_in_process_glm_overlay(dataset, request)
+
+        overlays = result["partial_dependence"]["overlays"]
+        self.assertEqual(overlays["shap"]["model_id"], requested_gbm_model_id)
+        self.assertEqual(overlays["glm"]["model_id"], requested_glm_model_id)
+        self.assertGreater(len(overlays["shap"]["rows"]), 0)
+        self.assertGreater(len(overlays["glm"]["rows"]), 0)
 
     def test_chart_both_mode_aligns_glm_overlay_to_shap_mean(self) -> None:
         dataset = self.dataset_with_gbm_ribbons(objective="regression")

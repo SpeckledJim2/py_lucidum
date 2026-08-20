@@ -885,6 +885,12 @@ def glm_partial_dependence_model_id(request: dict[str, Any]) -> str:
     partial_dependence = request.get("partialDependence")
     if not isinstance(partial_dependence, dict):
         return ""
+    family_model_id = str(partial_dependence.get("glm_model_id") or "").strip()
+    if family_model_id:
+        return family_model_id
+    mode = str(partial_dependence.get("mode") or "none").strip().lower()
+    if mode != "glm":
+        return ""
     return str(partial_dependence.get("model_id") or "").strip()
 
 

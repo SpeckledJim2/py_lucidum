@@ -174,7 +174,7 @@ export function lineBarModelKpiCompatibilityWarnings({ request = null, dataSourc
   const partialDependence = request?.partialDependence || {};
   const partialDependenceMode = String(partialDependence.mode || "none");
   if (["shap", "both"].includes(partialDependenceMode)) {
-    const requestedModelId = String(partialDependence.model_id || "");
+    const requestedModelId = String(partialDependence.gbm_model_id || partialDependence.model_id || "");
     const shapSource = sources.find((source) => (
       source?.kind === "gbm_shap_long"
       && (requestedModelId ? String(source.model_id || "") === requestedModelId : Boolean(source.active))
@@ -182,7 +182,15 @@ export function lineBarModelKpiCompatibilityWarnings({ request = null, dataSourc
     if (shapSource) addComponent(shapSource, "SHAP");
   }
   if (["glm", "both"].includes(partialDependenceMode)) {
-    const glmSource = sources.find((source) => source?.kind === "glm_predictions" && source.active);
+    const requestedModelId = String(
+      partialDependence.glm_model_id
+      || (partialDependenceMode === "glm" ? partialDependence.model_id : "")
+      || "",
+    );
+    const glmSource = sources.find((source) => (
+      source?.kind === "glm_predictions"
+      && (requestedModelId ? String(source.model_id || "") === requestedModelId : Boolean(source.active))
+    ));
     if (glmSource) addComponent(glmSource, "partial dependence");
   }
 
@@ -2216,6 +2224,7 @@ export function createLineBarTool({
     const xSource = column && (isModelPredictionColumn(column) || sourceId !== (state.source || "dataset")) ? sourceId : "";
     const partialDependenceMode = selectedPartialDependenceMode();
     const shapModelId = activeShapOverlayModelId();
+    const glmModelId = activeGlmOverlayModelId();
     return {
       source: state.source || "dataset",
       ...(xSource ? { xSource } : {}),
@@ -2230,7 +2239,8 @@ export function createLineBarTool({
       transform: state.transform,
       partialDependence: {
         mode: partialDependenceMode,
-        ...(["shap", "both"].includes(partialDependenceMode) && shapModelId ? { model_id: shapModelId } : {}),
+        ...(["shap", "both"].includes(partialDependenceMode) && shapModelId ? { gbm_model_id: shapModelId } : {}),
+        ...(["glm", "both"].includes(partialDependenceMode) && glmModelId ? { glm_model_id: glmModelId } : {}),
       },
       base: selectedFeatureBase(),
       sigma: Number(state.sigma),
@@ -3430,6 +3440,11 @@ export function createLineBarTool({
 
   function activeShapOverlayModelId() {
     const source = (state.schema?.data_sources || []).find((item) => item.kind === "gbm_shap_long" && item.active);
+    return String(source?.model_id || "");
+  }
+
+  function activeGlmOverlayModelId() {
+    const source = (state.schema?.data_sources || []).find((item) => item.kind === "glm_predictions" && item.active);
     return String(source?.model_id || "");
   }
 

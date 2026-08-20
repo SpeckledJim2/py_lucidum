@@ -14868,7 +14868,7 @@ COPY (
                         page_a.locator('.segmented[data-control="partialDependence"] button[data-value="shap"]').click()
                     first_request = first_shap_response.value.request.post_data_json
                     first_payload = first_shap_response.value.json()
-                    self.assertEqual(first_request["partialDependence"]["model_id"], "window-a-model")
+                    self.assertEqual(first_request["partialDependence"]["gbm_model_id"], "window-a-model")
                     self.assertEqual(first_payload["partial_dependence"]["model_id"], "window-a-model")
 
                     page_b.goto(f"{base_url}/?tool=line_bar", wait_until="domcontentloaded")
@@ -14898,7 +14898,7 @@ COPY (
                         band_button.click()
                     stale_request = stale_window_response.value.request.post_data_json
                     stale_payload = stale_window_response.value.json()
-                    self.assertEqual(stale_request["partialDependence"]["model_id"], "window-a-model")
+                    self.assertEqual(stale_request["partialDependence"]["gbm_model_id"], "window-a-model")
                     self.assertEqual(stale_payload["partial_dependence"]["model_id"], "window-a-model")
                     self.assertEqual(store.active_model_id(), "window-b-model")
                     self.assertEqual(page_errors, [])
@@ -15638,6 +15638,44 @@ COPY (
             )
             glm_store.activate_model("comparison-glm-a")
 
+            def browser_glm_overlay(dataset: Dataset, request: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+                x_col = str(kwargs["x_col"])
+                x_ident = quote_ident(x_col)
+                raw_rows = dataset.con.execute(
+                    f"SELECT {x_ident}, COUNT(*) FROM {dataset.relation_sql()} GROUP BY {x_ident} ORDER BY {x_ident}"
+                ).fetchall()
+                rows = [
+                    {
+                        "x": str(value),
+                        "x_sort": value,
+                        "x_value": value,
+                        "original_order": index + 1,
+                        "volume": float(volume),
+                        "is_tail": False,
+                    }
+                    for index, (value, volume) in enumerate(raw_rows)
+                ]
+                model_id = str((request.get("partialDependence") or {}).get("glm_model_id") or "")
+                return {
+                    "mode": "glm",
+                    "model_id": model_id,
+                    "feature": kwargs["x_col"],
+                    "method": "browser_fixture",
+                    "percentiles": [50],
+                    "rows": [{**row, "p50": float(index + 1)} for index, row in enumerate(rows)],
+                    "warnings": [],
+                    "scale": {"method": "add", "target": 2.0, "source_mean": 2.0},
+                    "sample": {},
+                    "transform": {"mode": str(request.get("transform") or "none")},
+                }
+
+            overlay_patcher = patch(
+                "py_lucidum.tools.glm.overlay.build_glm_partial_dependence_overlay",
+                side_effect=browser_glm_overlay,
+            )
+            overlay_patcher.start()
+            self.addCleanup(overlay_patcher.stop)
+
             base_url, server, thread = self.start_app(
                 data_path,
                 tools=["line_bar", "glm", "gbm"],
@@ -15738,7 +15776,10 @@ COPY (
                             changed_gbm_request["responses"][1]["source"],
                             "gbm:comparison-gbm-b:predictions",
                         )
-                        self.assertEqual(changed_gbm_request["partialDependence"], {"mode": "shap", "model_id": "comparison-gbm-b"})
+                        self.assertEqual(
+                            changed_gbm_request["partialDependence"],
+                            {"mode": "shap", "gbm_model_id": "comparison-gbm-b"},
+                        )
                         self.assertEqual(active_expected_values(), ["gbm_prediction"])
                         page.locator('.segmented[data-control="partialDependence"] button[data-value="shap"].active').wait_for(timeout=10_000)
                         names = chart_series_names()
@@ -15751,7 +15792,10 @@ COPY (
                             [response["numerator"] for response in changed_glm_request["responses"]],
                             ["num_b", "glm_prediction"],
                         )
-                        self.assertEqual(changed_glm_request["partialDependence"]["mode"], "glm")
+                        self.assertEqual(
+                            changed_glm_request["partialDependence"],
+                            {"mode": "glm", "glm_model_id": "comparison-glm-b"},
+                        )
                         self.assertEqual(active_expected_values(), ["glm_prediction"])
                         page.locator('.segmented[data-control="partialDependence"] button[data-value="glm"].active').wait_for(timeout=10_000)
                         self.assertNotIn("KPI mismatch", page.locator("#chartMessage").text_content())
@@ -15810,13 +15854,22 @@ COPY (
                             [response.get("source", "") for response in compatible_gbm_request["responses"][1:]],
                             ["glm:comparison-glm-b:predictions", "gbm:comparison-gbm-b2:predictions"],
                         )
-                        self.assertEqual(compatible_gbm_request["partialDependence"], {"mode": "both", "model_id": "comparison-gbm-b2"})
+                        self.assertEqual(
+                            compatible_gbm_request["partialDependence"],
+                            {
+                                "mode": "both",
+                                "gbm_model_id": "comparison-gbm-b2",
+                                "glm_model_id": "comparison-glm-b",
+                            },
+                        )
                         self.assertEqual(active_expected_values(), ["glm_prediction", "gbm_prediction"])
                         page.locator('.segmented[data-control="partialDependence"] button[data-value="both"].active').wait_for(timeout=10_000)
                         names = chart_series_names()
                         self.assertIn("glm_prediction", names)
                         self.assertIn("gbm_prediction", names)
                         self.assertIn("SHAP median", names)
+                        self.assertIn("GLM", names, page.locator("#chartMessage").text_content())
+                        self.assertNotIn("Rebuild GLM", page.locator("#chartMessage").text_content())
 
                         changed_glm_c_request = activate_sidebar_model("glm", "comparison-glm-c")
                         self.assertEqual(changed_glm_c_request["denominator"], "__none__")

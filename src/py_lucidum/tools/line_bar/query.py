@@ -297,11 +297,14 @@ def glm_overlay(
     )
     overlay_request = {**request, "filter": effective_filter_sql}
 
-    from py_lucidum.tools.glm.overlay import build_glm_partial_dependence_overlay
+    from py_lucidum.tools.glm.overlay import (
+        build_glm_partial_dependence_overlay,
+        glm_partial_dependence_model_id,
+    )
     from py_lucidum.tools.glm.store import GlmModelStore
 
     store = GlmModelStore(dataset.path, dataset=dataset)
-    model_id = store.active_model_id()
+    model_id = glm_partial_dependence_model_id(overlay_request) or store.active_model_id()
     model_context: dict[str, Any] = {}
     if model_id:
         model_context = {
@@ -2626,7 +2629,11 @@ def shap_partial_dependence_model_id(request: dict[str, Any]) -> str:
     partial_dependence = request.get("partialDependence")
     if not isinstance(partial_dependence, dict):
         return ""
-    return str(partial_dependence.get("model_id") or "").strip()
+    return str(
+        partial_dependence.get("gbm_model_id")
+        or partial_dependence.get("model_id")
+        or ""
+    ).strip()
 
 
 def gbm_shap_overlay_source(dataset: Dataset, model_id: str = "") -> dict[str, Any] | None:
