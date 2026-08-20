@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import importlib.util
 import math
@@ -13233,6 +13234,229 @@ COPY (
             self.assertIn("group,name,actual,denominator,decimals,format", saved_text)
             self.assertNotIn("Numeric column", saved_text)
             self.assertNotIn("number, currency, or percent", saved_text)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_feature_spec_chart_columns_are_editable_validated_and_preserved(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            data_path = tmp_path / "sample.csv"
+            data_path.write_text(
+                "vehicle_age,price,value\n"
+                "1,100,10\n"
+                "2,200,20\n",
+                encoding="utf-8",
+            )
+            features_path = tmp_path / "feature_spec.csv"
+            columns = [
+                "Feature",
+                "Grouping",
+                "Base",
+                "min",
+                "max",
+                "banding",
+                "chart_banding",
+                "chart_quantiles",
+                "chart_low_weights",
+                "chart_missings",
+                "chart_labels",
+                "chart_sort",
+                "chart_transform",
+                "chart_sigma",
+                "chart_date_bucket",
+                "chart_empty_periods",
+                "scenario1",
+            ]
+            original_row = {
+                "Feature": "vehicle_age",
+                "Grouping": "Vehicle",
+                "Base": "1",
+                "min": "0",
+                "max": "10",
+                "banding": "1",
+                "chart_banding": "5",
+                "chart_quantiles": "10",
+                "chart_low_weights": "0.1%",
+                "chart_missings": "show",
+                "chart_labels": "line",
+                "chart_sort": "alpha",
+                "chart_transform": "none",
+                "chart_sigma": "2",
+                "chart_date_bucket": "none",
+                "chart_empty_periods": "show",
+                "scenario1": "use as FEATURE",
+            }
+            with features_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=columns, lineterminator="\n")
+                writer.writeheader()
+                writer.writerow(original_row)
+
+            base_url, server, thread = self.start_app(
+                data_path,
+                tools=["specs"],
+                features_path=features_path,
+                use_features=True,
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1440, "height": 800})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    self.wait_for_app_ready(page)
+                    page.locator("#specNotice", has_text="Valid feature spec").wait_for(timeout=10_000)
+
+                    def feature_cell(field: str) -> Any:
+                        return page.locator(
+                            f'#specGrid .tabulator-row .tabulator-cell[tabulator-field="{field}"]'
+                        ).first
+
+                    chart_banding_cell = feature_cell("chart_banding")
+                    chart_low_weights_cell = feature_cell("chart_low_weights")
+                    scenario_cell = feature_cell("scenario1")
+                    chart_banding_cell.wait_for(state="visible", timeout=10_000)
+                    self.assertEqual(chart_banding_cell.locator(".spec-checkbox-cell").count(), 0)
+                    self.assertEqual(chart_low_weights_cell.locator(".spec-checkbox-cell").count(), 0)
+                    self.assertEqual(scenario_cell.locator(".spec-checkbox-cell:checked").count(), 1)
+                    self.assertEqual(chart_banding_cell.inner_text().strip(), "5")
+                    self.assertEqual(chart_low_weights_cell.inner_text().strip(), "0.1%")
+
+                    feature_cell("Grouping").dblclick()
+                    page.locator("#specGrid .tabulator-cell.tabulator-editing input").fill("Vehicle updated")
+                    page.keyboard.press("Enter")
+                    chart_banding_cell.dblclick()
+                    page.locator("#specGrid .tabulator-cell.tabulator-editing input").fill("7.5")
+                    page.keyboard.press("Enter")
+                    chart_low_weights_cell.dblclick()
+                    page.locator(".tabulator-edit-list-item", has_text=re.compile(r"^1%$")).click()
+                    page.locator("#specNotice", has_text="Valid feature spec").wait_for(timeout=10_000)
+                    page.wait_for_function(
+                        """
+                        () => {
+                          const button = document.querySelector("#specSaveBtn");
+                          return button && !button.disabled && button.classList.contains("dirty");
+                        }
+                        """,
+                        timeout=10_000,
+                    )
+                    page.locator("#specSaveBtn").click()
+                    page.locator("#specNotice", has_text="Feature spec saved").wait_for(timeout=10_000)
+
+                    page.evaluate(
+                        """
+                        () => {
+                          const table = (window.Tabulator?.findTable?.("#specGrid") || [])
+                            .find((candidate) => candidate?.element?.isConnected);
+                          table.getRows()[0].getCell("chart_low_weights").setValue("0.4%", true);
+                        }
+                        """
+                    )
+                    page.locator("#specNotice", has_text="low_weights must be 0, 10, 100, 0.1%, or 1%").wait_for(timeout=10_000)
+                    self.assertTrue(page.locator("#specSaveBtn").is_disabled())
+                    self.assertTrue(
+                        feature_cell("chart_low_weights").evaluate(
+                            "node => node.classList.contains('spec-validation-issue-cell')"
+                        )
+                    )
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+            with features_path.open(newline="", encoding="utf-8") as handle:
+                saved_row = next(csv.DictReader(handle))
+            self.assertEqual(saved_row["Grouping"], "Vehicle updated")
+            self.assertEqual(saved_row["chart_banding"], "7.5")
+            self.assertEqual(saved_row["chart_low_weights"], "1%")
+            self.assertEqual(saved_row["scenario1"], "feature")
+            for column in (
+                "chart_quantiles",
+                "chart_missings",
+                "chart_labels",
+                "chart_sort",
+                "chart_transform",
+                "chart_sigma",
+                "chart_date_bucket",
+                "chart_empty_periods",
+            ):
+                self.assertEqual(saved_row[column], original_row[column])
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_feature_spec_can_add_missing_chart_columns_to_a_legacy_spec(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            data_path = tmp_path / "sample.csv"
+            data_path.write_text("vehicle_age,price,value\n1,100,10\n", encoding="utf-8")
+            features_path = tmp_path / "feature_spec.csv"
+            features_path.write_text(
+                "Feature,Grouping,Base,scenario1\n"
+                "vehicle_age,Vehicle,1,feature\n",
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path,
+                tools=["specs"],
+                features_path=features_path,
+                use_features=True,
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    self.wait_for_app_ready(page)
+                    feature_header = page.locator(
+                        '#specGrid .tabulator-header .tabulator-col[tabulator-field="Feature"]'
+                    )
+                    feature_header.wait_for(state="visible", timeout=10_000)
+                    feature_header.click(button="right")
+                    add_columns = page.locator(
+                        '#specColumnContextMenu [data-spec-column-action="add-chart-columns"]'
+                    )
+                    self.assertEqual(add_columns.inner_text().strip(), "Add missing chart columns (10)")
+                    add_columns.click()
+                    page.locator(
+                        '#specGrid .tabulator-header .tabulator-col[tabulator-field="chart_banding"]'
+                    ).wait_for(state="visible", timeout=10_000)
+                    page.locator("#specNotice", has_text="Valid feature spec").wait_for(timeout=10_000)
+                    page.wait_for_function(
+                        "() => !document.querySelector('#specSaveBtn')?.disabled",
+                        timeout=10_000,
+                    )
+                    page.locator("#specSaveBtn").click()
+                    page.locator("#specNotice", has_text="Feature spec saved").wait_for(timeout=10_000)
+                    self.assertEqual(page_errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+            with features_path.open(newline="", encoding="utf-8") as handle:
+                reader = csv.DictReader(handle)
+                saved_columns = list(reader.fieldnames or [])
+                saved_row = next(reader)
+            scenario_index = saved_columns.index("scenario1")
+            for column in (
+                "chart_banding",
+                "chart_quantiles",
+                "chart_low_weights",
+                "chart_missings",
+                "chart_labels",
+                "chart_sort",
+                "chart_transform",
+                "chart_sigma",
+                "chart_date_bucket",
+                "chart_empty_periods",
+            ):
+                self.assertLess(saved_columns.index(column), scenario_index)
+                self.assertEqual(saved_row[column], "")
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")

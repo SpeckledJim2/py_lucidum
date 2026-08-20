@@ -11,7 +11,22 @@ const SPEC_KINDS = [
   { id: "filter", label: "Filter spec", icon: "filter" },
 ];
 
-const FEATURE_METADATA_COLUMNS = new Set(["Base", "min", "max", "banding"]);
+const FALLBACK_FEATURE_METADATA_COLUMNS = [
+  "Base",
+  "min",
+  "max",
+  "banding",
+  "chart_banding",
+  "chart_quantiles",
+  "chart_low_weights",
+  "chart_missings",
+  "chart_labels",
+  "chart_sort",
+  "chart_transform",
+  "chart_sigma",
+  "chart_date_bucket",
+  "chart_empty_periods",
+];
 const FIELD_TITLES = {
   feature: {
     Feature: "Feature",
@@ -126,6 +141,7 @@ export function createSpecificationsTool({
       if (action === "add-end") addScenarioAt("", "end");
       if (action === "add-before") addScenarioAt(field, "before");
       if (action === "add-after") addScenarioAt(field, "after");
+      if (action === "add-chart-columns") addMissingChartColumns();
       if (action === "delete") deleteScenarioField(field);
       if (action === "rename") renameScenarioField(field);
     });
@@ -293,6 +309,7 @@ export function createSpecificationsTool({
         minWidth: columnMinWidth(spec, field, title),
         widthGrow: columnGrow(spec.kind, field),
       };
+      applyFeatureColumnEditor(column, spec, field);
       if (spec.kind === "feature" && isScenarioField(field, spec)) {
         column.cssClass = "spec-scenario-cell";
         delete column.editor;
@@ -304,11 +321,33 @@ export function createSpecificationsTool({
       if (spec.kind === "kpi" && field === "decimals") {
         column.widthGrow = 0;
       }
-      if (["Base", "min", "max", "banding", "format"].includes(field)) {
+      if (["Base", "min", "max", "banding", "format"].includes(field) || featureColumnRule(spec, field)) {
         column.widthGrow = 0.8;
       }
       return column;
     });
+  }
+
+  function applyFeatureColumnEditor(column, spec, field) {
+    const rule = featureColumnRule(spec, field);
+    if (!rule) return;
+    if (rule.editor === "list") {
+      column.editor = "list";
+      column.editorParams = {
+        autocomplete: true,
+        clearable: true,
+        listOnEmpty: true,
+        values: ["", ...(Array.isArray(rule.values) ? rule.values.map(String) : [])],
+      };
+      return;
+    }
+    if (rule.editor === "number") {
+      column.editor = "number";
+      column.editorParams = {
+        ...(Number.isFinite(Number(rule.minimum)) ? { min: Number(rule.minimum) } : {}),
+        step: rule.integer ? 1 : "any",
+      };
+    }
   }
 
   function fieldTitle(kind, field) {
@@ -426,7 +465,7 @@ export function createSpecificationsTool({
 
   function scenarioCellSelected(value) {
     const text = String(value || "").trim().toLowerCase();
-    return text === "feature" || text === "true" || text === "yes" || text === "1" || text === "x" || text === "checked";
+    return text.includes("feature");
   }
 
   function normaliseScenarioValue(value) {
@@ -597,6 +636,7 @@ export function createSpecificationsTool({
     if (!Array.isArray(rowIssues)) return [];
     return rowIssues
       .map((issue) => ({
+        column: String(issue?.column || ""),
         rowNumber: Number(issue?.row_number),
         severity: String(issue?.severity || ""),
         message: String(issue?.message || ""),
@@ -684,7 +724,7 @@ export function createSpecificationsTool({
     const hadValidationState = Boolean(spec.validationResult || spec.autoValidated || (Array.isArray(spec.rowIssues) && spec.rowIssues.length));
     if (!hadValidationState && !spec.validationPending) return;
     spec.validationPending = false;
-    if (["kpi", "filter"].includes(spec.kind)) spec.rowIssues = [];
+    spec.rowIssues = [];
     spec.validationResult = null;
     spec.autoValidated = false;
     if (spec.kind === activeKind) showNotice(null);
@@ -981,19 +1021,33 @@ export function createSpecificationsTool({
   }
 
   function validationRowIssueNumberSet(spec = specs.get(activeKind)) {
-    if (!spec || !["kpi", "filter"].includes(spec.kind)) return new Set();
+    if (!spec) return new Set();
     return new Set((spec.rowIssues || []).map((issue) => Number(issue.rowNumber)).filter(Number.isFinite));
   }
 
+  function validationCellIssueKeySet(spec = specs.get(activeKind)) {
+    if (!spec) return new Set();
+    return new Set((spec.rowIssues || [])
+      .filter((issue) => issue.column)
+      .map((issue) => `${Number(issue.rowNumber)}\u0000${issue.column}`));
+  }
+
   function rowHasValidationIssue(rowData, spec = specs.get(activeKind), issueNumbers = validationRowIssueNumberSet(spec)) {
-    return Boolean(["kpi", "filter"].includes(spec?.kind) && issueNumbers.has(Number(rowData?._spec_row_number)));
+    return Boolean(spec && issueNumbers.has(Number(rowData?._spec_row_number)));
   }
 
   function applyValidationRowIssueClasses() {
     const spec = specs.get(activeKind);
     const issueNumbers = validationRowIssueNumberSet(spec);
+    const cellIssues = validationCellIssueKeySet(spec);
     displayedRows().forEach((row) => {
-      row.getElement?.()?.classList.toggle("spec-validation-issue-row", rowHasValidationIssue(row.getData?.(), spec, issueNumbers));
+      const rowData = row.getData?.();
+      const rowNumber = Number(rowData?._spec_row_number);
+      row.getElement?.()?.classList.toggle("spec-validation-issue-row", rowHasValidationIssue(rowData, spec, issueNumbers));
+      row.getCells?.().forEach((cell) => {
+        const key = `${rowNumber}\u0000${cell.getField?.() || ""}`;
+        cell.getElement?.()?.classList.toggle("spec-validation-issue-cell", cellIssues.has(key));
+      });
     });
   }
 
@@ -1230,23 +1284,79 @@ export function createSpecificationsTool({
 
   function scenarioFields(spec = specs.get(activeKind)) {
     if (!spec || spec.kind !== "feature") return [];
-    return spec.columns.slice(featureScenarioStart(spec.columns));
+    return spec.columns.slice(featureScenarioStart(spec.columns, spec));
   }
 
   function isScenarioField(field, spec = specs.get(activeKind)) {
     return Boolean(spec?.kind === "feature" && scenarioFields(spec).includes(field));
   }
 
-  function featureScenarioStart(columns) {
+  function featureScenarioStart(columns, spec = specs.get(activeKind)) {
     let index = 2;
     const seen = new Set();
+    const metadataColumns = featureMetadataColumnSet(spec);
     while (index < columns.length) {
       const column = columns[index];
-      if (!FEATURE_METADATA_COLUMNS.has(column) || seen.has(column)) break;
+      if (!metadataColumns.has(column) || seen.has(column)) break;
       seen.add(column);
       index += 1;
     }
     return index;
+  }
+
+  function featureEditorSchema(spec = specs.get(activeKind)) {
+    return spec?.editor_schema && typeof spec.editor_schema === "object" ? spec.editor_schema : {};
+  }
+
+  function featureMetadataColumns(spec = specs.get(activeKind)) {
+    const configured = featureEditorSchema(spec).metadata_columns;
+    return Array.isArray(configured) && configured.length
+      ? configured.map(String)
+      : [...FALLBACK_FEATURE_METADATA_COLUMNS];
+  }
+
+  function featureMetadataColumnSet(spec = specs.get(activeKind)) {
+    return new Set(featureMetadataColumns(spec));
+  }
+
+  function featureChartColumns(spec = specs.get(activeKind)) {
+    const configured = featureEditorSchema(spec).chart_columns;
+    return Array.isArray(configured)
+      ? configured.map(String)
+      : FALLBACK_FEATURE_METADATA_COLUMNS.filter((column) => column.startsWith("chart_"));
+  }
+
+  function featureColumnRule(spec, field) {
+    const rules = featureEditorSchema(spec).column_rules;
+    return rules && typeof rules === "object" && rules[field] && typeof rules[field] === "object"
+      ? rules[field]
+      : null;
+  }
+
+  function missingFeatureChartColumns(spec = specs.get(activeKind)) {
+    if (!spec || spec.kind !== "feature") return [];
+    return featureChartColumns(spec).filter((column) => !spec.columns.includes(column));
+  }
+
+  function addMissingChartColumns() {
+    const spec = saveActiveDraft();
+    const missing = missingFeatureChartColumns(spec);
+    if (!spec || !missing.length) return;
+    const scenarioStart = featureScenarioStart(spec.columns, spec);
+    spec.columns = [
+      ...spec.columns.slice(0, scenarioStart),
+      ...missing,
+      ...spec.columns.slice(scenarioStart),
+    ];
+    spec.rows.forEach((row) => {
+      missing.forEach((column) => {
+        row[column] = "";
+      });
+    });
+    clearValidationRowIssuesForSpec(spec);
+    spec.dirty = true;
+    renderSpec(spec);
+    scheduleValidationForActiveSpec();
   }
 
   function addScenarioAt(referenceField = "", position = "end") {
@@ -1309,7 +1419,7 @@ export function createSpecificationsTool({
   function uniqueScenarioName(rawName, spec, existing = "") {
     const name = String(rawName || "").trim();
     if (!name || name === existing) return name;
-    if (["Feature", "Grouping", "Base", "min", "max", "banding"].includes(name)) {
+    if (["Feature", "Grouping", ...featureMetadataColumns(spec)].includes(name)) {
       showErrorNotice(`Scenario name is reserved: ${name}`);
       return "";
     }
@@ -1346,6 +1456,10 @@ export function createSpecificationsTool({
           ["rename", "Rename scenario"],
         ]
       : [["add-end", "Add scenario"]];
+    const missingChartColumns = missingFeatureChartColumns(spec);
+    if (missingChartColumns.length) {
+      actions.unshift(["add-chart-columns", `Add missing chart columns (${missingChartColumns.length})`]);
+    }
     const menu = el("specColumnContextMenu");
     menu.innerHTML = actions.map(([action, label]) => (
       `<button class="spec-context-menu-item" type="button" role="menuitem" data-spec-column-action="${action}">${escapeHtml(label)}</button>`

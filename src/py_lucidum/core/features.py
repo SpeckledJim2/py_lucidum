@@ -4,6 +4,8 @@ import csv
 from pathlib import Path
 from typing import Any
 
+from .chart_controls import CHART_CONTROL_COLUMNS
+
 
 FEATURE_SPEC_REQUIRED_COLUMNS = ["Feature", "Grouping"]
 FEATURE_SPEC_BASE_COLUMN = "Base"
@@ -12,16 +14,7 @@ FEATURE_SPEC_METADATA_COLUMNS = {
     "min": "min",
     "max": "max",
     "banding": "banding",
-    "chart_banding": "chart_banding",
-    "chart_quantiles": "chart_quantiles",
-    "chart_low_weights": "chart_low_weights",
-    "chart_missings": "chart_missings",
-    "chart_labels": "chart_labels",
-    "chart_sort": "chart_sort",
-    "chart_transform": "chart_transform",
-    "chart_sigma": "chart_sigma",
-    "chart_date_bucket": "chart_date_bucket",
-    "chart_empty_periods": "chart_empty_periods",
+    **{column: column for column in CHART_CONTROL_COLUMNS},
 }
 
 

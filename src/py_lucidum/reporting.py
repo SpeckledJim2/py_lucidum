@@ -13,17 +13,11 @@ from uuid import uuid4
 
 from py_lucidum._version import __version__
 from py_lucidum.core import Dataset, is_numeric_kind, load_features, load_kpis, quote_ident, sql_literal
+from py_lucidum.core.chart_controls import normalise_chart_controls as _normalise_chart_controls
 
 
 REPORT_CONTENT_VALUES = {"actual_expected", "shap_only"}
 PARTIAL_DEPENDENCE_VALUES = {"none", "glm", "shap"}
-LABEL_VALUES = {"none", "bar", "line", "all"}
-SORT_VALUES = {"alpha", "volume", "actual", "expected", "shap"}
-TRANSFORM_VALUES = {"none", "log", "exp", "logit", "zero", "one"}
-MISSINGS_VALUES = {"show", "hide"}
-DATE_BUCKET_VALUES = {"none", "hour", "day", "week", "month", "year"}
-EMPTY_PERIOD_VALUES = {"show", "skip"}
-SIGMA_VALUES = {0, 1, 2, 5}
 DEFAULT_REPORT_CHART_HEIGHT = 600
 
 
@@ -607,75 +601,11 @@ ORDER BY 1
     return filter_sql, requested, sum(available[value] for value in requested)
 
 
-def _normalise_chart_controls(
-    controls: Mapping[str, Any] | None,
-    *,
-    transform: str | None,
-) -> dict[str, Any]:
-    raw = dict(controls or {})
-    known = {
-        "banding",
-        "quantiles",
-        "low_weights",
-        "missings",
-        "labels",
-        "sort",
-        "transform",
-        "sigma",
-        "date_bucket",
-        "empty_periods",
-        "base",
-    }
-    unknown = sorted(set(raw) - known)
-    if unknown:
-        raise ValueError(f"Unknown chart controls: {', '.join(unknown)}")
-    banding = _non_negative_number(raw.get("banding", 0), "banding")
-    quantiles = _non_negative_integer(raw.get("quantiles", 0), "quantiles")
-    sigma = _non_negative_integer(raw.get("sigma", 0), "sigma")
-    if sigma not in SIGMA_VALUES:
-        raise ValueError("sigma must be one of 0, 1, 2, or 5")
-    low_weights = str(raw.get("low_weights", "0") or "0").strip()
-    if low_weights not in {"0", "10", "100", "0.1%", "1%"}:
-        raise ValueError("low_weights must be 0, 10, 100, 0.1%, or 1%")
-    return {
-        "banding": banding,
-        "quantiles": quantiles,
-        "low_weights": low_weights,
-        "missings": _choice(raw.get("missings", "show"), MISSINGS_VALUES, "missings"),
-        "labels": _choice(raw.get("labels", "none"), LABEL_VALUES, "labels"),
-        "sort": _choice(raw.get("sort", "alpha"), SORT_VALUES, "sort"),
-        "transform": _choice(transform if transform is not None else raw.get("transform", "none"), TRANSFORM_VALUES, "transform"),
-        "sigma": sigma,
-        "date_bucket": _choice(raw.get("date_bucket", "none"), DATE_BUCKET_VALUES, "date bucket"),
-        "empty_periods": _choice(raw.get("empty_periods", "show"), EMPTY_PERIOD_VALUES, "empty periods"),
-        "base": str(raw.get("base") or "").strip(),
-    }
-
-
 def _choice(value: Any, choices: set[str], label: str) -> str:
     text = str(value or "").strip().lower()
     if text not in choices:
         raise ValueError(f"Choose a valid {label}: {', '.join(sorted(choices))}")
     return text
-
-
-def _non_negative_number(value: Any, label: str) -> int | float:
-    if value is None or value == "":
-        return 0
-    try:
-        number = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{label} must be a non-negative number") from exc
-    if not math.isfinite(number) or number < 0:
-        raise ValueError(f"{label} must be a non-negative number")
-    return int(number) if number.is_integer() else number
-
-
-def _non_negative_integer(value: Any, label: str) -> int:
-    number = _non_negative_number(value, label)
-    if int(number) != number:
-        raise ValueError(f"{label} must be a non-negative integer")
-    return int(number)
 
 
 def _require_column(columns: Mapping[str, Any], name: str, label: str) -> None:

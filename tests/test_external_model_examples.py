@@ -1289,6 +1289,30 @@ FROM read_parquet({sql_literal(str(glm_dir / 'coefficients.parquet'))})
             # Point the result roots' optional active markers elsewhere to
             # prove reporting resolves the exact authoritative model folder.
             glm_report_config, gbm_report_config, glm_summary_config, gbm_summary_config = write_report_configs(root)
+            _, loaded_report_features = load_report_helpers().load_report_settings(
+                glm_report_config,
+                "glm",
+            )
+            loaded_controls = {
+                feature["name"]: feature["controls"]
+                for feature in loaded_report_features
+            }
+            self.assertEqual(
+                loaded_controls["ANNUAL_MILEAGE"],
+                {
+                    "banding": "2500",
+                    "quantiles": "0",
+                    "low_weights": "0.1%",
+                    "missings": "show",
+                    "labels": "none",
+                    "sort": "alpha",
+                    "transform": "none",
+                    "sigma": "0",
+                    "date_bucket": "none",
+                    "empty_periods": "show",
+                    "base": "5000",
+                },
+            )
             glm_store.write_json(glm_store.active_path, {"model_id": "NOT-THE-REPORT-MODEL"})
             gbm_store.write_json(gbm_store.active_path, {"model_id": "NOT-THE-REPORT-MODEL"})
             glm_report_run = run_builder(GLM_REPORT_SCRIPT, glm_report_config)
@@ -1430,6 +1454,48 @@ FROM read_parquet({sql_literal(str(glm_dir / 'coefficients.parquet'))})
             self.assertEqual(
                 [chart["metadata"]["feature"] for chart in gbm_report["charts"]],
                 scenario_order,
+            )
+
+            # The external report must carry feature-level chart controls from
+            # feature_spec.csv all the way into the generated chart payload.
+            # Report-level sigma/transform settings intentionally take final
+            # precedence over their feature-spec equivalents.
+            glm_charts = {
+                chart["metadata"]["feature"]: chart
+                for chart in glm_report["charts"]
+            }
+            self.assertEqual(
+                glm_charts["ANNUAL_MILEAGE"]["metadata"]["controls"],
+                {
+                    "banding": 2500,
+                    "quantiles": 0,
+                    "low_weights": "0.1%",
+                    "missings": "show",
+                    "labels": "none",
+                    "sort": "alpha",
+                    "transform": "none",
+                    "sigma": 2,
+                    "date_bucket": "none",
+                    "empty_periods": "show",
+                    "base": "5000",
+                },
+            )
+            self.assertEqual(
+                glm_charts["VEHICLE_USAGE"]["metadata"]["controls"]["sort"],
+                "volume",
+            )
+            self.assertEqual(
+                glm_charts["VEHICLE_USAGE"]["metadata"]["controls"]["low_weights"],
+                "0.1%",
+            )
+            annual_mileage_rows = [
+                row
+                for row in glm_charts["ANNUAL_MILEAGE"]["data"]["rows"]
+                if not row["is_tail"] and row["x_sort"] is not None
+            ]
+            self.assertGreater(len(annual_mileage_rows), 1)
+            self.assertTrue(
+                all(float(row["x_sort"]) % 2500 == 0 for row in annual_mileage_rows)
             )
 
             glm_importance = glm_model_importance(glm_store, GLM_MODEL_ID)

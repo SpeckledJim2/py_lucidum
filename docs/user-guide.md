@@ -661,23 +661,28 @@ DRIVER_AGE,DRIVER,40,17,96,1,feature
 - Numeric `min`, `max`, and `banding` define GLM rating-table grids.
 - Scenario columns select rows whose cell contains `feature`, case-insensitively.
 
-Optional `chart_*` fields control reproducible external reports:
+Optional `chart_*` fields control reproducible external reports. The Specifications
+screen presents fixed choices for enumerated fields and rejects values outside these
+formats before saving:
 
-- `chart_banding`
-- `chart_quantiles`
-- `chart_low_weights`
-- `chart_missings`
-- `chart_labels`
-- `chart_sort`
-- `chart_transform`
-- `chart_sigma`
-- `chart_date_bucket`
-- `chart_empty_periods`
+| Field | Permitted nonblank values |
+| --- | --- |
+| `chart_banding` | Any non-negative finite number |
+| `chart_quantiles` | Any non-negative integer |
+| `chart_low_weights` | `0`, `10`, `100`, `0.1%`, or `1%` |
+| `chart_missings` | `show` or `hide` |
+| `chart_labels` | `none`, `bar`, `line`, or `all` |
+| `chart_sort` | `alpha`, `volume`, `actual`, `expected`, or `shap` |
+| `chart_transform` | `none`, `log`, `exp`, `logit`, `zero`, or `one` |
+| `chart_sigma` | `0`, `1`, `2`, or `5` |
+| `chart_date_bucket` | `none`, `hour`, `day`, `week`, `month`, or `year` |
+| `chart_empty_periods` | `show` or `skip` |
 
 Blank `chart_banding` falls back to `banding` and then the report YAML. Other blank
 `chart_*` values use the matching YAML default. Older Feature Specifications without
-the recognised metadata fields remain usable; columns after `Grouping` are treated
-as scenarios.
+the chart metadata remain usable; use a Feature Specification column-header menu to
+add the missing chart columns before the first scenario. Reserved metadata fields
+must form one contiguous block after `Grouping`; subsequent columns are scenarios.
 
 [Back to contents ↑](#contents)
 

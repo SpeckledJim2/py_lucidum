@@ -262,6 +262,11 @@
         color: #1f2937 !important;
       }
 
+      .spec-grid .tabulator-row .tabulator-cell.spec-validation-issue-cell {
+        background: color-mix(in srgb, var(--danger) 16%, var(--panel)) !important;
+        color: var(--text) !important;
+      }
+
       .spec-grid .tabulator-row .tabulator-cell.spec-cell-selected {
         background: color-mix(in srgb, var(--accent) 12%, var(--panel)) !important;
         color: var(--text) !important;

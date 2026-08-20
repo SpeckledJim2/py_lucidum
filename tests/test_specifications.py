@@ -12,6 +12,27 @@ from py_lucidum.app import create_app
 from py_lucidum.tools.registry import normalise_tools
 
 
+FEATURE_EDITOR_COLUMNS = [
+    "Feature",
+    "Grouping",
+    "Base",
+    "min",
+    "max",
+    "banding",
+    "chart_banding",
+    "chart_quantiles",
+    "chart_low_weights",
+    "chart_missings",
+    "chart_labels",
+    "chart_sort",
+    "chart_transform",
+    "chart_sigma",
+    "chart_date_bucket",
+    "chart_empty_periods",
+    "scenario1",
+]
+
+
 def asgi_get(app: Any, path: str) -> tuple[int, dict[str, str], bytes]:
     messages: list[dict[str, Any]] = []
 
@@ -131,9 +152,20 @@ class SpecificationsToolTests(unittest.TestCase):
         self.assertFalse(payload["loaded"])
         self.assertTrue(payload["generated"])
         self.assertNotIn("generation_message", payload)
-        self.assertEqual(payload["columns"], ["Feature", "Grouping", "Base", "min", "max", "banding", "scenario1"])
+        self.assertEqual(payload["columns"], FEATURE_EDITOR_COLUMNS)
         self.assertEqual([row["Feature"] for row in payload["rows"]], ["Age", "Premium", "Weight", "Segment"])
-        self.assertTrue(all(row["Grouping"] == row["Base"] == row["min"] == row["max"] == row["banding"] == row["scenario1"] == "" for row in payload["rows"]))
+        self.assertTrue(
+            all(
+                all(row[column] == "" for column in FEATURE_EDITOR_COLUMNS if column != "Feature")
+                for row in payload["rows"]
+            )
+        )
+        self.assertEqual(payload["editor_schema"]["metadata_columns"], FEATURE_EDITOR_COLUMNS[2:-1])
+        self.assertEqual(payload["editor_schema"]["chart_columns"], FEATURE_EDITOR_COLUMNS[6:-1])
+        self.assertEqual(
+            payload["editor_schema"]["column_rules"]["chart_low_weights"]["values"],
+            ["0", "10", "100", "0.1%", "1%"],
+        )
         self.assertEqual(Path(payload["path"]), (self.root / "specs" / "feature_spec.csv").resolve())
         self.assertFalse((self.root / "specs" / "feature_spec.csv").exists())
 
@@ -185,7 +217,7 @@ class SpecificationsToolTests(unittest.TestCase):
             "filter": json.loads(filter_body),
         }
         self.assertEqual((feature_status, kpi_status, filter_status, schema_status), (200, 200, 200, 200))
-        self.assertEqual(payloads["feature"]["columns"], ["Feature", "Grouping", "Base", "min", "max", "banding", "scenario1"])
+        self.assertEqual(payloads["feature"]["columns"], FEATURE_EDITOR_COLUMNS)
         self.assertEqual(payloads["kpi"]["columns"], ["group", "name", "actual", "denominator", "decimals", "format"])
         self.assertEqual(payloads["filter"]["columns"], ["theme", "name", "expression"])
         for kind, payload in payloads.items():
@@ -454,6 +486,127 @@ class SpecificationsToolTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(schema_status, 200)
         self.assertEqual(schema["feature_bases"], {"Age": "40"})
+
+    def test_validate_feature_spec_accepts_permitted_chart_values(self) -> None:
+        app = create_app(self.data_path, token="", tools=["specs"], use_saved_filters=False, use_kpis=False)
+        row = {column: "" for column in FEATURE_EDITOR_COLUMNS}
+        row.update({
+            "Feature": "Age",
+            "Grouping": "Driver",
+            "Base": "40",
+            "min": "20",
+            "max": "80",
+            "banding": "5",
+            "chart_banding": "2.5",
+            "chart_quantiles": "10",
+            "chart_low_weights": "0.1%",
+            "chart_missings": "hide",
+            "chart_labels": "all",
+            "chart_sort": "volume",
+            "chart_transform": "one",
+            "chart_sigma": "5",
+            "chart_date_bucket": "month",
+            "chart_empty_periods": "skip",
+            "scenario1": "feature",
+        })
+
+        status, _, body = asgi_post_json(
+            app,
+            "/api/specs/feature/validate",
+            {"columns": FEATURE_EDITOR_COLUMNS, "rows": [row]},
+        )
+
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["valid"])
+        self.assertEqual(payload["errors"], [])
+        self.assertEqual(payload["row_issues"], [])
+
+    def test_validate_feature_spec_rejects_invalid_metadata_values(self) -> None:
+        app = create_app(self.data_path, token="", tools=["specs"], use_saved_filters=False, use_kpis=False)
+        cases = {
+            "min": ("not-a-number", "min must be a finite number"),
+            "max": ("inf", "max must be a finite number"),
+            "banding": ("-1", "banding must be a non-negative finite number"),
+            "chart_banding": ("wide", "banding must be a non-negative number"),
+            "chart_quantiles": ("3.5", "quantiles must be a non-negative integer"),
+            "chart_low_weights": ("0.4%", "low_weights must be 0, 10, 100, 0.1%, or 1%"),
+            "chart_missings": ("maybe", "Choose a valid missings"),
+            "chart_labels": ("sometimes", "Choose a valid labels"),
+            "chart_sort": ("random", "Choose a valid sort"),
+            "chart_transform": ("sqrt", "Choose a valid transform"),
+            "chart_sigma": ("3", "sigma must be one of 0, 1, 2, or 5"),
+            "chart_date_bucket": ("quarter", "Choose a valid date bucket"),
+            "chart_empty_periods": ("perhaps", "Choose a valid empty periods"),
+        }
+
+        for column, (value, expected_error) in cases.items():
+            with self.subTest(column=column, value=value):
+                row = {field: "" for field in FEATURE_EDITOR_COLUMNS}
+                row.update({"Feature": "Age", column: value, "scenario1": "feature"})
+                status, _, body = asgi_post_json(
+                    app,
+                    "/api/specs/feature/validate",
+                    {"columns": FEATURE_EDITOR_COLUMNS, "rows": [row]},
+                )
+                payload = json.loads(body)
+                self.assertEqual(status, 200)
+                self.assertFalse(payload["valid"])
+                self.assertIn(expected_error, payload["errors"][0])
+                self.assertEqual(payload["row_issues"][0]["row_number"], 2)
+                self.assertEqual(payload["row_issues"][0]["column"], column)
+
+    def test_invalid_chart_value_save_does_not_replace_feature_spec(self) -> None:
+        features_path = self.root / "feature_spec.csv"
+        original_text = (
+            ",".join(FEATURE_EDITOR_COLUMNS)
+            + "\nAge,Driver,40,20,80,5,2.5,10,0.1%,hide,all,volume,one,5,month,skip,feature\n"
+        )
+        features_path.write_text(original_text, encoding="utf-8")
+        app = create_app(
+            self.data_path,
+            token="",
+            tools=["specs"],
+            features_path=features_path,
+            use_saved_filters=False,
+            use_kpis=False,
+        )
+        row = {column: "" for column in FEATURE_EDITOR_COLUMNS}
+        row.update({"Feature": "Age", "chart_low_weights": "0.4%", "scenario1": "feature"})
+
+        status, _, body = asgi_post_json(
+            app,
+            "/api/specs/feature/save",
+            {"columns": FEATURE_EDITOR_COLUMNS, "rows": [row]},
+        )
+
+        payload = json.loads(body)
+        self.assertEqual(status, 400)
+        self.assertIn("chart_low_weights", payload["detail"])
+        self.assertIn("0.1%", payload["detail"])
+        self.assertEqual(features_path.read_text(encoding="utf-8"), original_text)
+        self.assertEqual(app.state.feature_spec["rows"][0]["chart_low_weights"], "0.1%")
+
+    def test_feature_spec_rejects_reserved_metadata_after_a_scenario(self) -> None:
+        app = create_app(self.data_path, token="", tools=["specs"], use_saved_filters=False, use_kpis=False)
+        columns = ["Feature", "Grouping", "scenario1", "chart_banding"]
+
+        status, _, body = asgi_post_json(
+            app,
+            "/api/specs/feature/validate",
+            {
+                "columns": columns,
+                "rows": [{"Feature": "Age", "Grouping": "Driver", "scenario1": "feature", "chart_banding": "5"}],
+            },
+        )
+
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertFalse(payload["valid"])
+        self.assertEqual(
+            payload["errors"],
+            ["feature_spec.csv reserved metadata columns must appear before scenario columns: chart_banding"],
+        )
 
     def test_validate_feature_spec_allows_rows_not_in_dataset(self) -> None:
         app = create_app(self.data_path, token="", tools=["specs"], use_saved_filters=False, use_kpis=False)

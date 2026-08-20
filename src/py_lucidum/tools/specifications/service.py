@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import math
 import os
 from collections.abc import Iterable
 from pathlib import Path
@@ -18,18 +19,19 @@ from py_lucidum.core import (
     resolve_filters_path,
     resolve_kpis_path,
 )
+from py_lucidum.core.chart_controls import (
+    CHART_CONTROL_COLUMNS,
+    CHART_CONTROL_EDITOR_RULES,
+    validate_chart_control_value,
+)
 from py_lucidum.core.features import FEATURE_SPEC_METADATA_COLUMNS, FEATURE_SPEC_REQUIRED_COLUMNS
 from py_lucidum.core.kpis import KPI_SPEC_COLUMNS, normalise_kpi_denominator
 
 
 FILTER_SPEC_COLUMNS = ["theme", "name", "expression"]
 FEATURE_SPEC_DEFAULT_COLUMNS = [
-    "Feature",
-    "Grouping",
-    "Base",
-    "min",
-    "max",
-    "banding",
+    *FEATURE_SPEC_REQUIRED_COLUMNS,
+    *FEATURE_SPEC_METADATA_COLUMNS,
     "scenario1",
 ]
 SPEC_KINDS = ("feature", "kpi", "filter")
@@ -202,7 +204,7 @@ def read_spec_file(state: Any, kind: str, dataset: Dataset | None = None) -> dic
     generated = not loaded
     if generated:
         columns, rows, placeholders = starter_spec(dataset, kind)
-    return {
+    payload = {
         "kind": kind,
         "label": spec_label(kind),
         "path": str(path),
@@ -215,6 +217,29 @@ def read_spec_file(state: Any, kind: str, dataset: Dataset | None = None) -> dic
         "columns": columns,
         "rows": rows,
         "row_count": len(rows),
+    }
+    if kind == "feature":
+        payload["editor_schema"] = feature_spec_editor_schema()
+    return payload
+
+
+def feature_spec_editor_schema() -> dict[str, Any]:
+    column_rules = {
+        "min": {"editor": "number"},
+        "max": {"editor": "number"},
+        "banding": {"editor": "number", "minimum": 0},
+        **{
+            column: {
+                **rule,
+                **({"values": list(rule["values"])} if "values" in rule else {}),
+            }
+            for column, rule in CHART_CONTROL_EDITOR_RULES.items()
+        },
+    }
+    return {
+        "metadata_columns": list(FEATURE_SPEC_METADATA_COLUMNS),
+        "chart_columns": list(CHART_CONTROL_COLUMNS),
+        "column_rules": column_rules,
     }
 
 
@@ -293,12 +318,22 @@ def validation_message(kind: str, errors: list[str], warnings: list[str]) -> str
     return f"Valid {label}"
 
 
-def add_row_issue(row_issues: list[dict[str, Any]], row_number: int, severity: str, message: str) -> None:
-    row_issues.append({
+def add_row_issue(
+    row_issues: list[dict[str, Any]],
+    row_number: int,
+    severity: str,
+    message: str,
+    *,
+    column: str = "",
+) -> None:
+    issue = {
         "row_number": row_number,
         "severity": severity,
         "message": message,
-    })
+    }
+    if column:
+        issue["column"] = column
+    row_issues.append(issue)
 
 
 def validate_filter_spec(
@@ -391,10 +426,13 @@ def validate_feature_spec(
         errors.append("feature_spec.csv must start with these columns: Feature,Grouping")
         return
     metadata_stop = feature_metadata_stop(columns)
-    for column in columns[2:metadata_stop]:
-        if column not in FEATURE_SPEC_METADATA_COLUMNS:
-            errors.append(f"feature_spec.csv has an unsupported metadata column: {column}")
-            return
+    misplaced_metadata = [column for column in columns[metadata_stop:] if column in FEATURE_SPEC_METADATA_COLUMNS]
+    if misplaced_metadata:
+        errors.append(
+            "feature_spec.csv reserved metadata columns must appear before scenario columns: "
+            + ", ".join(misplaced_metadata)
+        )
+        return
     for row_number, row in nonblank_rows(rows, columns):
         feature = str(row.get("Feature") or "").strip()
         if not feature:
@@ -402,6 +440,29 @@ def validate_feature_spec(
             errors.append(message)
             add_row_issue(row_issues, row_number, "error", message)
             continue
+        for column in ("min", "max", "banding"):
+            value = str(row.get(column) or "").strip()
+            if not value or column not in columns:
+                continue
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                number = math.nan
+            if not math.isfinite(number) or (column == "banding" and number < 0):
+                qualifier = "a non-negative finite number" if column == "banding" else "a finite number"
+                message = f"feature_spec.csv row {row_number} {column} must be {qualifier}: {value!r}"
+                errors.append(message)
+                add_row_issue(row_issues, row_number, "error", message, column=column)
+        for column, control in CHART_CONTROL_COLUMNS.items():
+            if column not in columns:
+                continue
+            value = str(row.get(column) or "").strip()
+            try:
+                validate_chart_control_value(control, value)
+            except ValueError as exc:
+                message = f"feature_spec.csv row {row_number} {column}: {exc}"
+                errors.append(message)
+                add_row_issue(row_issues, row_number, "error", message, column=column)
         for scenario in columns[metadata_stop:]:
             value = str(row.get(scenario) or "").strip()
             if value and "feature" not in value.lower():
