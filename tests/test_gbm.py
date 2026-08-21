@@ -2904,6 +2904,11 @@ COPY (
                     "best_iteration": best_iteration,
                     "training_rows": 2,
                     "test_rows": 1,
+                    **(
+                        {"gini_tr": 0.75, "gini_te": -0.25, "gini_vl": None}
+                        if model_id == "m1"
+                        else {}
+                    ),
                 },
             )
             write_gbm_parameters(store, model_id, objective=metric, metric=metric)
@@ -2945,6 +2950,12 @@ COPY (
         self.assertEqual(models["m1"]["parameters"]["num_iterations"], 77)
         self.assertEqual(models["m1"]["objective"], "gamma")
         self.assertEqual(models["m1"]["metric"], "gamma")
+        self.assertEqual(models["m1"]["gini_tr"], 0.75)
+        self.assertEqual(models["m1"]["gini_te"], -0.25)
+        self.assertIsNone(models["m1"]["gini_vl"])
+        self.assertIsNone(models["m2"]["gini_tr"])
+        self.assertIsNone(models["m2"]["gini_te"])
+        self.assertIsNone(models["m2"]["gini_vl"])
         self.assertEqual(
             models["m1"]["best_metrics"],
             {"training": 7.2, "test": 7.25, "validation": 7.4},
@@ -2978,6 +2989,9 @@ COPY (
                     "best_iteration": 7,
                     "training_rows": 2,
                     "test_rows": 1,
+                    "gini_tr": 0.6 if model_id == "m2" else 0.4,
+                    "gini_te": -0.2 if model_id == "m2" else -0.1,
+                    "gini_vl": None,
                 },
             )
             write_gbm_feature_config(
@@ -3010,6 +3024,13 @@ COPY (
         self.assertEqual(status, 200)
         self.assertEqual(payload["config"]["active_model_id"], "m2")
         self.assertEqual(payload["config"]["training_mode"], "normal")
+        self.assertEqual(payload["model"]["gini_tr"], 0.6)
+        self.assertEqual(payload["model"]["gini_te"], -0.2)
+        self.assertIsNone(payload["model"]["gini_vl"])
+        active_config_model = next(
+            model for model in payload["config"]["models"] if model["active"]
+        )
+        self.assertEqual(active_config_model["gini_tr"], 0.6)
         self.assertEqual(parameters["learning_rate"], 0.2)
         self.assertEqual(parameters["num_iterations"], 102)
         self.assertEqual(parameters["tweedie_variance_power"], 1.7)
@@ -3506,6 +3527,12 @@ COPY (
         )
 
         manifest = store.read_json(store.artifact_path(result["model_id"], "manifest"))
+        self.assertIsNone(manifest["gini_tr"])
+        self.assertIsNone(manifest["gini_te"])
+        self.assertIsNone(manifest["gini_vl"])
+        gini_warnings = [warning for warning in manifest["warnings"] if "Gini" in warning]
+        self.assertEqual(len(gini_warnings), 1)
+        self.assertIn("Training Gini", gini_warnings[0])
         self.assertEqual(
             manifest["feature_interaction_constraints"],
             {
@@ -4231,6 +4258,13 @@ FROM read_parquet({sql_literal(str(store.artifact_path(result['model_id'], 'tree
                         "shap_rows": "0",
                     },
                 )
+                manifest = store.read_json(
+                    store.artifact_path(result["model_id"], "manifest")
+                )
+                for field in ("gini_tr", "gini_te", "gini_vl"):
+                    self.assertIsNotNone(result[field])
+                    self.assertEqual(result[field], manifest[field])
+                    self.assertEqual(store.list_models()[0][field], manifest[field])
                 expected = dataset.con.execute(
                     f"""
 WITH source AS (

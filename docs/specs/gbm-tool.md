@@ -76,7 +76,7 @@ EBM mode requires the active sample source, either a physical dataset `SAMPLE` c
 
 ## Model navigator tab
 
-This is a sortable table showing every fitted model, any feature interaction constraints, and its key parameters and train objective/metric context. The first column shows a green dot for the active model, i.e. the one displayed in the Line and Bar charts and tree tool. Clicking model rows selects them for actions rather than activating them. The tab lets users rename one selected model to a valid folder name, activate one selected model, or delete all selected model folders from the current dataset workspace; deleting the active model selects the newest remaining model when one exists. Active model switching is handled by the sidebar model list or the Model navigator Activate button.
+This is a sortable table showing every fitted model, any feature interaction constraints, its key parameters and train objective/metric context, and `gini_tr`, `gini_te`, and `gini_vl`. The Gini fields follow the canonical [Normalized Gini definition](../user-guide.md#normalized-gini) and are calculated from final predictions without affecting evaluation, early stopping, or grid selection. The first column shows a green dot for the active model, i.e. the one displayed in the Line and Bar charts and tree tool. Clicking model rows selects them for actions rather than activating them. The tab lets users rename one selected model to a valid folder name, activate one selected model, or delete all selected model folders from the current dataset workspace; deleting the active model selects the newest remaining model when one exists. Active model switching is handled by the sidebar model list or the Model navigator Activate button.
 
 ## Artifact scope
 

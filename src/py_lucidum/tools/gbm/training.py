@@ -9,6 +9,7 @@ from typing import Any, Callable
 import duckdb
 
 from py_lucidum.core import Dataset, quote_ident, sql_literal
+from py_lucidum.model_metrics import split_gini_metrics
 from py_lucidum.tools.glm.store import GlmModelStore
 
 from .interaction_group_model import (
@@ -783,6 +784,7 @@ def train_model(
     response_present = ~np.isnan(response_values)
     sample_mode = "none"
     sample_source = "none"
+    sample_values = None
     if sample_column or generated_sample_path:
         sample_values = (
             work_frame.get_column(SAMPLE_COLUMN)
@@ -989,6 +991,23 @@ def train_model(
     )
     if validation_warning:
         build_warnings.append(validation_warning)
+    if offset_values is not None:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            gini_actual = response_values / offset_values
+            gini_prediction = prediction / offset_values
+        gini_weight = offset_values
+    else:
+        gini_actual = response_values
+        gini_prediction = prediction
+        gini_weight = None
+    gini_metrics, gini_warnings = split_gini_metrics(
+        np,
+        actual=gini_actual,
+        prediction=gini_prediction,
+        weight=gini_weight,
+        sample_roles=sample_values,
+    )
+    build_warnings.extend(gini_warnings)
     saved_init_score_frame = (
         init_score_dataframe(pl, work_frame, init_score_linear, init_score_prediction)
         if use_supplied_init_score and init_score_linear is not None and init_score_prediction is not None
@@ -1106,6 +1125,7 @@ def train_model(
         "sample_column": sample_mode if sample_mode != "none" else None,
         "sample_source": sample_source,
         "shap_rows": shap_written_rows,
+        **gini_metrics,
         "timings": {},
         "warnings": build_warnings,
     }

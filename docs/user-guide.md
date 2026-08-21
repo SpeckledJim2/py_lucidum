@@ -12,7 +12,7 @@ and saved work.
 | Area | Sections |
 | --- | --- |
 | Getting started | [Installation alternatives and launch options](#installation-alternatives-and-launch-options) · [Datasets and access](#datasets-and-access) |
-| Shared analysis controls | [Metrics and shared controls](#metrics-and-shared-controls) |
+| Shared analysis controls | [Metrics and shared controls](#metrics-and-shared-controls) · [Normalized Gini](#normalized-gini) |
 | Saved work | [Saved work and model workspaces](#saved-work-and-model-workspaces) |
 | Python and external workflows | [Python usage](#python-usage) · [External models and reports](#external-models-and-reports) |
 | Help | [Monitoring and troubleshooting](#monitoring-and-troubleshooting) |
@@ -256,6 +256,59 @@ saved metric pair or remove the component to clear the warning.
 
 Building a new GLM or GBM is disabled while a model prediction is the Denominator.
 GBM prediction chaining remains available through `init_score`.
+
+### Normalized Gini
+
+Every newly built GLM and GBM records three objective-independent ranking metrics:
+`gini_tr`, `gini_te`, and `gini_vl`. The suffixes mean rows whose trimmed,
+case-insensitive `SAMPLE` value is `training`, `test`, or `validation`; they do not
+mean the rows used for fitting or early stopping. For example, a GLM fitted with
+**All** or **Training + Test** still calculates each named partition separately.
+When there is no `SAMPLE` column, all usable rows contribute to `gini_tr` and the
+other two values are blank. The maintained external builders apply their configured
+Training, Test, and Validation sample labels to the same three roles.
+
+Lucidum uses normalized actuarial Gini. For each usable row `i`, let `a_i` be
+actual rate, `s_i` predicted rate, and `w_i` exposure. With a Denominator `D_i`
+and final predicted numerator `P_i`:
+
+$$
+a_i = Y_i / D_i, \qquad s_i = P_i / D_i, \qquad w_i = D_i.
+$$
+
+Without a Denominator, `a_i = Y_i`, `s_i = P_i`, and `w_i = 1`. Rows without finite
+actuals or predictions are excluded; a Denominator must also be finite and positive.
+After sorting from lowest to highest predicted rate, exact prediction ties are
+aggregated. If `x_j` is cumulative exposure share and `y_j` is cumulative
+exposure-weighted actual share at tied-score group `j`, with `x_0 = y_0 = 0`, the
+concentration Gini is
+
+$$
+G(s) = 1 - \sum_j (x_j-x_{j-1})(y_j+y_{j-1}).
+$$
+
+The reported metric is
+
+$$
+G_{\mathrm{normalized}} = \frac{G(s)}{G(a)},
+$$
+
+where `G(a)` is calculated identically after ordering by actual rate: the
+hypothetical perfect model. For a binary outcome, this equals the exposure-weighted
+`2 × AUC − 1`, including the same half-credit treatment of tied scores.
+The construction follows [CAS Measures of Predictive Accuracy,
+§3.2](https://www.casact.org/sites/default/files/2026-01/MAS-II_Measures_of_Predictive_Accuracy_Study_Note-1.pdf#page=4)
+for the exposure/loss Lorenz curve, tie aggregation, and trapezoidal calculation,
+and [CAS Generalized Linear Models for Insurance Rating, normalized-Gini
+definition](https://www.casact.org/sites/default/files/2021-01/05-Goldburd-Khare-Tevet.pdf#page=95)
+for normalization by the hypothetical perfect model.
+
+Gini is not always defined. Lucidum leaves the value blank (`--`) when a present
+partition has fewer than two usable rows, negative actual rates, zero total actual,
+or a zero or near-zero perfect Gini. Constant outcomes and single-class binary
+partitions therefore have no value. This adds a saved warning but never blocks an
+otherwise valid model build. Older artifacts are not rewritten and show `--` until
+the model is rebuilt.
 
 ### Filters
 
@@ -745,7 +798,8 @@ create a generated sample split.
 After fitting, Lucidum scores the eligible rows and saves the model in the current
 dataset workspace. The coefficient table is sortable and provides copy and download
 actions. The model navigator shows the active model, formula/model size context,
-training choices, diagnostics, and whether tabulations exist.
+training choices, diagnostics, [split normalized Gini](#normalized-gini), and whether
+tabulations exist.
 
 Select saved model rows to rename one model, activate one model, open its folder when
 local desktop access is available, or delete one or more models. Deleting the active
@@ -889,10 +943,12 @@ the best iteration when Validation rows exist. Long histories can be sampled for
 browser chart without changing the complete saved evaluation data. Copy the chart
 image from its action beside the view control.
 
-The Model navigator compares saved models and their objective, metric, training, and
-constraint context. Select rows to rename or activate one model, open one local model
-folder, or delete several model folders. Deleting the active model promotes the
-newest remaining model.
+The Model navigator compares saved models and their objective, metric, training,
+constraint context, and [split normalized Gini](#normalized-gini). Gini is calculated
+from final predictions only; it does not affect LightGBM early stopping, evaluation
+history, or grid-model selection. Select rows to rename or activate one model, open
+one local model folder, or delete several model folders. Deleting the active model
+promotes the newest remaining model.
 
 Saved feature scenarios, constraint groups, and interaction pairs are restored when
 a model is selected. If the Feature Specification has changed, Lucidum marks saved
@@ -1154,6 +1210,8 @@ for complete reporting calls and saved-model inputs.
 The repository contains parallel YAML-controlled GLM and GBM workflows for building
 and scoring a model outside the app, producing interactive HTML charts, and creating
 model summaries. GLM summaries can also produce rating tables and XLSX output.
+Their model-result writers calculate the same [split normalized Gini](#normalized-gini)
+as in-app builds.
 
 Reports read the named results folder directly and do not require a `.lucidum`
 workspace. The optional installation step copies and activates the completed model

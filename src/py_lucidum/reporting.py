@@ -449,6 +449,10 @@ def write_glm_summary_report(
             estimator=estimator,
             kpi=kpi,
         )
+        _add_split_gini_to_glm_performance(
+            performance,
+            store.model_diagnostics(model_id, manifest),
+        )
         coefficients = _glm_coefficients(store.read_parquet_records(store.artifact_path(model_id, "coefficients")))
         actual_link = _glm_link_name(estimator)
         report_metadata = {
@@ -1091,6 +1095,38 @@ def _safe_glm_metric(metric: Any, y: Any, prediction: Any, weights: Any) -> floa
         return None
 
 
+def _add_split_gini_to_glm_performance(
+    performance: dict[str, Any],
+    diagnostics: Mapping[str, Any],
+) -> None:
+    """Add persisted SAMPLE-partition Ginis to a GLM report performance table."""
+
+    fields = ("gini_tr", "gini_te", "gini_vl")
+    rows = list(performance.get("rows") or [])
+    for row, field in zip(rows, fields, strict=False):
+        value = _finite_number(diagnostics.get(field))
+        row["gini"] = "—" if value is None else f"{value:.4f}"
+        raw = row.get("raw")
+        if isinstance(raw, dict):
+            raw["gini"] = value
+
+    columns = list(performance.get("columns") or [])
+    existing = next((column for column in columns if column.get("key") == "gini"), None)
+    if existing is not None:
+        existing["label"] = "Normalized Gini"
+    else:
+        insert_at = next(
+            (
+                index + 1
+                for index, column in enumerate(columns)
+                if column.get("key") == "deviance_explained"
+            ),
+            len(columns),
+        )
+        columns.insert(insert_at, {"key": "gini", "label": "Normalized Gini"})
+    performance["columns"] = columns
+
+
 def _weighted_auc(y: Any, prediction: Any, weights: Any) -> float | None:
     import numpy as np
 
@@ -1336,7 +1372,7 @@ def _glm_summary_document(
     </header>
     <section class="summary-card" data-summary-section="performance">
       <h2>Model performance</h2>
-      <p class="section-detail">Performance uses fitted <code>glm_prediction</code> values.</p>
+      <p class="section-detail">Performance uses fitted <code>glm_prediction</code> values. Normalized Gini reports <code>gini_tr</code>, <code>gini_te</code>, and <code>gini_vl</code> for the Training, Test, and Validation SAMPLE rows.</p>
       <div class="table-wrap">{performance_table}</div>
     </section>
     <section class="summary-card" data-summary-section="coefficients">

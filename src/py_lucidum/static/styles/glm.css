@@ -1711,7 +1711,7 @@
       }
 
       .glm-model-table {
-        min-width: 980px;
+        min-width: 1320px;
       }
 
       .glm-model-table th,
@@ -1792,6 +1792,27 @@
       .glm-model-table th:nth-child(9),
       .glm-model-table th:nth-child(10) {
         width: 8%;
+      }
+
+      .glm-model-table th:nth-child(11),
+      .glm-model-table th:nth-child(12),
+      .glm-model-table th:nth-child(13),
+      .glm-model-table th:nth-child(14),
+      .glm-model-table th:nth-child(15),
+      .glm-model-table th:nth-child(16) {
+        width: 86px;
+      }
+
+      .glm-model-table th:nth-child(17) {
+        width: 72px;
+      }
+
+      .glm-model-table th:nth-child(18) {
+        width: 84px;
+      }
+
+      .glm-model-table th:nth-child(19) {
+        width: 104px;
       }
 
       .glm-model-active-dot {

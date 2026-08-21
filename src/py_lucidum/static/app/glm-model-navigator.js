@@ -25,6 +25,9 @@ export function createGlmModelNavigator({
         deviance: modelNumberOrNull(diagnostics.deviance),
         aic: modelNumberOrNull(diagnostics.aic),
         bic: modelNumberOrNull(diagnostics.bic),
+        gini_tr: modelNumberOrNull(model.gini_tr ?? diagnostics.gini_tr),
+        gini_te: modelNumberOrNull(model.gini_te ?? diagnostics.gini_te),
+        gini_vl: modelNumberOrNull(model.gini_vl ?? diagnostics.gini_vl),
         n_terms: modelNumberOrNull(model.n_terms ?? diagnostics.n_terms),
         n_features: modelNumberOrNull(model.n_features ?? diagnostics.n_features),
         n_interactions: modelNumberOrNull(model.n_interactions ?? diagnostics.n_interactions),
@@ -60,6 +63,9 @@ export function createGlmModelNavigator({
             <th>deviance</th>
             <th>AIC</th>
             <th>BIC</th>
+            <th class="numeric" title="Normalized Gini for SAMPLE = training">gini_tr</th>
+            <th class="numeric" title="Normalized Gini for SAMPLE = test">gini_te</th>
+            <th class="numeric" title="Normalized Gini for SAMPLE = validation">gini_vl</th>
             <th>rows</th>
             <th>fit time</th>
             <th>overall time</th>
@@ -95,6 +101,9 @@ export function createGlmModelNavigator({
         <td class="numeric">${escapeHtml(formatModelMetric(diagnostics.deviance))}</td>
         <td class="numeric">${escapeHtml(formatModelMetric(diagnostics.aic))}</td>
         <td class="numeric">${escapeHtml(formatModelMetric(diagnostics.bic))}</td>
+        <td class="numeric">${escapeHtml(formatModelMetric(model.gini_tr ?? diagnostics.gini_tr))}</td>
+        <td class="numeric">${escapeHtml(formatModelMetric(model.gini_te ?? diagnostics.gini_te))}</td>
+        <td class="numeric">${escapeHtml(formatModelMetric(model.gini_vl ?? diagnostics.gini_vl))}</td>
         <td class="numeric">${Number(model.training_rows || diagnostics.training_rows || 0).toLocaleString()}</td>
         <td class="numeric">${escapeHtml(timingDisplay(model, "fit_ms"))}</td>
         <td class="numeric">${escapeHtml(timingDisplay(model, "elapsed_ms"))}</td>

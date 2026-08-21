@@ -22,6 +22,7 @@ from uuid import uuid4
 import duckdb
 
 from py_lucidum.core import Dataset, quote_ident, sql_literal
+from py_lucidum.model_metrics import split_gini_metrics
 
 from .store import GlmModelStore, json_safe_number
 from .terms import column_tokens, model_matrix, term_groups
@@ -732,10 +733,9 @@ def required_training_columns(dataset: Dataset, validation: dict[str, Any]) -> l
         requested.update(formula_source_columns(str(formula.get("fitted") or "1"), source_columns))
         for expression in formula.get("offset_terms") or []:
             requested.update(column_tokens(str(expression), source_columns))
-    if training_scope_sample_values(validation.get("training_scope") or "all"):
-        sample_column = physical_sample_column(dataset)
-        if sample_column:
-            requested.add(sample_column)
+    sample_column = physical_sample_column(dataset)
+    if sample_column:
+        requested.add(sample_column)
     requested.discard("")
     return [column for column in source_columns if column in requested]
 
@@ -1405,10 +1405,8 @@ def _train_model_impl(
         fit_mask = fit_mask & np.isfinite(offset_values)
 
     sample_column = physical_sample_column(dataset)
-    fit_sample_values = training_scope_sample_values(training_scope)
-    if fit_sample_values:
-        if not sample_column:
-            raise ValueError("Restricted training rows require a physical SAMPLE column")
+    sample_values = None
+    if sample_column:
         sample_values = (
             frame.get_column(sample_column)
             .cast(pl.String)
@@ -1417,6 +1415,10 @@ def _train_model_impl(
             .fill_null("")
             .to_numpy()
         )
+    fit_sample_values = training_scope_sample_values(training_scope)
+    if fit_sample_values:
+        if sample_values is None:
+            raise ValueError("Restricted training rows require a physical SAMPLE column")
         training_rows = sample_values == "training"
         if not bool((fit_mask & training_rows).any()):
             raise ValueError("No usable rows have SAMPLE = training")
@@ -1586,12 +1588,28 @@ def _train_model_impl(
     del prediction_design_matrix
     del fit_design
     numerical_warnings.extend(_glm_numerical_warning_messages(captured_warnings))
+    gini_metrics, gini_warnings = split_gini_metrics(
+        np,
+        actual=target[prediction_result.score_mask],
+        prediction=prediction_result.response_values,
+        weight=(
+            denominator[prediction_result.score_mask]
+            if denominator_column
+            else None
+        ),
+        sample_roles=(
+            sample_values[prediction_result.score_mask]
+            if sample_values is not None
+            else None
+        ),
+    )
     model_warnings = _dedupe_warnings(
         [
             *validation_warnings,
             *design_warnings,
             *numerical_warnings,
             *_coefficient_inference_warnings(coefficients, include_inference=not is_penalized),
+            *gini_warnings,
         ]
     )
     timings["score_ms"] = _elapsed_ms(score_started)
@@ -1626,6 +1644,7 @@ def _train_model_impl(
                 {feature_set for feature_set in coefficient_feature_sets if len(feature_set) > 1}
             ),
             "nonzero_coefficients": regularization.get("nonzero_coefficients"),
+            **gini_metrics,
             "design_matrix": design_diagnostics,
             "warnings": model_warnings,
         }

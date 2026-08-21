@@ -1939,7 +1939,7 @@ const glmNavigator = createGlmModelNavigator({{
 }});
 const glmTarget = target();
 glmNavigator.renderFallback(glmTarget, [
-  {{ model_id: "new", label: "New GLM", n_terms: 3, n_features: 2, n_interactions: 1, tabulated: true, diagnostics: {{}} }},
+  {{ model_id: "new", label: "New GLM", n_terms: 3, n_features: 2, n_interactions: 1, tabulated: true, diagnostics: {{ gini_tr: 0.81234, gini_te: -0.25, gini_vl: null }} }},
   {{ model_id: "legacy", label: "Legacy GLM", tabulated: false, diagnostics: {{}} }},
 ]);
 if (!glmTarget.innerHTML.includes("<th>Name</th>")) throw new Error("GLM fallback Name heading missing");
@@ -1947,13 +1947,19 @@ if (!glmTarget.innerHTML.includes("<th>Terms</th>")) throw new Error("GLM fallba
 if (!glmTarget.innerHTML.includes("<th>Features</th>")) throw new Error("GLM fallback Features heading missing");
 if (!glmTarget.innerHTML.includes("<th>Interactions</th>")) throw new Error("GLM fallback Interactions heading missing");
 if (!glmTarget.innerHTML.includes("<th>Tabulated</th>")) throw new Error("GLM fallback Tabulated heading missing");
+if (!glmTarget.innerHTML.includes(">gini_tr</th>")) throw new Error("GLM fallback gini_tr heading missing");
+if (!glmTarget.innerHTML.includes(">gini_te</th>")) throw new Error("GLM fallback gini_te heading missing");
+if (!glmTarget.innerHTML.includes(">gini_vl</th>")) throw new Error("GLM fallback gini_vl heading missing");
+if (!glmTarget.innerHTML.includes('<td class="numeric">0.81234</td>')) throw new Error("GLM gini_tr value missing");
+if (!glmTarget.innerHTML.includes('<td class="numeric">-0.25</td>')) throw new Error("GLM gini_te value missing");
+if (!glmTarget.innerHTML.includes('<td class="numeric">--</td>')) throw new Error("GLM null Gini value missing");
 if (!glmTarget.innerHTML.includes('<td class="numeric">3</td>\\n        <td class="numeric">2</td>\\n        <td class="numeric">1</td>\\n        <td>Yes</td>')) throw new Error("GLM captured metadata missing");
 if (!glmTarget.innerHTML.includes('<td class="numeric"></td>\\n        <td class="numeric"></td>\\n        <td class="numeric"></td>\\n        <td>-</td>')) throw new Error("GLM legacy metadata fallback failed");
 if (glmNavigator.optionalCount(null) !== "" || glmNavigator.optionalCount(0) !== "0") throw new Error("GLM optional count formatting failed");
 
 const gbmNavigator = createGbmModelNavigator({{
   escapeHtml,
-  formatModelMetric: (value) => String(value ?? ""),
+  formatModelMetric: (value) => value === null || value === undefined ? "--" : String(value),
   modelInteractionConstraintLabel: () => "No",
   modelLabel: (model) => model.label || model.model_id,
   normaliseModel: (model) => model,
@@ -1961,9 +1967,15 @@ const gbmNavigator = createGbmModelNavigator({{
   onFallbackSelectionChange: () => {{}},
 }});
 const gbmTarget = target();
-gbmNavigator.renderFallback(gbmTarget, [{{ model_id: "gbm", label: "GBM" }}]);
+gbmNavigator.renderFallback(gbmTarget, [{{ model_id: "gbm", label: "GBM", gini_tr: 0.75, gini_te: null, gini_vl: -0.125 }}]);
 if (!gbmTarget.innerHTML.includes("<th>Name</th>")) throw new Error("GBM fallback Name heading missing");
 if (gbmTarget.innerHTML.includes("<th>Model</th>")) throw new Error("GBM fallback kept Model heading");
+if (!gbmTarget.innerHTML.includes(">gini_tr</th>")) throw new Error("GBM fallback gini_tr heading missing");
+if (!gbmTarget.innerHTML.includes(">gini_te</th>")) throw new Error("GBM fallback gini_te heading missing");
+if (!gbmTarget.innerHTML.includes(">gini_vl</th>")) throw new Error("GBM fallback gini_vl heading missing");
+if (!gbmTarget.innerHTML.includes('<td class="numeric">0.75</td>')) throw new Error("GBM gini_tr value missing");
+if (!gbmTarget.innerHTML.includes('<td class="numeric">--</td>')) throw new Error("GBM null Gini value missing");
+if (!gbmTarget.innerHTML.includes('<td class="numeric">-0.125</td>')) throw new Error("GBM gini_vl value missing");
 """
         self.run_node_script(script)
 
