@@ -5,6 +5,10 @@ for GBMs. Each workflow has three numbered Python scripts. Choose a model type,
 edit its YAML and specification files, then run its `01`, `02`, and `03`
 scripts unchanged.
 
+An optional `04_external_double_lift_demo.py` script compares two already-built
+models. It is deliberately separate from both three-step build workflows: run it
+only when you want a Baseline-versus-Challenger report.
+
 Model training happens outside the Lucidum application. The `01` scripts fit
 models directly with ordinary `glum` or LightGBM code, score the source data,
 and save the fitted results. You do not need to launch Lucidum to build either
@@ -49,12 +53,22 @@ application can display it without retraining it.
    importance, LightGBM parameters, and the saved evaluation history with its
    Validation marker.
 
+### Optional cross-model workflow
+
+`04_external_double_lift_demo.py` reads `config_double_lift.yaml`, opens the two
+exact builds named there, and creates one Double Lift report for each configured
+SAMPLE population. It supports GLM/GLM, GBM/GBM, GLM/GBM, and GBM/GLM. The ratio
+is always Challenger prediction divided by Baseline prediction. Dataset columns
+used as `OTHER` comparisons in the app are not part of this build-to-build report.
+
 ## What you edit
 
 For your own analysis, copy and edit these inputs:
 
 - The build YAML, such as `config_glm.yaml` or `config_gbm.yaml`.
 - The report YAML, such as `config_glm_report.yaml`.
+- For a cross-model comparison, `config_double_lift.yaml` with two exact build
+  YAML paths.
 - The GLM formula text file.
 - The Feature Specification CSV used to choose model features and report
   charts.
@@ -87,7 +101,7 @@ python -m pip install -e ".[glm,gbm,examples]"
 
 ### Keep client scripts up to date
 
-An installed Lucidum release includes the six numbered workflow scripts and their
+An installed Lucidum release includes the seven numbered workflow scripts and their
 four Python helpers. After upgrading Lucidum, sync those maintained files into an
 existing client workflow directory:
 
@@ -96,7 +110,7 @@ pipx upgrade py-lucidum
 lucidum --sync-examples /path/to/client/examples
 ```
 
-The command creates the directory when needed and overwrites only those ten Python
+The command creates the directory when needed and overwrites only those eleven Python
 files. Client YAML, formulas, specifications, datasets, unknown Python files, and
 other files are left unchanged. Preview the exact create/update/unchanged list
 without writing anything by adding `--dry-run`:
@@ -126,6 +140,12 @@ Or run the GBM workflow:
 python examples/01_external_gbm_artifacts_demo.py
 python examples/02_external_gbm_report_demo.py
 python examples/03_external_gbm_summary_report_demo.py
+```
+
+After both chosen models have been built, run the optional comparison separately:
+
+```bash
+python examples/04_external_double_lift_demo.py path/to/config_double_lift.yaml
 ```
 
 With no argument, each script uses the matching example YAML. To use another
@@ -493,6 +513,73 @@ their normal numeric format.
 When SHAP was saved, the importance table shows mean absolute SHAP and its
 share of total SHAP importance. Otherwise it shows LightGBM gain and its share.
 
+## Optional Step 04: compare two exact model builds
+
+`04_external_double_lift_demo.py` is run after the two selected `01` builds. It
+does not train a model, start Lucidum, inspect `.lucidum`, or follow
+`active_model.json`. The comparison config points to each authoritative build
+YAML as a complete path, including its directory:
+
+```yaml
+baseline:
+  model_type: glm
+  build_config: ../models/pricing-v12/config.yaml
+
+challenger:
+  model_type: glm
+  build_config: ../models/pricing-v13/config.yaml
+
+kpi_spec: ../specs/kpi_spec.csv
+
+chart:
+  banding: auto
+  quantiles: 0
+  missings: hide
+  labels: none
+  sigma: 2
+
+reports:
+  - name: training_test_double_lift
+    title: Pricing v12 versus Pricing v13 — Training and Test
+    sample_values: [training, test]
+
+  - name: validation_double_lift
+    title: Pricing v12 versus Pricing v13 — Validation
+    sample_values: [validation]
+
+output:
+  directory: ../local/external_reports
+  chart_height: 600
+```
+
+Relative `build_config` paths are resolved from the folder containing
+`config_double_lift.yaml`; absolute paths are also accepted. Lucidum never
+searches for `config.yaml` by filename. Consequently, two build files with the
+same name remain unambiguous when their full paths point to different folders.
+
+Each build YAML then resolves its own exact model folder as:
+
+```text
+<output.model_results_root>/<model_type>/<model.id>
+```
+
+`model_results_root` is resolved relative to that build YAML. The report header
+shows both build-YAML paths and both resulting model folders so the comparison
+can be audited directly.
+
+The two builds must identify different models but use the same source dataset,
+Numerator, Denominator, and SAMPLE column. Their saved manifests and prediction
+files must match the configured families and IDs. Predictions are aligned using
+`__lucidum_row_id`; a missing prediction or a missing/zero Baseline produces no
+ratio for that row.
+
+Each report entry selects one or more literal SAMPLE values, matched after
+trimming and without regard to case. Use `sample_values: all` to select every
+value. An empty selection or a value absent from the dataset is an error. The
+top of every HTML report prominently identifies the SAMPLE column, selected
+values, selected source-row count, and rows available to the chart, in addition
+to the two models and `Challenger / Baseline` direction.
+
 ## Important data rules
 
 ### Prepare the sample column first
@@ -525,6 +612,8 @@ motor_premiums_external_glm_model_summary.html
 motor_premiums_external_gbm_validation_actual_vs_expected.html
 motor_premiums_external_gbm_all_rows_rebased_shap.html
 motor_premiums_external_gbm_model_summary.html
+motor_premiums_external_double_lift_training_test_double_lift.html
+motor_premiums_external_double_lift_validation_double_lift.html
 ```
 
 The authoritative model-results root has this structure:
@@ -572,6 +661,10 @@ writing a different Python workflow, the same public functions are available:
 - `py_lucidum.line_bar_chart(..., model_folder=..., kpi_spec=...)` prepares one
   serializable Line/Bar chart from an exact saved model folder, with optional
   KPI-spec response formatting.
+- `py_lucidum.double_lift_chart(...)` prepares a serializable Line/Bar Double
+  Lift chart from two exact GLM/GBM model folders and a literal SAMPLE
+  population. It keeps the two prediction sources independent even for models
+  of the same family.
 - `py_lucidum.write_echarts_report(...)` combines charts into a self-contained
   HTML report.
 - `py_lucidum.report_filename(...)` creates the standard output filename.

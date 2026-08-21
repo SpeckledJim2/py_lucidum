@@ -69,18 +69,21 @@ def metric_relation_context(
 
     dataset_columns = dataset.column_map()
     columns = dict(dataset_columns)
-    prediction_sources: dict[str, ModelPredictionSource] = {}
+    prediction_sources: dict[tuple[str, str], ModelPredictionSource] = {}
     resolved_sources: list[str] = []
+    resolved_columns: list[str] = []
     for column_name, raw_source in requested_fields:
         resolved_source = field_source_id(dataset, raw_source, base_source)
         resolved_sources.append(resolved_source)
-        add_metric_field(
-            dataset,
-            columns,
-            dataset_columns,
-            prediction_sources,
-            str(column_name or "").strip(),
-            resolved_source,
+        resolved_columns.append(
+            add_metric_field(
+                dataset,
+                columns,
+                dataset_columns,
+                prediction_sources,
+                str(column_name or "").strip(),
+                resolved_source,
+            )
         )
 
     if prediction_sources:
@@ -96,6 +99,7 @@ def metric_relation_context(
         "columns": columns,
         "row_count": relation_row_count(dataset, relation),
         "field_sources": resolved_sources,
+        "field_columns": resolved_columns,
     }
 
 
@@ -128,6 +132,7 @@ def complete_source_relation_context(
         "columns": columns,
         "row_count": relation_row_count(dataset, relation),
         "field_sources": [source for _column, source in resolved_fields],
+        "field_columns": [column for column, _source in resolved_fields],
     }
 
 
@@ -135,40 +140,66 @@ def add_metric_field(
     dataset: Dataset,
     columns: dict[str, ColumnInfo],
     dataset_columns: dict[str, ColumnInfo],
-    prediction_sources: dict[str, ModelPredictionSource],
+    prediction_sources: dict[tuple[str, str], ModelPredictionSource],
     column_name: str,
     source_id: str,
-) -> None:
+) -> str:
     if not column_name:
-        return
+        return ""
     prediction_source = dataset.model_prediction_source(source_id)
     if prediction_source is not None:
+        prediction_key = (prediction_source.source_id, column_name)
+        existing = prediction_sources.get(prediction_key)
+        if existing is not None:
+            return existing.output_column or existing.column
         source_columns = dataset.column_map_for_source(source_id)
         source_column = source_columns.get(column_name)
         if column_name in MODEL_PREDICTION_COLUMNS and source_column is not None and is_numeric_kind(source_column.kind):
             if not prediction_source.relation_sql:
                 raise ValueError("Choose a valid model prediction source")
-            prediction_sources[f"{prediction_source.source_id}:{column_name}"] = ModelPredictionSource(
+            columns[column_name] = ColumnInfo(name=column_name, duckdb_type="DOUBLE", kind="numeric")
+            output_column = next_source_output_column(columns)
+            prediction_sources[prediction_key] = ModelPredictionSource(
                 source_id=prediction_source.source_id,
                 column=column_name,
                 relation_sql=prediction_source.relation_sql,
                 active=prediction_source.active,
                 binding=prediction_source.bindings.get(column_name),
                 bindings=prediction_source.bindings,
+                output_column=output_column,
             )
-            columns[column_name] = ColumnInfo(name=column_name, duckdb_type="DOUBLE", kind="numeric")
-            return
+            columns[output_column] = ColumnInfo(name=output_column, duckdb_type="DOUBLE", kind="numeric")
+            return output_column
         if column_name == prediction_source.column:
             if not prediction_source.column or not prediction_source.relation_sql:
                 raise ValueError("Choose a valid model prediction source")
-            prediction_sources[prediction_source.source_id] = prediction_source
             columns[column_name] = ColumnInfo(name=column_name, duckdb_type="DOUBLE", kind="numeric")
-            return
+            output_column = next_source_output_column(columns)
+            prediction_sources[prediction_key] = ModelPredictionSource(
+                source_id=prediction_source.source_id,
+                column=prediction_source.column,
+                relation_sql=prediction_source.relation_sql,
+                active=prediction_source.active,
+                binding=prediction_source.binding,
+                bindings=prediction_source.bindings,
+                output_column=output_column,
+            )
+            columns[output_column] = ColumnInfo(name=output_column, duckdb_type="DOUBLE", kind="numeric")
+            return output_column
         raise ValueError("Choose a valid model prediction column")
     if column_name in dataset_columns:
         columns[column_name] = dataset_columns[column_name]
-        return
+        return column_name
     raise ValueError("Choose a valid dataset column")
+
+
+def next_source_output_column(columns: dict[str, ColumnInfo]) -> str:
+    index = 0
+    while True:
+        candidate = f"__lucidum_source_field_{index}"
+        if candidate not in columns:
+            return candidate
+        index += 1
 
 
 def mixed_metric_relation_sql(dataset: Dataset, prediction_sources: list[ModelPredictionSource]) -> str:
@@ -205,10 +236,16 @@ def positional_mixed_metric_relation_sql(
     where_sql = f"\n  WHERE {base_where_sql}" if base_where_sql else ""
     joins: list[str] = []
     selects = [f"base.{quote_ident(name)}" for name in dataset_columns]
+    public_columns: set[str] = set()
     for index, source in enumerate(prediction_sources):
         alias = f"prediction_{index}"
         joins.append(f"POSITIONAL JOIN {source.binding.relation_sql} {alias}")
-        selects.append(f"{alias}.{quote_ident(source.column)} AS {quote_ident(source.column)}")
+        output_column = source.output_column or source.column
+        if source.column not in public_columns:
+            selects.append(f"{alias}.{quote_ident(source.column)} AS {quote_ident(source.column)}")
+            public_columns.add(source.column)
+        if output_column != source.column:
+            selects.append(f"{alias}.{quote_ident(source.column)} AS {quote_ident(output_column)}")
     select_sql = ",\n  ".join(selects) if selects else "*"
     join_sql = "\n".join(joins)
     return f"""(
@@ -236,10 +273,16 @@ def keyed_mixed_metric_relation_sql(
     source_column_suffix = f",\n    {source_column_sql}" if source_column_sql else ""
     joins: list[str] = []
     selects = [f"base.{quote_ident(name)}" for name in dataset_columns]
+    public_columns: set[str] = set()
     for index, source in enumerate(prediction_sources):
         alias = f"prediction_{index}"
         joins.append(f"LEFT JOIN {source.relation_sql} {alias} USING (__lucidum_row_id)")
-        selects.append(f"{alias}.{quote_ident(source.column)} AS {quote_ident(source.column)}")
+        output_column = source.output_column or source.column
+        if source.column not in public_columns:
+            selects.append(f"{alias}.{quote_ident(source.column)} AS {quote_ident(source.column)}")
+            public_columns.add(source.column)
+        if output_column != source.column:
+            selects.append(f"{alias}.{quote_ident(source.column)} AS {quote_ident(output_column)}")
     select_sql = ",\n  ".join(selects) if selects else "*"
     join_sql = "\n".join(joins)
     return f"""(

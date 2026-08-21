@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import csv
 import math
+import re
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,8 @@ CHART_COLUMNS = {
     "date_bucket": "chart_date_bucket",
     "empty_periods": "chart_empty_periods",
 }
+MODEL_ID_RE = re.compile(r"[A-Za-z0-9_.-]+")
+DOUBLE_LIFT_CHART_KEYS = {"banding", "quantiles", "low_weights", "missings", "labels", "sigma"}
 
 
 def config_path_from_command_line(script_file: str | None, default_name: str) -> Path:
@@ -127,6 +130,141 @@ def load_report_settings(path: Path, model_type: str) -> tuple[dict[str, Any], l
         "build_config_path": build_path,
     }
     return settings, report_features
+
+
+def load_double_lift_settings(path: Path) -> dict[str, Any]:
+    """Resolve two exact external builds for a standalone Double Lift report."""
+
+    config = _read_yaml(path)
+    _expect_exact_keys(
+        config,
+        {"baseline", "challenger", "reports", "output"},
+        {"kpi_spec", "chart"},
+        "Double Lift config",
+    )
+    models = {
+        role: _double_lift_model(path, config[role], role)
+        for role in ("baseline", "challenger")
+    }
+    baseline = models["baseline"]
+    challenger = models["challenger"]
+    if (baseline["model_type"], baseline["model_id"]) == (
+        challenger["model_type"],
+        challenger["model_id"],
+    ):
+        raise ValueError("Baseline and Challenger must be different saved models")
+    for key, label in (
+        ("dataset_path", "dataset"),
+        ("actual", "response Numerator"),
+        ("denominator", "Denominator"),
+        ("sample_column", "SAMPLE column"),
+    ):
+        if baseline[key] != challenger[key]:
+            raise ValueError(
+                f"Baseline and Challenger build configs use different {label}: "
+                f"{baseline[key]!s} versus {challenger[key]!s}"
+            )
+
+    raw_chart = config.get("chart") or {}
+    if not isinstance(raw_chart, dict):
+        raise ValueError("Double Lift chart must be a YAML mapping")
+    _expect_exact_keys(raw_chart, set(), DOUBLE_LIFT_CHART_KEYS, "Double Lift chart")
+    chart = {
+        "banding": raw_chart.get("banding", "auto"),
+        "quantiles": raw_chart.get("quantiles", 0),
+        "low_weights": raw_chart.get("low_weights", "0"),
+        "missings": raw_chart.get("missings", "hide"),
+        "labels": raw_chart.get("labels", "none"),
+        "sigma": raw_chart.get("sigma", 0),
+    }
+    if str(chart["banding"] or "").strip().lower() != "auto":
+        try:
+            if float(chart["banding"]) < 0:
+                raise ValueError
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Double Lift chart banding must be 'auto' or a non-negative number") from exc
+
+    raw_reports = config["reports"]
+    if not isinstance(raw_reports, list) or not raw_reports:
+        raise ValueError("Double Lift reports must contain at least one report")
+    reports = []
+    seen_names: set[str] = set()
+    for index, raw_report in enumerate(raw_reports, start=1):
+        if not isinstance(raw_report, dict):
+            raise ValueError(f"Double Lift report {index} must be a YAML mapping")
+        _expect_exact_keys(raw_report, {"name", "title", "sample_values"}, set(), f"Double Lift report {index}")
+        name = str(raw_report["name"] or "").strip()
+        title = str(raw_report["title"] or "").strip()
+        if not name or not title:
+            raise ValueError(f"Double Lift report {index} needs nonblank name and title")
+        if name in seen_names:
+            raise ValueError(f"Double Lift report names must be unique: {name}")
+        seen_names.add(name)
+        reports.append({"name": name, "title": title, "sample_values": raw_report["sample_values"]})
+
+    output = config["output"]
+    if not isinstance(output, dict):
+        raise ValueError("Double Lift output must be a YAML mapping")
+    _expect_exact_keys(output, {"directory"}, {"chart_height"}, "Double Lift output")
+    chart_height = int(output.get("chart_height", 600))
+    if chart_height < 200:
+        raise ValueError("Double Lift chart_height must be at least 200 pixels")
+    kpi_value = config.get("kpi_spec")
+    kpi_path = (
+        _resolve(path.parent, kpi_value)
+        if kpi_value is not None and str(kpi_value).strip()
+        else None
+    )
+    return {
+        "baseline": baseline,
+        "challenger": challenger,
+        "dataset_path": baseline["dataset_path"],
+        "actual": baseline["actual"],
+        "denominator": baseline["denominator"],
+        "sample_column": baseline["sample_column"],
+        "chart": chart,
+        "reports": reports,
+        "kpi_spec_path": kpi_path,
+        "output_directory": _resolve(path.parent, output["directory"]),
+        "chart_height": chart_height,
+        "config_path": path.resolve(),
+    }
+
+
+def double_lift_report_header(
+    settings: dict[str, Any],
+    report: dict[str, Any],
+    chart: dict[str, Any],
+    script_file: str,
+) -> dict[str, Any]:
+    """Return visible population and two-model provenance for Double Lift."""
+
+    metadata = chart["metadata"]
+    baseline = metadata["baseline"]
+    challenger = metadata["challenger"]
+    return {
+        "source parquet": settings["dataset_path"],
+        "baseline build config": settings["baseline"]["build_config_path"],
+        "baseline model": baseline["model_folder"],
+        "challenger build config": settings["challenger"]["build_config_path"],
+        "challenger model": challenger["model_folder"],
+        "baseline": f"{baseline['model_type'].upper()} · {baseline['label']} ({baseline['model_id']})",
+        "challenger": f"{challenger['model_type'].upper()} · {challenger['label']} ({challenger['model_id']})",
+        "ratio": "Challenger / Baseline",
+        "response": settings["actual"],
+        "weight": settings["denominator"] or "None",
+        "sample column": settings["sample_column"],
+        "SAMPLE_ROWS": metadata["sample_values"],
+        "source rows selected": f"{int(metadata['selected_rows']):,}",
+        "rows available to chart": f"{int(metadata['chart_rows']):,}",
+        **(
+            {"KPI spec": settings["kpi_spec_path"].name}
+            if settings["kpi_spec_path"] is not None
+            else {}
+        ),
+        "comparison config": settings["config_path"].name,
+        "script run": Path(script_file).name,
+    }
 
 
 def load_gbm_summary_settings(
@@ -557,6 +695,70 @@ def _read_yaml(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"Config must be a YAML mapping: {path}")
     return value
+
+
+def _double_lift_model(comparison_path: Path, raw: Any, role: str) -> dict[str, Any]:
+    label = role.title()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{label} must be a YAML mapping")
+    _expect_exact_keys(raw, {"model_type", "build_config"}, set(), label)
+    model_type = str(raw["model_type"] or "").strip().lower()
+    if model_type not in {"glm", "gbm"}:
+        raise ValueError(f"{label} model_type must be 'glm' or 'gbm'")
+    build_path = _resolve(comparison_path.parent, raw["build_config"])
+    build = _read_yaml(build_path)
+    dataset = build.get("dataset")
+    model = build.get("model")
+    output = build.get("output")
+    for section_name, section in (("dataset", dataset), ("model", model), ("output", output)):
+        if not isinstance(section, dict):
+            raise ValueError(f"{label} build config needs a {section_name} mapping: {build_path}")
+    required_dataset = {"path", "response_numerator", "sample_column"}
+    missing_dataset = sorted(required_dataset - set(dataset))
+    if missing_dataset:
+        raise ValueError(
+            f"{label} build config dataset is missing: {', '.join(missing_dataset)}"
+        )
+    model_id = str(model.get("id") or "").strip()
+    if model_id in {"", ".", ".."} or not MODEL_ID_RE.fullmatch(model_id):
+        raise ValueError(f"{label} build config has an invalid model.id: {model_id!r}")
+    model_label = str(model.get("label") or "").strip()
+    if not model_label:
+        raise ValueError(f"{label} build config needs model.label")
+    model_results_root = output.get("model_results_root")
+    if model_results_root is None or not str(model_results_root).strip():
+        raise ValueError(f"{label} build config needs output.model_results_root")
+    actual = str(dataset["response_numerator"] or "").strip()
+    sample_column = str(dataset["sample_column"] or "").strip()
+    if not actual or not sample_column:
+        raise ValueError(f"{label} build config needs nonblank response_numerator and sample_column")
+    denominator = str(dataset.get("denominator") or "").strip() or None
+    root = _resolve(build_path.parent, model_results_root)
+    return {
+        "model_type": model_type,
+        "model_id": model_id,
+        "model_label": model_label,
+        "model_folder": (root / model_type / model_id).resolve(),
+        "build_config_path": build_path,
+        "dataset_path": _resolve(build_path.parent, dataset["path"]),
+        "actual": actual,
+        "denominator": denominator,
+        "sample_column": sample_column,
+    }
+
+
+def _expect_exact_keys(
+    value: dict[str, Any],
+    required: set[str],
+    optional: set[str],
+    label: str,
+) -> None:
+    missing = sorted(required - set(value))
+    unknown = sorted(set(value) - required - optional)
+    if missing:
+        raise ValueError(f"{label} is missing keys: {', '.join(missing)}")
+    if unknown:
+        raise ValueError(f"{label} has unknown keys: {', '.join(unknown)}")
 
 
 def _read_feature_spec(path: Path, scenario: str) -> list[dict[str, str]]:

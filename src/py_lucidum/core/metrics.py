@@ -17,11 +17,12 @@ def normalise_denominator(raw: Any, columns: dict[str, ColumnInfo]) -> dict[str,
 
 
 def response_value_sql(response: dict[str, str]) -> str:
-    return f"TRY_CAST({quote_ident(str(response['numerator']))} AS DOUBLE)"
+    column = response.get("query_column") or response["numerator"]
+    return f"TRY_CAST({quote_ident(str(column))} AS DOUBLE)"
 
 
 def denominator_value_sql(denominator: dict[str, str | None]) -> str:
-    column = denominator.get("column")
+    column = denominator.get("query_column") or denominator.get("column")
     if column:
         return f"TRY_CAST({quote_ident(str(column))} AS DOUBLE)"
     return "1"
@@ -47,7 +48,8 @@ def weighted_value_sql(denominator: dict[str, str | None], valid_condition: str)
 
 
 def response_parts(response: dict[str, str], index: int) -> tuple[str, str, str]:
-    numerator = f"TRY_CAST({quote_ident(str(response['numerator']))} AS DOUBLE)"
+    numerator_column = response.get("query_column") or response["numerator"]
+    numerator = f"TRY_CAST({quote_ident(str(numerator_column))} AS DOUBLE)"
     num_alias = f"resp{index}_num"
     den_alias = f"resp{index}_den"
     value_alias = f"resp{index}"

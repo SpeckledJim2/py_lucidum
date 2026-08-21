@@ -22,6 +22,7 @@ EXPECTED_EXAMPLE_SCRIPT_NAMES = (
     "02_external_glm_report_demo.py",
     "03_external_gbm_summary_report_demo.py",
     "03_external_glm_summary_report_demo.py",
+    "04_external_double_lift_demo.py",
     "external_model_helpers.py",
     "external_model_results.py",
     "external_report_helpers.py",

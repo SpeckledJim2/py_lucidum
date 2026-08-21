@@ -9,6 +9,7 @@ import {
 import { lineBarChartOption } from "./line-bar-chart.js";
 
 const LINE_BAR_SPECIAL_COLUMN_NAMES = [
+  "prediction_ratio",
   "gbm_to_glm_ratio",
   "glm_prediction",
   "gbm_prediction",
@@ -47,6 +48,9 @@ function lineBarExpectedModelFamily(selection) {
 }
 
 function lineBarModelExpectedTransitionKey(selection) {
+  if (selection?.binding === "explicit") {
+    return `${selection?.sourceId || selection?.source || ""}\u0000${selection?.value || selection?.column || ""}`;
+  }
   const family = lineBarExpectedModelFamily(selection);
   if (family) return `${family}\u0000${selection?.value || selection?.column || ""}`;
   return `${selection?.sourceId || selection?.source || ""}\u0000${selection?.value || selection?.column || ""}`;
@@ -215,7 +219,11 @@ export function nextLineBarModelComparisonState({
   activeModelAvailable = {},
 } = {}) {
   const currentExpected = Array.isArray(expectedSelections) ? expectedSelections : [];
-  const currentModelExpected = currentExpected.filter((selection) => lineBarExpectedModelFamily(selection));
+  const explicitComparison = currentExpected.length === 2
+    && currentExpected.every((selection) => selection?.binding === "explicit");
+  const currentModelExpected = currentExpected.filter((selection) => (
+    selection?.binding !== "explicit" && lineBarExpectedModelFamily(selection)
+  ));
   const primaryFamilies = currentExpected.map((selection) => {
     const family = lineBarExpectedModelFamily(selection);
     return family && String(selection?.value || selection?.column || "") === LINE_BAR_PRIMARY_EXPECTED_COLUMNS[family]
@@ -244,7 +252,9 @@ export function nextLineBarModelComparisonState({
   );
 
   let nextExpected = currentExpected;
-  if (preserveExpectedPair) {
+  if (explicitComparison) {
+    nextExpected = currentExpected;
+  } else if (preserveExpectedPair) {
     nextExpected = currentExpected.map((selection) => (
       primaryExpectedSelections[lineBarExpectedModelFamily(selection)] || selection
     ));
@@ -334,6 +344,112 @@ export function lineBarAdditiveSelectionRequested(event, platform = "") {
   return /mac|iphone|ipad|ipod/i.test(browserPlatform) ? Boolean(event?.metaKey) : Boolean(event?.ctrlKey);
 }
 
+export function lineBarModelComparisonCandidates(dataSources = [], currentKpi = null, options = {}) {
+  const includeSourceIds = new Set((options.includeSourceIds || []).map(String).filter(Boolean));
+  const rawCandidates = (Array.isArray(dataSources) ? dataSources : []).flatMap((source) => {
+    const family = lineBarModelFamilyForSource(source);
+    if (!family || String(source?.kind || "") !== `${family}_predictions`) return [];
+    const predictionColumn = LINE_BAR_PRIMARY_EXPECTED_COLUMNS[family];
+    if (!(source?.columns || []).some((column) => String(column?.name || "") === predictionColumn)) return [];
+    const trainingKpi = lineBarModelTrainingPair(source, family);
+    const compatible = lineBarKpiPairMatches(trainingKpi, currentKpi);
+    if (!compatible && !includeSourceIds.has(String(source?.id || ""))) return [];
+    const baseLabel = `${family.toUpperCase()} · ${String(source?.model_label || source?.model_id || "Model")}`;
+    return [{
+      comparisonId: String(source?.id || ""),
+      sourceId: String(source?.id || ""),
+      family,
+      modelId: String(source?.model_id || ""),
+      predictionColumn,
+      baseLabel,
+      label: baseLabel,
+      active: Boolean(source?.active),
+      createdAt: String(source?.created_at || ""),
+      compatible,
+    }];
+  });
+  const otherCandidates = (Array.isArray(options.otherColumns) ? options.otherColumns : [])
+    .filter((column) => ["integer", "numeric"].includes(String(column?.kind || "")))
+    .map((column) => {
+      const predictionColumn = String(column?.name || "");
+      return {
+        comparisonId: `other:${lineBarOtherColumnToken(predictionColumn)}`,
+        sourceId: "dataset",
+        family: "other",
+        modelId: "",
+        predictionColumn,
+        baseLabel: String(column?.label || predictionColumn),
+        label: String(column?.label || predictionColumn),
+        active: false,
+        createdAt: "",
+        compatible: true,
+        baselineOnly: true,
+      };
+    })
+    .filter((candidate) => candidate.predictionColumn)
+    .sort((left, right) => left.label.localeCompare(right.label, undefined, { sensitivity: "base", numeric: true }));
+  const labelCounts = new Map();
+  rawCandidates.forEach((candidate) => {
+    labelCounts.set(candidate.baseLabel, (labelCounts.get(candidate.baseLabel) || 0) + 1);
+  });
+  return [...rawCandidates.map((candidate) => ({
+    ...candidate,
+    label: (labelCounts.get(candidate.baseLabel) || 0) > 1
+      ? `${candidate.baseLabel} (${candidate.modelId})`
+      : candidate.baseLabel,
+  })), ...otherCandidates];
+}
+
+export function lineBarOtherColumnToken(columnName = "") {
+  return Array.from(new TextEncoder().encode(String(columnName)))
+    .map((value) => value.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+export function lineBarDefaultModelComparison(candidates = [], existing = null) {
+  const available = (Array.isArray(candidates) ? candidates : []).filter((candidate) => candidate?.sourceId);
+  const candidateId = (candidate) => String(candidate?.comparisonId || candidate?.sourceId || "");
+  const byId = new Map(available.map((candidate) => [candidateId(candidate), candidate]));
+  const existingBaselineId = String(existing?.baselineComparisonId || (
+    existing?.baselineSourceId === "dataset" && existing?.baselineColumn
+      ? `other:${lineBarOtherColumnToken(existing.baselineColumn)}`
+      : existing?.baselineSourceId
+  ) || "");
+  const existingBaseline = byId.get(existingBaselineId);
+  const existingChallengerId = String(existing?.challengerComparisonId || (
+    existing?.challengerSourceId === "dataset" && existing?.challengerColumn
+      ? `other:${lineBarOtherColumnToken(existing.challengerColumn)}`
+      : existing?.challengerSourceId
+  ) || "");
+  const existingChallenger = byId.get(existingChallengerId);
+  if (
+    existingBaseline
+    && existingChallenger
+    && candidateId(existingBaseline) !== candidateId(existingChallenger)
+  ) {
+    return { baseline: existingBaseline, challenger: existingChallenger };
+  }
+  const compatible = available.filter((candidate) => candidate.compatible !== false && candidate.family !== "other");
+  const activeGlm = compatible.find((candidate) => candidate.family === "glm" && candidate.active);
+  const activeGbm = compatible.find((candidate) => candidate.family === "gbm" && candidate.active);
+  if (activeGlm && activeGbm) return { baseline: activeGlm, challenger: activeGbm };
+  const newestFirst = [...compatible].sort((left, right) => (
+    String(right.createdAt || "").localeCompare(String(left.createdAt || ""))
+    || String(right.modelId || "").localeCompare(String(left.modelId || ""), undefined, { numeric: true })
+  ));
+  const activeChallenger = newestFirst.find((candidate) => candidate.active);
+  if (activeChallenger) {
+    const baseline = newestFirst.find((candidate) => candidateId(candidate) !== candidateId(activeChallenger));
+    if (baseline) return { baseline, challenger: activeChallenger };
+  }
+  if (newestFirst.length >= 2) return { baseline: newestFirst[1], challenger: newestFirst[0] };
+  const otherBaseline = available.find((candidate) => candidate.family === "other");
+  if (newestFirst.length === 1 && otherBaseline) {
+    return { baseline: otherBaseline, challenger: newestFirst[0] };
+  }
+  return null;
+}
+
 export function createLineBarTool({
   api,
   el,
@@ -377,6 +493,8 @@ export function createLineBarTool({
   bandSteps,
   refreshLineBar,
   clearActiveFavouriteSelection = () => false,
+  modelComparisonCandidates = () => [],
+  setModelComparison = () => null,
 }) {
   const CHART_MAX_GROUPS = 10000;
   const HEATMAP_MAX_GROUPS = 100000;
@@ -444,6 +562,9 @@ export function createLineBarTool({
   let lineBarIntentSeq = 0;
   let chartAbortController = null;
   let tableAbortController = null;
+  let modelComparisonPopover = null;
+  let modelComparisonOutsideHandler = null;
+  let modelComparisonKeyHandler = null;
 
   function freezeLineBarSnapshotValue(value) {
     if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
@@ -669,7 +790,7 @@ export function createLineBarTool({
   }
 
   function isGbmGlmRatioColumn(column) {
-    return String(column?.name || "") === "gbm_to_glm_ratio";
+    return ["gbm_to_glm_ratio", "prediction_ratio"].includes(String(column?.name || ""));
   }
 
   function lineBarSpecialColumnOrder(column) {
@@ -1479,6 +1600,8 @@ export function createLineBarTool({
       value,
       sourceId: option?.dataset.sourceId || sourceId || state.source || "dataset",
       metricKind: option?.dataset.metricKind || "metric",
+      label: option?.dataset.displayLabel || option?.textContent || value,
+      ...(option?.dataset.binding ? { binding: option.dataset.binding } : {}),
     } : null;
     const nextSelections = nextLineBarExpectedSelections(current, targetSelection, { additive });
     if (nextSelections === current) return false;
@@ -1523,6 +1646,7 @@ export function createLineBarTool({
       button.setAttribute("aria-pressed", String(isActive));
       if (sourceId) button.dataset.sourceId = sourceId;
       button.dataset.value = value;
+      button.title = String(label || value);
       button.innerHTML = `<span>${escapeHtml(label)}</span><span class="kind">${escapeHtml(kind)}</span>`;
       button.addEventListener("click", (event) => {
         const previousSelections = expectedSelections().map((selection) => ({ ...selection }));
@@ -1556,19 +1680,222 @@ export function createLineBarTool({
 
     const { specialColumns, otherColumns } = expectedDisplayColumns();
     for (const col of specialColumns) {
-      if (query && !col.name.toLowerCase().includes(query)) continue;
-      addExpectedButton(pinned, col.name, col.name, col.kind, col.source_id || state.source || "dataset", "line-bar-special-row");
+      const label = String(col.label || col.name);
+      if (query && !`${col.name} ${label}`.toLowerCase().includes(query)) continue;
+      addExpectedButton(pinned, label, col.name, col.kind, col.source_id || state.source || "dataset", "line-bar-special-row");
     }
     pinned.hidden = pinned.childElementCount === 0;
 
     for (const col of otherColumns) {
-      if (query && !col.name.toLowerCase().includes(query)) continue;
-      addExpectedButton(scroll, col.name, col.name, col.kind, col.source_id || state.source || "dataset");
+      const label = String(col.label || col.name);
+      if (query && !`${col.name} ${label}`.toLowerCase().includes(query)) continue;
+      addExpectedButton(scroll, label, col.name, col.kind, col.source_id || state.source || "dataset");
     }
     restoreLineBarPickerScroll(list, scrollPosition);
   }
 
+  function modelComparisonRowVisible() {
+    const candidates = modelComparisonCandidates();
+    const modelCount = candidates.filter((candidate) => (
+      candidate.family !== "other" && candidate.compatible !== false
+    )).length;
+    const otherCount = candidates.filter((candidate) => candidate.family === "other").length;
+    return (modelCount >= 1 && modelCount + otherCount >= 2) || Boolean(state.modelComparison);
+  }
+
+  function modelComparisonRowPair() {
+    return lineBarDefaultModelComparison(modelComparisonCandidates(), state.modelComparison);
+  }
+
+  function modelComparisonRowLabel() {
+    if (state.modelComparison?.challengerLabel && state.modelComparison?.baselineLabel) {
+      return `${state.modelComparison.challengerLabel} / ${state.modelComparison.baselineLabel}`;
+    }
+    const pair = modelComparisonRowPair();
+    if (isGbmGlmRatioColumn({ name: state.x }) && pair) {
+      return `${pair.challenger.label} / ${pair.baseline.label}`;
+    }
+    return "Prediction ratio…";
+  }
+
+  function addModelComparisonRow(list, query = "") {
+    const label = modelComparisonRowLabel();
+    if (query && !`prediction ratio ${label}`.toLowerCase().includes(query)) return;
+    const active = isGbmGlmRatioColumn({ name: state.x });
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `feature line-bar-special-row line-bar-model-comparison-row ${active ? "active" : ""}`.trim();
+    button.dataset.value = "prediction_ratio";
+    const selectedRatioSource = active && String(state.xSource || "").startsWith("model_ratio:")
+      ? String(state.xSource)
+      : "";
+    button.dataset.sourceId = state.modelComparison?.ratioSourceId || selectedRatioSource || "model_ratio:chooser";
+    button.setAttribute("aria-selected", String(active));
+    button.setAttribute("aria-haspopup", "dialog");
+    button.title = label;
+    button.innerHTML = `<span>${escapeHtml(label)}</span><span class="kind">ratio</span>`;
+    button.addEventListener("click", () => openModelComparisonPopover(button));
+    list.append(button);
+  }
+
+  function closeModelComparisonPopover({ restoreFocus = false } = {}) {
+    if (!modelComparisonPopover) return;
+    const anchor = modelComparisonPopover._anchor;
+    modelComparisonPopover.remove();
+    modelComparisonPopover = null;
+    if (modelComparisonOutsideHandler) document.removeEventListener("pointerdown", modelComparisonOutsideHandler, true);
+    if (modelComparisonKeyHandler) document.removeEventListener("keydown", modelComparisonKeyHandler, true);
+    modelComparisonOutsideHandler = null;
+    modelComparisonKeyHandler = null;
+    if (restoreFocus && anchor?.isConnected) anchor.focus({ preventScroll: true });
+  }
+
+  function appendModelComparisonOptions(select, candidates, selectedComparisonId, { includeOther = false } = {}) {
+    for (const family of ["glm", "gbm", ...(includeOther ? ["other"] : [])]) {
+      const familyCandidates = candidates.filter((candidate) => candidate.family === family);
+      if (!familyCandidates.length) continue;
+      const group = document.createElement("optgroup");
+      group.label = family.toUpperCase();
+      for (const candidate of familyCandidates) {
+        const comparisonId = candidate.comparisonId || candidate.sourceId;
+        const option = new Option(candidate.label, comparisonId);
+        option.title = candidate.label;
+        option.disabled = candidate.compatible === false && comparisonId !== selectedComparisonId;
+        if (comparisonId === selectedComparisonId) option.selected = true;
+        group.append(option);
+      }
+      select.append(group);
+    }
+  }
+
+  function positionModelComparisonPopover(popover, anchor) {
+    const rect = anchor.getBoundingClientRect();
+    const viewportGap = 8;
+    const width = Math.min(360, Math.max(280, window.innerWidth - viewportGap * 2));
+    popover.style.width = `${width}px`;
+    const measuredHeight = popover.getBoundingClientRect().height;
+    const left = Math.min(
+      Math.max(viewportGap, rect.left),
+      Math.max(viewportGap, window.innerWidth - width - viewportGap),
+    );
+    const below = rect.bottom + 6;
+    const top = below + measuredHeight <= window.innerHeight - viewportGap
+      ? below
+      : Math.max(viewportGap, rect.top - measuredHeight - 6);
+    popover.style.left = `${left}px`;
+    popover.style.top = `${top}px`;
+  }
+
+  function openModelComparisonPopover(anchor) {
+    closeModelComparisonPopover();
+    const candidates = modelComparisonCandidates();
+    const pair = lineBarDefaultModelComparison(candidates, state.modelComparison);
+    if (!pair) return;
+    const popover = document.createElement("div");
+    popover.className = "line-bar-model-comparison-popover";
+    popover.setAttribute("role", "dialog");
+    popover.setAttribute("aria-label", "Choose prediction ratio sources");
+    popover._anchor = anchor;
+    popover.innerHTML = `
+      <div class="line-bar-model-comparison-title">Prediction ratio</div>
+      <label>Baseline<select data-role="baseline"></select></label>
+      <label>Challenger<select data-role="challenger"></select></label>
+      <div class="line-bar-model-comparison-help">X-axis is Challenger value / Baseline value.</div>
+      <div class="line-bar-model-comparison-actions">
+        <button type="button" class="secondary" data-action="swap">Swap</button>
+        <span></span>
+        <button type="button" class="secondary" data-action="cancel">Cancel</button>
+        <button type="button" data-action="apply">Apply</button>
+      </div>`;
+    const baselineSelect = popover.querySelector('[data-role="baseline"]');
+    const challengerSelect = popover.querySelector('[data-role="challenger"]');
+    appendModelComparisonOptions(
+      baselineSelect,
+      candidates,
+      pair.baseline.comparisonId || pair.baseline.sourceId,
+      { includeOther: true },
+    );
+    appendModelComparisonOptions(
+      challengerSelect,
+      candidates,
+      pair.challenger.comparisonId || pair.challenger.sourceId,
+      { includeOther: true },
+    );
+    const applyButton = popover.querySelector('[data-action="apply"]');
+    const swapButton = popover.querySelector('[data-action="swap"]');
+    const candidateById = new Map(candidates.map((candidate) => [candidate.comparisonId || candidate.sourceId, candidate]));
+    const syncApply = () => {
+      const baseline = candidateById.get(baselineSelect.value);
+      const challenger = candidateById.get(challengerSelect.value);
+      const sameCandidate = (baseline?.comparisonId || baseline?.sourceId) === (
+        challenger?.comparisonId || challenger?.sourceId
+      );
+      applyButton.disabled = Boolean(
+        !baseline
+        || !challenger
+        || sameCandidate
+        || baseline.compatible === false
+        || challenger.compatible === false
+      );
+      swapButton.disabled = Boolean(!baseline || !challenger || sameCandidate);
+    };
+    baselineSelect.addEventListener("change", syncApply);
+    challengerSelect.addEventListener("change", syncApply);
+    swapButton.addEventListener("click", () => {
+      const baseline = baselineSelect.value;
+      baselineSelect.value = challengerSelect.value;
+      challengerSelect.value = baseline;
+      syncApply();
+    });
+    popover.querySelector('[data-action="cancel"]').addEventListener("click", () => {
+      closeModelComparisonPopover({ restoreFocus: true });
+    });
+    applyButton.addEventListener("click", () => {
+      const comparison = setModelComparison(baselineSelect.value, challengerSelect.value);
+      if (!comparison) return;
+      cancelLineBarRequests();
+      invalidateGroupingSuggestions();
+      state.source = "dataset";
+      state.x = "prediction_ratio";
+      state.xSource = comparison.ratioSourceId;
+      clearSecondGroupingFeature();
+      state.xAsFactor = false;
+      state.bandWidth = "0";
+      state.quantileMode = "off";
+      state.bandFeature = null;
+      state.dateBucket = "none";
+      state.dateBucketFeature = null;
+      state.dateBucketManualKey = null;
+      state.tailPercent = "0";
+      state.missings = "show";
+      state.tablePage = 1;
+      closeModelComparisonPopover();
+      renderFeatures({ preserveScroll: true });
+      renderExpectedNumerators();
+      updateAxisControls();
+      clearActiveFavouriteSelection();
+      refreshChart({ force: true });
+    });
+    document.body.append(popover);
+    modelComparisonPopover = popover;
+    positionModelComparisonPopover(popover, anchor);
+    syncApply();
+    modelComparisonOutsideHandler = (event) => {
+      if (modelComparisonPopover?.contains(event.target) || anchor.contains(event.target)) return;
+      closeModelComparisonPopover();
+    };
+    modelComparisonKeyHandler = (event) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      closeModelComparisonPopover({ restoreFocus: true });
+    };
+    document.addEventListener("pointerdown", modelComparisonOutsideHandler, true);
+    document.addEventListener("keydown", modelComparisonKeyHandler, true);
+    baselineSelect.focus({ preventScroll: true });
+  }
+
   function renderFeatures(options = {}) {
+    closeModelComparisonPopover();
     syncFeatureSwapButton();
     const query = el("featureSearch").value.trim().toLowerCase();
     const list = el("featureList");
@@ -1582,12 +1909,16 @@ export function createLineBarTool({
       return;
     }
     const columns = [...sourceColumns()];
-    const specialColumns = orderedLineBarSpecialColumns(columns).filter((column) => featureMatchesQuery(column.name, query));
+    const ratioRowVisible = modelComparisonRowVisible();
+    const specialColumns = orderedLineBarSpecialColumns(columns)
+      .filter((column) => !ratioRowVisible || !isGbmGlmRatioColumn(column))
+      .filter((column) => featureMatchesQuery(`${column.name} ${column.label || ""}`, query));
     const otherColumns = columns.filter((column) => !isLineBarSpecialColumn(column));
     if (state.featureSort === "alpha") {
       otherColumns.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
     }
     const { pinned, scroll } = resetLineBarPickerList(list, true);
+    if (ratioRowVisible) addModelComparisonRow(pinned, query);
     for (const col of specialColumns) {
       addLineBarFeatureButton(pinned, col, "line-bar-special-row");
     }
@@ -1603,7 +1934,8 @@ export function createLineBarTool({
   function addLineBarFeatureButton(list, col, extraClass = "") {
     const sourceId = col.source_id || state.source || "dataset";
     addFeatureButton(list, {
-      label: col.name,
+      label: col.label || col.name,
+      value: col.name,
       detail: col.kind,
       sourceId,
       extraClass,
@@ -1844,6 +2176,7 @@ export function createLineBarTool({
 
   function addFeatureButton(list, {
     label,
+    value = label,
     detail,
     sourceId,
     extraClass = "",
@@ -1852,15 +2185,16 @@ export function createLineBarTool({
     onClick,
   }) {
     const activeSource = state.xSource || state.source || "dataset";
-    const firstActive = label === state.x && activeSource === sourceId;
-    const secondActive = label === state.x2 && (state.x2Source || state.source || "dataset") === sourceId;
+    const firstActive = value === state.x && activeSource === sourceId;
+    const secondActive = value === state.x2 && (state.x2Source || state.source || "dataset") === sourceId;
     const isActive = active === null ? firstActive || secondActive : Boolean(active);
     const selectedIndex = firstActive ? 0 : (secondActive ? 1 : -1);
     const multipleSelected = hasTwoFeatures();
     const button = document.createElement("button");
     button.className = `feature ${extraClass} ${isActive ? "active" : ""}`.trim();
     button.dataset.sourceId = sourceId;
-    button.dataset.value = label;
+    button.dataset.value = value;
+    button.title = String(label || value);
     if (importanceGroup) button.dataset.importanceGroup = importanceGroup;
     button.setAttribute("aria-selected", String(isActive));
     const selectedMarker = multipleSelected && selectedIndex >= 0 && isActive
@@ -1872,7 +2206,7 @@ export function createLineBarTool({
       const additive = lineBarAdditiveSelectionRequested(event);
       onClick({ additive, importanceGroup });
       if (event.isTrusted) {
-        focusLineBarPickerButton(pickerList, { value: label, sourceId, importanceGroup, index: 0 });
+        focusLineBarPickerButton(pickerList, { value, sourceId, importanceGroup, index: 0 });
       }
     });
     list.append(button);
@@ -2097,7 +2431,7 @@ export function createLineBarTool({
     for (const selection of expectedSelections()) {
       const source = selection.metricKind === "prediction" ? selection.sourceId || "" : "";
       responses.push({
-        label: selection.value,
+        label: selection.label || selection.value,
         numerator: selection.value,
         ...(source ? { source } : {}),
       });
@@ -4456,12 +4790,19 @@ export function createLineBarTool({
     );
     const rowsData = Array.isArray(data.rows) ? data.rows : [];
     const twoFeatureMode = Array.isArray(data.groupings) && data.groupings.length === 2;
+    const groupingDisplayLabel = (feature, sourceId = "") => {
+      const column = sourceColumns().find((candidate) => (
+        candidate.name === feature
+        && (!sourceId || (candidate.source_id || state.source || "dataset") === sourceId)
+      ));
+      return String(column?.label || feature || "");
+    };
     const groupingColumns = twoFeatureMode
       ? data.groupings.map((grouping, index) => ({
-          title: grouping.feature || `Feature ${index + 1}`,
+          title: groupingDisplayLabel(grouping.feature, grouping.source) || `Feature ${index + 1}`,
           field: `group${index}`,
         }))
-      : [{ title: data.x, field: "x" }];
+      : [{ title: groupingDisplayLabel(data.x, state.xSource), field: "x" }];
     const weightLabel = data.denominator?.bar_label || "Weight";
     const weightedMode = Boolean(data.denominator?.column);
     const summaryResponses = Array.isArray(data.summary?.responses) ? data.summary.responses : [];

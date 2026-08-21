@@ -10,7 +10,13 @@ from uuid import uuid4
 import duckdb
 
 from py_lucidum.core import Dataset, dataset_slug, dataset_workspace_metadata, is_numeric_kind
-from py_lucidum.tools.line_bar.model_ratio import RATIO_COLUMN, RATIO_KIND
+from py_lucidum.tools.line_bar.model_ratio import (
+    PREDICTION_RATIO_COLUMN,
+    PREDICTION_RATIO_SOURCE_RE,
+    RATIO_COLUMN,
+    RATIO_KIND,
+    encode_prediction_ratio_column,
+)
 
 
 FAVOURITES_VERSION = 2
@@ -221,6 +227,11 @@ class LineBarFavouriteStore:
                 errors.append("Favourite Weight source must use a primary GLM or GBM prediction.")
             self.validate_column(denominator_source, denominator, errors, label="Weight", numeric=True)
         if scope == "line_bar_view":
+            comparison = self.validate_model_comparison(view.get("modelComparison"), errors)
+            exact_sources = {
+                comparison.get("baselineSourceId", ""),
+                comparison.get("challengerSourceId", ""),
+            } - {""}
             groupings = view.get("groupings")
             if not isinstance(groupings, list) or not 1 <= len(groupings) <= 2:
                 errors.append("Favourite must contain one or two grouping features.")
@@ -239,6 +250,7 @@ class LineBarFavouriteStore:
                     feature,
                     grouping_errors,
                     label=source_label,
+                    preserve_exact=bool(comparison) and index == 1,
                 )
                 self.validate_column(grouping_source, feature, grouping_errors, label=feature_label)
                 if index == 2 and grouping_errors:
@@ -252,8 +264,42 @@ class LineBarFavouriteStore:
                 for index, selection in enumerate(expected[:2], start=1):
                     if not isinstance(selection, dict):
                         continue
-                    expected_source = self.validate_favourite_source(selection.get("sourceId") or source, selection.get("value"), errors, label=f"Expected {index} source")
+                    expected_source = self.validate_favourite_source(
+                        selection.get("sourceId") or source,
+                        selection.get("value"),
+                        errors,
+                        label=f"Expected {index} source",
+                        preserve_exact=bool(exact_sources),
+                    )
                     self.validate_column(expected_source, selection.get("value"), errors, label=f"Expected {index}", numeric=True)
+            if comparison:
+                first_grouping = groupings[0] if groupings and isinstance(groupings[0], dict) else {}
+                expected_ratio = self.comparison_ratio_source_id(comparison)
+                if (
+                    str(first_grouping.get("feature") or "") != PREDICTION_RATIO_COLUMN
+                    or str(first_grouping.get("source") or "") != expected_ratio
+                ):
+                    errors.append("Favourite model comparison does not match its prediction-ratio x-axis source.")
+                expected = view.get("expectedSelections") if isinstance(view.get("expectedSelections"), list) else []
+                expected_source_ids = [
+                    str(selection.get("sourceId") or "")
+                    for selection in expected[:2]
+                    if isinstance(selection, dict)
+                ]
+                ordered_sources = [comparison["baselineSourceId"], comparison["challengerSourceId"]]
+                if expected_source_ids != ordered_sources:
+                    errors.append("Favourite model comparison Expected rows must be Baseline followed by Challenger.")
+                expected_columns = [
+                    str(selection.get("value") or "")
+                    for selection in expected[:2]
+                    if isinstance(selection, dict)
+                ]
+                ordered_columns = [
+                    self.comparison_side_column(comparison, "baseline"),
+                    self.comparison_side_column(comparison, "challenger"),
+                ]
+                if expected_columns != ordered_columns:
+                    errors.append("Favourite model comparison Expected rows do not match its Baseline and Challenger.")
         if scope in {"metrics_filter", "line_bar_view", "histogram_view", "map_view"}:
             self.validate_filter_state(view, errors, warnings, saved_filters=saved_filters, source=source)
         kpi = view.get("kpi") if isinstance(view.get("kpi"), dict) else {}
@@ -329,8 +375,18 @@ class LineBarFavouriteStore:
             errors.append(f"Favourite uses a missing {label}: {raw}")
             return raw
 
-    def validate_favourite_source(self, raw_source: Any, column_name: Any, errors: list[str], *, label: str) -> str:
+    def validate_favourite_source(
+        self,
+        raw_source: Any,
+        column_name: Any,
+        errors: list[str],
+        *,
+        label: str,
+        preserve_exact: bool = False,
+    ) -> str:
         raw = str(raw_source or "dataset").strip() or "dataset"
+        if preserve_exact:
+            return self.validate_source(raw, errors, label=label)
         source_kind = favourite_model_source_kind(raw, column_name)
         if not source_kind:
             return self.validate_source(raw, errors, label=label)
@@ -344,6 +400,84 @@ class LineBarFavouriteStore:
         elif source_kind == "gbm_predictions":
             errors.append("Favourite uses GBM model output but no active GBM prediction source is available.")
         return raw
+
+    def validate_model_comparison(self, raw_comparison: Any, errors: list[str]) -> dict[str, str]:
+        if raw_comparison is None:
+            return {}
+        if not isinstance(raw_comparison, dict):
+            errors.append("Favourite model comparison is invalid.")
+            return {}
+        comparison = {
+            "baselineSourceId": str(raw_comparison.get("baselineSourceId") or "").strip(),
+            "challengerSourceId": str(raw_comparison.get("challengerSourceId") or "").strip(),
+            "baselineColumn": str(raw_comparison.get("baselineColumn") or "").strip(),
+            "challengerColumn": str(raw_comparison.get("challengerColumn") or "").strip(),
+        }
+        baseline = comparison["baselineSourceId"]
+        challenger = comparison["challengerSourceId"]
+        if not baseline or not challenger:
+            errors.append("Favourite model comparison must specify Baseline and Challenger sources.")
+            return {}
+        dataset_baseline = baseline == "dataset"
+        dataset_challenger = challenger == "dataset"
+        baseline_identity = (baseline, comparison["baselineColumn"] if dataset_baseline else "")
+        challenger_identity = (challenger, comparison["challengerColumn"] if dataset_challenger else "")
+        if baseline_identity == challenger_identity:
+            errors.append("Favourite model comparison Baseline and Challenger must be different sources.")
+            return {}
+        if not dataset_baseline and not (GLM_SOURCE_RE.fullmatch(baseline) or GBM_SOURCE_RE.fullmatch(baseline)):
+            errors.append(f"Favourite Baseline model source is invalid: {baseline}")
+        if not dataset_challenger and not (GLM_SOURCE_RE.fullmatch(challenger) or GBM_SOURCE_RE.fullmatch(challenger)):
+            errors.append(f"Favourite Challenger model source is invalid: {challenger}")
+        if dataset_baseline:
+            self.validate_column("dataset", comparison["baselineColumn"], errors, label="Baseline", numeric=True)
+        else:
+            comparison["baselineColumn"] = ""
+        if dataset_challenger:
+            self.validate_column("dataset", comparison["challengerColumn"], errors, label="Challenger", numeric=True)
+        else:
+            comparison["challengerColumn"] = ""
+        sources = {
+            str(source.get("id") or ""): source
+            for source in active_dataset(self.dataset_path, self.dataset).data_sources()
+        }
+        missing = []
+        for role, source_id in (("Baseline", baseline), ("Challenger", challenger)):
+            if source_id == "dataset":
+                continue
+            if source_id not in sources:
+                errors.append(f"Favourite {role} model is no longer available: {source_id}")
+                missing.append(source_id)
+        if not missing and not dataset_baseline and not dataset_challenger:
+            baseline_source = sources[baseline]
+            challenger_source = sources[challenger]
+            baseline_pair = model_source_training_pair(baseline_source)
+            challenger_pair = model_source_training_pair(challenger_source)
+            if not baseline_pair or baseline_pair != challenger_pair:
+                errors.append("Favourite Baseline and Challenger models were trained for different KPIs.")
+        return comparison
+
+    @staticmethod
+    def comparison_ratio_source_id(comparison: dict[str, str]) -> str:
+        def side_identity(role: str) -> tuple[str, str]:
+            source_id = comparison[f"{role}SourceId"]
+            if source_id == "dataset":
+                return "other", encode_prediction_ratio_column(comparison.get(f"{role}Column") or "")
+            return prediction_source_identity(source_id)
+
+        baseline_family, baseline_model_id = side_identity("baseline")
+        challenger_family, challenger_model_id = side_identity("challenger")
+        return (
+            f"model_ratio:{PREDICTION_RATIO_COLUMN}:"
+            f"{challenger_family}:{challenger_model_id}:{baseline_family}:{baseline_model_id}"
+        )
+
+    @staticmethod
+    def comparison_side_column(comparison: dict[str, str], role: str) -> str:
+        source_id = comparison[f"{role}SourceId"]
+        if source_id == "dataset":
+            return comparison.get(f"{role}Column") or ""
+        return "glm_prediction" if source_id.startswith("glm:") else "gbm_prediction"
 
     def active_source_for_kind(self, source_kind: str) -> str:
         for source in active_dataset(self.dataset_path, self.dataset).data_sources():
@@ -427,13 +561,44 @@ def favourite_model_source_kind(raw_source: Any, column_name: Any) -> str:
     column = str(column_name or "").strip()
     if source in {"", "dataset"}:
         return ""
-    if column == RATIO_COLUMN or RATIO_SOURCE_RE.fullmatch(source):
+    if (
+        column in {RATIO_COLUMN, PREDICTION_RATIO_COLUMN}
+        or RATIO_SOURCE_RE.fullmatch(source)
+        or PREDICTION_RATIO_SOURCE_RE.fullmatch(source)
+    ):
         return RATIO_KIND
     if column in GLM_PREDICTION_COLUMNS or GLM_SOURCE_RE.fullmatch(source):
         return "glm_predictions"
     if column in GBM_PREDICTION_COLUMNS or GBM_SOURCE_RE.fullmatch(source):
         return "gbm_predictions"
     return ""
+
+
+def prediction_source_identity(source_id: str) -> tuple[str, str]:
+    source = str(source_id or "")
+    glm_match = re.fullmatch(r"glm:([A-Za-z0-9_.-]+):predictions", source)
+    if glm_match:
+        return "glm", glm_match.group(1)
+    gbm_match = re.fullmatch(r"gbm:([A-Za-z0-9_.-]+):predictions", source)
+    if gbm_match:
+        return "gbm", gbm_match.group(1)
+    return "", ""
+
+
+def model_source_training_pair(source: dict[str, Any]) -> tuple[str, str] | None:
+    family, _ = prediction_source_identity(str(source.get("id") or ""))
+    numerator = str(source.get("response_column") or "").strip()
+    if not family or not numerator:
+        return None
+    denominator = (
+        source.get("denominator_column") or source.get("offset_column")
+        if family == "glm"
+        else source.get("offset_column") or source.get("denominator_column")
+    )
+    denominator_text = str(denominator or "").strip()
+    if denominator_text.lower() in {"", "n", "average row value", "__none__"}:
+        denominator_text = "__none__"
+    return numerator, denominator_text
 
 
 def timestamp() -> str:
@@ -446,6 +611,19 @@ def normalise_favourite_view(view: dict[str, Any]) -> dict[str, Any]:
         payload["scope"] = DEFAULT_FAVOURITE_SCOPE
     payload["denominatorSource"] = str(payload.get("denominatorSource") or "dataset")
     if payload.get("scope") == "line_bar_view":
+        comparison = payload.get("modelComparison")
+        if isinstance(comparison, dict):
+            normalised_comparison = {
+                "baselineSourceId": str(comparison.get("baselineSourceId") or ""),
+                "challengerSourceId": str(comparison.get("challengerSourceId") or ""),
+            }
+            if normalised_comparison["baselineSourceId"] == "dataset":
+                normalised_comparison["baselineColumn"] = str(comparison.get("baselineColumn") or "")
+            if normalised_comparison["challengerSourceId"] == "dataset":
+                normalised_comparison["challengerColumn"] = str(comparison.get("challengerColumn") or "")
+            payload["modelComparison"] = normalised_comparison
+        else:
+            payload.pop("modelComparison", None)
         mode = str(payload.get("emptyPeriods") or "show").strip().lower()
         payload["emptyPeriods"] = mode if mode in EMPTY_PERIOD_VALUES else "show"
         legacy_tail_percent = payload.get("tailPercent")

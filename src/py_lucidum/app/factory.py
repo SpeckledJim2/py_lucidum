@@ -374,8 +374,18 @@ def create_app(
                 if actual not in columns or not is_numeric_kind(columns[actual].kind):
                     raise ValueError("Choose a valid numeric Actual column")
                 denominator = normalise_denominator(raw_denominator, columns)
+                field_columns = context.get("field_columns") or []
+                actual_query_column = str(field_columns[0] or actual) if field_columns else actual
+                if denominator.get("column") and len(field_columns) > 1 and field_columns[1] != denominator["column"]:
+                    denominator = {**denominator, "query_column": str(field_columns[1])}
                 filter_sql = dataset.normalise_filter_for_relation(payload.get("filter"), relation)
-                responses = [{"label": actual, "numerator": actual}]
+                responses = [
+                    {
+                        "label": actual,
+                        "numerator": actual,
+                        **({"query_column": actual_query_column} if actual_query_column != actual else {}),
+                    }
+                ]
                 row_count = context["row_count"]
                 filtered_row_count = relation_row_count(dataset, relation, filter_sql)
                 denominator_summary = summarize_denominator_for_relation(

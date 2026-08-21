@@ -29,7 +29,12 @@ from py_lucidum.tools.line_bar import query as line_bar_query
 from py_lucidum.tools.line_bar import two_feature as two_feature_query
 from py_lucidum.tools.line_bar.favourites import LineBarFavouriteStore
 from py_lucidum.tools.line_bar.importance import gbm_model_importance, glm_model_importance, ranked_rows
-from py_lucidum.tools.line_bar.model_ratio import RATIO_COLUMN, RATIO_KIND
+from py_lucidum.tools.line_bar.model_ratio import (
+    PREDICTION_RATIO_COLUMN,
+    RATIO_COLUMN,
+    RATIO_KIND,
+    encode_prediction_ratio_column,
+)
 from py_lucidum.tools.line_bar.query import apply_transform, chart, mixed_relation_sql, normalise_quantile_count, table
 
 
@@ -1872,9 +1877,17 @@ COPY (
             status, _, body = asgi_get(app, "/api/schema")
         payload = json.loads(body)
         ratio_sources = [source for source in payload["data_sources"] if source.get("kind") == RATIO_KIND]
+        prediction_sources = [
+            source for source in payload["data_sources"]
+            if source.get("kind") in {"glm_predictions", "gbm_predictions"}
+        ]
 
         self.assertEqual(status, 200)
         self.assertEqual(len(ratio_sources), 1)
+        self.assertEqual(
+            {(source["kind"], source["model_label"]) for source in prediction_sources},
+            {("glm_predictions", "ratio-glm"), ("gbm_predictions", "ratio-gbm")},
+        )
         ratio_source = ratio_sources[0]
         self.assertTrue(ratio_source["active"])
         self.assertEqual(ratio_source["gbm_model_id"], "ratio-gbm")
@@ -2083,6 +2096,559 @@ COPY (
         self.assertAlmostEqual(rows["5"]["resp0"], 200.0)
         self.assertAlmostEqual(rows["10"]["resp0"], 100.0)
         self.assertAlmostEqual(rows["20"]["resp0"], 400.0)
+
+    def test_prediction_ratio_supports_glm_glm_gbm_gbm_and_mixed_exact_pairs(self) -> None:
+        self.write_simple_glm_prediction_model(
+            [10.0, 0.0, None, 100.0],
+            model_id="glm-baseline",
+            active=False,
+        )
+        self.write_simple_glm_prediction_model(
+            [20.0, 30.0, 40.0, 400.0],
+            model_id="glm-challenger",
+        )
+        self.write_simple_gbm_prediction_model(
+            [5.0, 10.0, 20.0, 100.0],
+            model_id="gbm-baseline",
+            active=False,
+        )
+        self.write_simple_gbm_prediction_model(
+            [15.0, 20.0, 40.0, 500.0],
+            model_id="gbm-challenger",
+        )
+        app = create_app(
+            self.data_path,
+            token="",
+            tools=["gbm", "glm", "line_bar"],
+            use_saved_filters=False,
+            use_kpis=False,
+        )
+        reversed_source_id = "model_ratio:prediction_ratio:glm:glm-baseline:glm:glm-challenger"
+        reversed_source = app.state.dataset.model_prediction_source(reversed_source_id)
+        self.assertIsNotNone(reversed_source)
+        with app.state.dataset.lock:
+            reversed_rows = app.state.dataset.con.execute(
+                f"SELECT __lucidum_row_id, {PREDICTION_RATIO_COLUMN} "
+                f"FROM {reversed_source.relation_sql} ORDER BY __lucidum_row_id"
+            ).fetchall()
+        self.assertEqual(reversed_rows, [(1, 0.5), (2, 0.0), (3, None), (4, 0.25)])
+        self.assertIsNone(
+            app.state.dataset.model_prediction_source(
+                "model_ratio:prediction_ratio:glm:glm-baseline:glm:glm-baseline"
+            )
+        )
+        self.assertIsNone(
+            app.state.dataset.model_prediction_source(
+                "model_ratio:prediction_ratio:glm:missing-model:glm:glm-baseline"
+            )
+        )
+        cases = [
+            (
+                "model_ratio:prediction_ratio:glm:glm-challenger:glm:glm-baseline",
+                "glm:glm-baseline:predictions",
+                "glm_prediction",
+                "glm:glm-challenger:predictions",
+                "glm_prediction",
+                {"2", "4", "(missing)"},
+                ("2", 10.0, 20.0),
+            ),
+            (
+                "model_ratio:prediction_ratio:gbm:gbm-challenger:gbm:gbm-baseline",
+                "gbm:gbm-baseline:predictions",
+                "gbm_prediction",
+                "gbm:gbm-challenger:predictions",
+                "gbm_prediction",
+                {"2", "3", "5"},
+                ("2", 15.0, 30.0),
+            ),
+            (
+                "model_ratio:prediction_ratio:glm:glm-challenger:gbm:gbm-baseline",
+                "gbm:gbm-baseline:predictions",
+                "gbm_prediction",
+                "glm:glm-challenger:predictions",
+                "glm_prediction",
+                {"2", "3", "4"},
+                ("3", 10.0, 30.0),
+            ),
+        ]
+        for (
+            source_id,
+            baseline_source,
+            baseline_column,
+            challenger_source,
+            challenger_column,
+            expected_x,
+            expected_values,
+        ) in cases:
+            with self.subTest(source_id=source_id):
+                prediction_source = app.state.dataset.model_prediction_source(source_id)
+                request = self.request("YoungestDriverAge >= 30")
+                request.update(
+                    {
+                        "x": PREDICTION_RATIO_COLUMN,
+                        "xSource": source_id,
+                        "bandWidth": 1,
+                        "responses": [
+                            {"label": "Actual", "numerator": "Actual"},
+                            {"label": "Baseline", "numerator": baseline_column, "source": baseline_source},
+                            {"label": "Challenger", "numerator": challenger_column, "source": challenger_source},
+                        ],
+                    }
+                )
+                status, _, body = asgi_post_json(app, "/api/chart", request)
+                payload = json.loads(body)
+
+                self.assertEqual(status, 200, payload)
+                self.assertIsNotNone(prediction_source)
+                self.assertIsNotNone(prediction_source.binding)
+                self.assertEqual(payload["field_sources"]["x"], source_id)
+                self.assertEqual(
+                    payload["field_sources"]["responses"],
+                    ["dataset", baseline_source, challenger_source],
+                )
+                self.assertNotIn("__lucidum_source_field_", body.decode("utf-8"))
+                rows = {row["x"]: row for row in payload["rows"]}
+                self.assertEqual(set(rows), expected_x)
+                expected_group, expected_baseline, expected_challenger = expected_values
+                self.assertAlmostEqual(rows[expected_group]["resp1"], expected_baseline)
+                self.assertAlmostEqual(rows[expected_group]["resp2"], expected_challenger)
+                self.assertNotEqual(rows[expected_group]["resp1"], rows[expected_group]["resp2"])
+
+        reversed_request = self.request()
+        reversed_request.update(
+            {
+                "x": PREDICTION_RATIO_COLUMN,
+                "xSource": reversed_source_id,
+                "bandWidth": 0,
+                "responses": [
+                    {"label": "Actual", "numerator": "Actual"},
+                    {
+                        "label": "Baseline",
+                        "numerator": "glm_prediction",
+                        "source": "glm:glm-challenger:predictions",
+                    },
+                    {
+                        "label": "Challenger",
+                        "numerator": "glm_prediction",
+                        "source": "glm:glm-baseline:predictions",
+                    },
+                ],
+            }
+        )
+        reversed_status, _, reversed_body = asgi_post_json(app, "/api/chart", reversed_request)
+        reversed_payload = json.loads(reversed_body)
+        reversed_chart_rows = {row["x"]: row for row in reversed_payload["rows"]}
+
+        self.assertEqual(reversed_status, 200, reversed_payload)
+        self.assertAlmostEqual(reversed_chart_rows["0.5"]["resp1"], 20.0)
+        self.assertAlmostEqual(reversed_chart_rows["0.5"]["resp2"], 10.0)
+
+    def test_prediction_ratio_aligns_same_family_rows_and_nulls_zero_baselines(self) -> None:
+        baseline_store = self.write_simple_glm_prediction_model(
+            [0.0, 10.0, None],
+            model_id="aligned-baseline",
+            active=False,
+        )
+        challenger_store = self.write_simple_glm_prediction_model(
+            [50.0, 20.0, 40.0],
+            model_id="aligned-challenger",
+        )
+        self.write_prediction_parquet(
+            baseline_store.source_path("aligned-baseline", "predictions"),
+            "glm_prediction",
+            [0.0, 10.0, None],
+            row_ids=[4, 1, 2],
+        )
+        self.write_prediction_parquet(
+            challenger_store.source_path("aligned-challenger", "predictions"),
+            "glm_prediction",
+            [50.0, 20.0, 40.0],
+            row_ids=[2, 4, 1],
+        )
+        app = create_app(
+            self.data_path,
+            token="",
+            tools=["glm", "line_bar"],
+            use_saved_filters=False,
+            use_kpis=False,
+        )
+        source_id = "model_ratio:prediction_ratio:glm:aligned-challenger:glm:aligned-baseline"
+        request = self.request()
+        request.update(
+            {
+                "x": PREDICTION_RATIO_COLUMN,
+                "xSource": source_id,
+                "bandWidth": 1,
+                "responses": [
+                    {"label": "Actual", "numerator": "Actual"},
+                    {
+                        "label": "Baseline",
+                        "numerator": "glm_prediction",
+                        "source": "glm:aligned-baseline:predictions",
+                    },
+                    {
+                        "label": "Challenger",
+                        "numerator": "glm_prediction",
+                        "source": "glm:aligned-challenger:predictions",
+                    },
+                ],
+            }
+        )
+
+        status, _, body = asgi_post_json(app, "/api/chart", request)
+        payload = json.loads(body)
+        rows = {row["x"]: row for row in payload["rows"]}
+
+        self.assertEqual(status, 200, payload)
+        self.assertEqual(
+            payload["field_sources"]["responses"],
+            ["dataset", "glm:aligned-baseline:predictions", "glm:aligned-challenger:predictions"],
+        )
+        self.assertAlmostEqual(rows["4"]["resp1"], 10.0)
+        self.assertAlmostEqual(rows["4"]["resp2"], 40.0)
+        self.assertNotEqual(rows["4"]["resp1"], rows["4"]["resp2"])
+        rows = {row["x"]: row for row in json.loads(body)["rows"]}
+
+        self.assertEqual(status, 200)
+        self.assertEqual(set(rows), {"4", "(missing)"})
+        self.assertAlmostEqual(rows["4"]["resp0"], 100.0)
+        self.assertAlmostEqual(rows["(missing)"]["resp0"], 400.0)
+
+    def test_same_family_predictions_remain_distinct_with_model_denominator_and_table(self) -> None:
+        self.write_simple_gbm_prediction_model(
+            [5.0, 10.0, 20.0, 100.0],
+            model_id="denominator-baseline",
+            active=False,
+        )
+        self.write_simple_gbm_prediction_model(
+            [15.0, 20.0, 40.0, 500.0],
+            model_id="denominator-challenger",
+        )
+        app = create_app(
+            self.data_path,
+            token="",
+            tools=["gbm", "line_bar"],
+            use_saved_filters=False,
+            use_kpis=False,
+        )
+        request = self.request()
+        request.update(
+            {
+                "responses": [
+                    {"label": "Actual", "numerator": "Actual"},
+                    {
+                        "label": "Baseline",
+                        "numerator": "gbm_prediction",
+                        "source": "gbm:denominator-baseline:predictions",
+                    },
+                ],
+                "denominator": "gbm_prediction",
+                "denominatorSource": "gbm:denominator-challenger:predictions",
+            }
+        )
+
+        chart_status, _, chart_body = asgi_post_json(app, "/api/chart", request)
+        chart_payload = json.loads(chart_body)
+        chart_rows = {row["x"]: row for row in chart_payload["rows"]}
+        table_status, _, table_body = asgi_post_json(
+            app,
+            "/api/line-bar/table",
+            {**request, "tablePage": 1, "tablePageSize": 10},
+        )
+        table_payload = json.loads(table_body)
+        table_rows = {row["x"]: row for row in table_payload["rows"]}
+
+        self.assertEqual(chart_status, 200, chart_payload)
+        self.assertEqual(table_status, 200, table_payload)
+        self.assertEqual(
+            chart_payload["field_sources"],
+            {
+                "x": "dataset",
+                "responses": ["dataset", "gbm:denominator-baseline:predictions"],
+                "denominator": "gbm:denominator-challenger:predictions",
+            },
+        )
+        self.assertAlmostEqual(chart_rows["Social"]["resp1"], 15.0 / 35.0)
+        self.assertAlmostEqual(chart_rows["Business"]["resp1"], 120.0 / 540.0)
+        self.assertAlmostEqual(table_rows["Social"]["resp1"], 15.0 / 35.0)
+        self.assertEqual(chart_payload["responses"][1]["numerator"], "gbm_prediction")
+        self.assertEqual(chart_payload["denominator"]["column"], "gbm_prediction")
+
+    def test_two_feature_same_family_prediction_series_remain_distinct(self) -> None:
+        self.write_simple_glm_prediction_model(
+            [10.0, 20.0, 30.0, 40.0],
+            model_id="two-feature-baseline",
+            active=False,
+        )
+        self.write_simple_glm_prediction_model(
+            [15.0, 25.0, 35.0, 45.0],
+            model_id="two-feature-challenger",
+        )
+        app = create_app(
+            self.data_path,
+            token="",
+            tools=["glm", "line_bar"],
+            use_saved_filters=False,
+            use_kpis=False,
+        )
+        request = self.two_feature_request()
+        request["tailPercent"] = 0
+        request["responses"] = [
+            {"label": "Actual", "numerator": "Actual"},
+            {
+                "label": "Baseline",
+                "numerator": "glm_prediction",
+                "source": "glm:two-feature-baseline:predictions",
+            },
+            {
+                "label": "Challenger",
+                "numerator": "glm_prediction",
+                "source": "glm:two-feature-challenger:predictions",
+            },
+        ]
+
+        status, _, body = asgi_post_json(app, "/api/line-bar/chart", request)
+        payload = json.loads(body)
+        row = next(
+            item
+            for item in payload["rows"]
+            if item["group0"] == "30" and item["group1"] == "Social"
+        )
+
+        self.assertEqual(status, 200, payload)
+        self.assertAlmostEqual(row["resp1"], 10.0)
+        self.assertAlmostEqual(row["resp2"], 15.0)
+        self.assertNotEqual(row["resp1"], row["resp2"])
+        self.assertNotIn("query_column", payload["groupings"][0])
+        self.assertNotIn("query_column", payload["responses"][1])
+
+    def test_prediction_ratio_supports_numeric_dataset_column_baseline(self) -> None:
+        self.data_path.write_text(
+            "YoungestDriverAge,UseofVan,QuoteDate,Gross.Weight,Actual,Expected,Weight\n"
+            "30,Social,2024-01-01,2500,100,90,10\n"
+            "45,Social,2024-01-02,0,200,210,20\n"
+            "50,Business,2024-02-01,,300,290,30\n"
+            "60,Business,2024-02-20,4500,400,410,40\n",
+            encoding="utf-8",
+        )
+        self.write_simple_glm_prediction_model(
+            [2500.0, 1000.0, 1000.0, 9000.0],
+            model_id="column-challenger",
+        )
+        app = create_app(
+            self.data_path,
+            token="",
+            tools=["glm", "line_bar"],
+            use_saved_filters=False,
+            use_kpis=False,
+        )
+        column_token = encode_prediction_ratio_column("Gross.Weight")
+        source_id = f"model_ratio:prediction_ratio:glm:column-challenger:other:{column_token}"
+        prediction_source = app.state.dataset.model_prediction_source(source_id)
+        request = self.request("YoungestDriverAge >= 45")
+        request.update(
+            {
+                "x": PREDICTION_RATIO_COLUMN,
+                "xSource": source_id,
+                "bandWidth": 1,
+                "responses": [
+                    {"label": "Actual", "numerator": "Actual"},
+                    {"label": "Gross.Weight", "numerator": "Gross.Weight", "source": "dataset"},
+                    {
+                        "label": "GLM · column-challenger",
+                        "numerator": "glm_prediction",
+                        "source": "glm:column-challenger:predictions",
+                    },
+                ],
+            }
+        )
+
+        status, _, body = asgi_post_json(app, "/api/chart", request)
+        payload = json.loads(body)
+        rows = {row["x"]: row for row in payload["rows"]}
+
+        self.assertEqual(status, 200, payload)
+        self.assertIsNotNone(prediction_source)
+        self.assertIsNotNone(prediction_source.binding)
+        self.assertIn("POSITIONAL JOIN", mixed_relation_sql(app.state.dataset, [prediction_source]))
+        self.assertEqual(payload["field_sources"]["x"], source_id)
+        self.assertEqual(
+            payload["field_sources"]["responses"],
+            ["dataset", "dataset", "glm:column-challenger:predictions"],
+        )
+        self.assertEqual(set(rows), {"2", "(missing)"})
+        self.assertAlmostEqual(rows["2"]["resp0"], 400.0)
+        self.assertAlmostEqual(rows["(missing)"]["resp0"], 200.0)
+
+        reversed_source_id = (
+            "model_ratio:prediction_ratio:other:"
+            f"{column_token}:glm:column-challenger"
+        )
+        reversed_source = app.state.dataset.model_prediction_source(reversed_source_id)
+        self.assertIsNotNone(reversed_source)
+        with app.state.dataset.lock:
+            reversed_rows = app.state.dataset.con.execute(
+                f"SELECT __lucidum_row_id, {PREDICTION_RATIO_COLUMN} "
+                f"FROM {reversed_source.relation_sql} ORDER BY __lucidum_row_id"
+            ).fetchall()
+        self.assertEqual(reversed_rows, [(1, 1.0), (2, 0.0), (3, None), (4, 0.5)])
+
+        other_pair_source_id = (
+            "model_ratio:prediction_ratio:other:"
+            f"{encode_prediction_ratio_column('Expected')}:other:{encode_prediction_ratio_column('Weight')}"
+        )
+        other_pair_source = app.state.dataset.model_prediction_source(other_pair_source_id)
+        self.assertIsNotNone(other_pair_source)
+        with app.state.dataset.lock:
+            other_pair_rows = app.state.dataset.con.execute(
+                f"SELECT {PREDICTION_RATIO_COLUMN} FROM {other_pair_source.relation_sql} "
+                "ORDER BY __lucidum_row_id"
+            ).fetchall()
+        self.assertEqual(other_pair_rows, [(9.0,), (10.5,), (290.0 / 30.0,), (10.25,)])
+        self.assertIsNone(
+            app.state.dataset.model_prediction_source(
+                "model_ratio:prediction_ratio:other:"
+                f"{encode_prediction_ratio_column('Expected')}:other:{encode_prediction_ratio_column('Expected')}"
+            )
+        )
+        self.assertIsNone(
+            app.state.dataset.model_prediction_source(
+                "model_ratio:prediction_ratio:glm:column-challenger:other:5573656f6656616e"
+            )
+        )
+        self.assertIsNone(
+            app.state.dataset.model_prediction_source(
+                "model_ratio:prediction_ratio:glm:column-challenger:other:zz"
+            )
+        )
+
+    def test_exact_model_comparison_favourite_restores_models_and_reports_deletion(self) -> None:
+        baseline_store = self.write_simple_glm_prediction_model(
+            [10.0, 20.0, 30.0, 40.0],
+            model_id="favourite-baseline",
+            active=False,
+        )
+        self.write_simple_glm_prediction_model(
+            [11.0, 22.0, 33.0, 44.0],
+            model_id="favourite-challenger",
+        )
+        app = create_app(
+            self.data_path,
+            token="",
+            tools=["glm", "line_bar"],
+            use_saved_filters=False,
+            use_kpis=False,
+        )
+        baseline_source = "glm:favourite-baseline:predictions"
+        challenger_source = "glm:favourite-challenger:predictions"
+        ratio_source = "model_ratio:prediction_ratio:glm:favourite-challenger:glm:favourite-baseline"
+        favourite = self.favourite_view(
+            x=PREDICTION_RATIO_COLUMN,
+            xSource=ratio_source,
+            groupings=[
+                {
+                    "feature": PREDICTION_RATIO_COLUMN,
+                    "source": ratio_source,
+                    "bandWidth": "1",
+                    "quantileMode": "off",
+                    "dateBucket": "none",
+                    "asFactor": False,
+                }
+            ],
+            modelComparison={
+                "baselineSourceId": baseline_source,
+                "challengerSourceId": challenger_source,
+            },
+            expectedSelections=[
+                {"value": "glm_prediction", "sourceId": baseline_source, "metricKind": "prediction"},
+                {"value": "glm_prediction", "sourceId": challenger_source, "metricKind": "prediction"},
+            ],
+            filter="",
+            savedFilterRows=[],
+        )
+        store = LineBarFavouriteStore(self.data_path, app.state.dataset)
+
+        created = store.create_favourite(
+            "Exact GLM comparison",
+            favourite,
+            saved_filters=[],
+            kpis=[],
+        )
+        self.assertTrue(created["validation"]["valid"], created["validation"])
+        self.assertEqual(
+            created["view"]["modelComparison"],
+            {"baselineSourceId": baseline_source, "challengerSourceId": challenger_source},
+        )
+
+        baseline_store.delete_model("favourite-baseline")
+        missing_validation = store.list_favourites(saved_filters=[], kpis=[])[0]["validation"]
+        self.assertFalse(missing_validation["valid"])
+        self.assertIn(
+            "Favourite Baseline model is no longer available: glm:favourite-baseline:predictions",
+            missing_validation["errors"],
+        )
+
+    def test_dataset_column_comparison_favourite_restores_both_roles(self) -> None:
+        self.write_simple_gbm_prediction_model(
+            [20.0, 30.0, 40.0, 50.0],
+            model_id="column-favourite",
+        )
+        app = create_app(
+            self.data_path,
+            token="",
+            tools=["gbm", "line_bar"],
+            use_saved_filters=False,
+            use_kpis=False,
+        )
+        store = LineBarFavouriteStore(self.data_path, app.state.dataset)
+        model_source = "gbm:column-favourite:predictions"
+        column_token = f"other:{encode_prediction_ratio_column('Gross.Weight')}"
+        selections = {
+            "dataset": {"value": "Gross.Weight", "sourceId": "dataset", "metricKind": "metric"},
+            "model": {"value": "gbm_prediction", "sourceId": model_source, "metricKind": "prediction"},
+        }
+        for dataset_role in ("baseline", "challenger"):
+            baseline = "dataset" if dataset_role == "baseline" else "model"
+            challenger = "model" if baseline == "dataset" else "dataset"
+            ratio_source = (
+                "model_ratio:prediction_ratio:"
+                f"{column_token if challenger == 'dataset' else 'gbm:column-favourite'}:"
+                f"{column_token if baseline == 'dataset' else 'gbm:column-favourite'}"
+            )
+            comparison = {
+                "baselineSourceId": selections[baseline]["sourceId"],
+                "challengerSourceId": selections[challenger]["sourceId"],
+                f"{dataset_role}Column": "Gross.Weight",
+            }
+            favourite = self.favourite_view(
+                x=PREDICTION_RATIO_COLUMN,
+                xSource=ratio_source,
+                groupings=[{"feature": PREDICTION_RATIO_COLUMN, "source": ratio_source}],
+                modelComparison=comparison,
+                expectedSelections=[selections[baseline], selections[challenger]],
+                filter="",
+                savedFilterRows=[],
+            )
+            created = store.create_favourite(
+                f"Column {dataset_role}", favourite, saved_filters=[], kpis=[]
+            )
+            self.assertTrue(created["validation"]["valid"], created["validation"])
+            self.assertEqual(created["view"]["modelComparison"], comparison)
+
+        self.data_path.write_text(
+            "YoungestDriverAge,UseofVan,QuoteDate,Actual,Expected,Weight\n"
+            "30,Social,2024-01-01,100,90,10\n",
+            encoding="utf-8",
+        )
+        app.state.dataset.reload()
+        saved = {item["name"]: item for item in store.list_favourites(saved_filters=[], kpis=[])}
+        for dataset_role in ("baseline", "challenger"):
+            validation = saved[f"Column {dataset_role}"]["validation"]
+            self.assertFalse(validation["valid"])
+            self.assertIn(
+                f"Favourite uses missing {dataset_role.title()} column: Gross.Weight",
+                validation["errors"],
+            )
 
     def test_saved_model_favourite_sources_validate_against_active_models(self) -> None:
         self.write_simple_gbm_prediction_model([20.0, 30.0, 40.0, 400.0], model_id="saved-gbm", active=False)

@@ -434,6 +434,29 @@ Active GLM and GBM predictions behave like selectable numeric data sources. Line
 Bar can also expose a model prediction-ratio feature and order features by saved
 importance.
 
+When compatible saved primary model predictions are available, the gold **Prediction
+ratio…** row opens a comparison chooser. Both the Baseline and Challenger lists group
+saved models under GLM and GBM, followed by an OTHER group containing every numeric
+column in the loaded dataset. Choose a model or dataset column on either side and
+apply; **Swap** reverses any two distinct choices. Lucidum then sets:
+
+- Feature 1 to `Challenger value / Baseline value` and clears Feature 2.
+- Expected 1 to the Baseline model prediction or dataset column and Expected 2 to the
+  Challenger model prediction or dataset column.
+
+This is a double-lift setup. It keeps the current FILTER, Chart/Table view, and other
+Line and Bar choices; it does not create a holdout filter or enable quantiles. Use the
+normal FILTER workflow to select holdout rows. A selected model contributes its fitted
+primary prediction. The ratio returns missing where the Baseline model prediction or
+dataset value is missing or zero, and receives the normal suggested numeric
+banding. Model rows, legends, and tables use names such as `GLM · Pricing v12` instead
+of technical prediction-column names; OTHER Baselines use the dataset column name.
+
+The chosen models remain exact when another GLM or GBM is activated. Changing the KPI
+also retains the comparison and displays the normal compatibility warning. Clicking
+the configured ratio row reopens the chooser; selecting another x-axis feature keeps
+the two model Expected lines.
+
 For a one-feature chart:
 
 - A GLM partial-dependence overlay shows the active model's fitted relationship for
@@ -455,7 +478,10 @@ the chart.
 A Line/Bar view favourite saves metrics, filter, one or two groupings, independent
 missing and grouping controls, plot choice, tail handling, heatmap labels, and the
 one-feature empty-period choice. Optional stale Feature 2 settings can be dropped
-while a valid Feature 1 is restored.
+while a valid Feature 1 is restored. A model-pair favourite restores the exact ordered
+Baseline and Challenger, and reports a clear validation error if either saved model
+has since been deleted. Older model-output favourites continue to follow the active
+model of each family.
 
 [Back to contents ↑](#contents)
 
@@ -779,7 +805,8 @@ An active GLM adds `glm_prediction`, `glm_prediction_rate`, and any tabulated
 prediction to shared selectors where applicable. On one-feature Line and Bar charts,
 the GLM overlay displays the fitted relationship for the selected feature. Simple
 models are evaluated directly over the plotted grid; interaction models use a
-consistent partial-dependence treatment.
+consistent partial-dependence treatment. Any two compatible saved GLMs can also be
+selected as Baseline and Challenger from Line and Bar's **Prediction ratio…** row.
 
 Tabulation plots identify the selected feature, keep dense categories legible,
 emphasise the zero axis, and provide a chart-image copy action.
@@ -960,7 +987,9 @@ applicable.
 
 Line and Bar can compare the prediction with Actual and add a SHAP ribbon for the
 selected feature. UK Mapping can aggregate compatible predictions and SHAP fields by
-postcode. Saved GBM tabulations can be exported to XLSX from the Tabulations panel.
+postcode. Any two compatible saved GBMs can also be selected as Baseline and
+Challenger from Line and Bar's **Prediction ratio…** row. Saved GBM tabulations can be
+exported to XLSX from the Tabulations panel.
 
 [Back to contents ↑](#contents)
 
@@ -985,6 +1014,11 @@ follows the active model of that family. Lucidum migrates supported older favour
 formats and reports fields that can no longer be restored. Drag favourites to set
 their order; the first becomes the startup view unless the CLI, URL, or Python call
 selects another one.
+
+Line/Bar model-comparison favourites are different: they save the exact Baseline and
+Challenger sources so later model activation does not change the chart. An OTHER
+selection also saves its exact dataset column and reports a clear validation error if
+that column is later removed.
 
 ### Model workspaces
 
@@ -1130,7 +1164,7 @@ The public package also provides:
 - `serve_line_bar()` as a focused Line and Bar launch helper.
 - `build_glm_tabulations()`, `score_glm_tabulations()`, and
   `export_glm_tabulations()`.
-- `line_bar_chart()` and `gbm_evaluation_chart()`.
+- `line_bar_chart()`, `double_lift_chart()`, and `gbm_evaluation_chart()`.
 - `write_echarts_report()`, `write_glm_summary_report()`, and
   `write_gbm_summary_report()`.
 - `report_filename()`.
@@ -1174,7 +1208,7 @@ lucidum --sync-examples /path/to/client/examples
 ```
 
 The destination directory is created when necessary. The command creates or
-overwrites the six numbered scripts and four Python helpers, but never changes YAML,
+overwrites the seven numbered scripts and four Python helpers, but never changes YAML,
 formula, specification, data, unknown Python, or other client files. Use
 `lucidum --sync-examples /path/to/client/examples --dry-run` to list the changes
 without writing them. A virtual-environment installation can use the same
@@ -1185,6 +1219,16 @@ Positron. See
 [Build models outside Lucidum, then report or view them](external-model-builds-and-reports.md)
 for the commands, YAML fields, data rules, artefacts, report settings, and direct API
 examples.
+
+The optional fourth numbered script, `04_external_double_lift_demo.py`, sits
+outside either single-model build sequence. Its `config_double_lift.yaml` names
+two exact build YAML paths as Baseline and Challenger, so identically named
+`config.yaml` files in different model folders remain unambiguous. It supports
+GLM/GLM, GBM/GBM, and mixed comparisons and writes one portable interactive
+report for each configured SAMPLE population. Every report highlights the SAMPLE
+column and selected values at the top, together with both build YAML and resolved
+model-folder paths. Relative paths are resolved from `config_double_lift.yaml`,
+not from the shell's current directory.
 
 [Back to contents ↑](#contents)
 

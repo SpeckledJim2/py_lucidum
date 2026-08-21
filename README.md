@@ -408,7 +408,7 @@ pipx upgrade py-lucidum
 lucidum --sync-examples /path/to/client/examples
 ```
 
-The sync creates or overwrites only the six numbered workflow scripts and four
+The sync creates or overwrites only the seven numbered workflow scripts and four
 Python helpers. It does not change client YAML, formulas, specifications, data, or
 other files. Add `--dry-run` to preview the result without writing files.
 
@@ -417,6 +417,11 @@ The `examples/` folder contains parallel three-step GLM and GBM workflows that:
 1. Train and score a model outside the Lucidum application.
 2. Create interactive, static-data Actual-versus-Expected or SHAP HTML reports.
 3. Create model summaries and, for GLM, tabulations and an XLSX workbook.
+
+An optional `04_external_double_lift_demo.py` workflow compares any two exact
+GLM/GBM builds named by `config_double_lift.yaml`. It writes one interactive
+Double Lift HTML file per selected SAMPLE population and shows that population
+prominently in the report header.
 
 The saved results can remain independent of Lucidum or be copied into the matching
 dataset workspace for review in the application without retraining.
@@ -427,7 +432,7 @@ for the complete workflows and YAML reference.
 ## Documentation
 
 - [User Guide](https://github.com/SpeckledJim2/py_lucidum/blob/main/docs/user-guide.md) — detailed installation, launch, tool, modelling, and persistence behaviour.
-- [External models and reports](https://github.com/SpeckledJim2/py_lucidum/blob/main/docs/external-model-builds-and-reports.md) — three-step GLM and GBM workflows.
+- [External models and reports](https://github.com/SpeckledJim2/py_lucidum/blob/main/docs/external-model-builds-and-reports.md) — three-step GLM and GBM workflows plus optional cross-model Double Lift reports.
 - [Model operations monitor](https://github.com/SpeckledJim2/py_lucidum/blob/main/docs/telemetry-monitor.md) — timing, CPU, memory, and diagnostic guidance.
 - [Development notes](https://github.com/SpeckledJim2/py_lucidum/blob/main/DEVELOPMENT.md) — architecture, behaviour contracts, testing, and releases.
 

@@ -1,0 +1,29 @@
+baseline:
+  model_type: glm
+  build_config: config_glm.yaml
+
+challenger:
+  model_type: gbm
+  build_config: config_gbm.yaml
+
+kpi_spec: ../specs/kpi_spec.csv
+
+chart:
+  banding: auto
+  quantiles: 0
+  missings: hide
+  labels: none
+  sigma: 2
+
+reports:
+  - name: training_test_double_lift
+    title: External GLM versus GBM - Training and Test Double Lift
+    sample_values: [training, test]
+
+  - name: validation_double_lift
+    title: External GLM versus GBM - Validation Double Lift
+    sample_values: [validation]
+
+output:
+  directory: ../local/external_reports
+  chart_height: 600

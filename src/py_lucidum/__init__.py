@@ -5,6 +5,7 @@ from .cli import run_app, serve, serve_line_bar
 from .demo import demo_dataset_path
 from .glm_api import build_glm_tabulations, export_glm_tabulations, score_glm_tabulations
 from .reporting import (
+    double_lift_chart,
     gbm_evaluation_chart,
     line_bar_chart,
     report_filename,
@@ -19,6 +20,7 @@ __all__ = [
     "__version__",
     "build_glm_tabulations",
     "demo_dataset_path",
+    "double_lift_chart",
     "extract_lightgbm_interaction_group",
     "export_glm_tabulations",
     "gbm_evaluation_chart",

@@ -30,6 +30,7 @@ class ModelPredictionSource:
     active: bool = False
     binding: ModelSourceBinding | None = None
     bindings: dict[str, ModelSourceBinding] = field(default_factory=dict)
+    output_column: str | None = None
 
 
 @dataclass(frozen=True)

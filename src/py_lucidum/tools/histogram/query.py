@@ -57,6 +57,11 @@ def histogram(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
         columns = context["columns"]
         actual = normalise_actual(request, columns)
         denominator = normalise_denominator(request.get("denominator", request.get("weight")), columns)
+        field_columns = context.get("field_columns") or []
+        if field_columns and field_columns[0] != actual["numerator"]:
+            actual = {**actual, "query_column": str(field_columns[0])}
+        if denominator.get("column") and len(field_columns) > 1 and field_columns[1] != denominator["column"]:
+            denominator = {**denominator, "query_column": str(field_columns[1])}
         distribution = normalise_distribution(request.get("distribution"))
         y_axis = normalise_y_axis(request.get("yAxis"))
         log_scale = normalise_log_scale(request.get("logScale"))
@@ -413,11 +418,12 @@ def integer_binning_metadata(actual: dict[str, str], plan: dict[str, int]) -> di
 
 
 def actual_sql(actual: dict[str, str]) -> str:
-    return f"TRY_CAST({quote_ident(actual['numerator'])} AS DOUBLE)"
+    column = actual.get("query_column") or actual["numerator"]
+    return f"TRY_CAST({quote_ident(column)} AS DOUBLE)"
 
 
 def weight_sql(denominator: dict[str, str | None]) -> str:
-    column = denominator.get("column")
+    column = denominator.get("query_column") or denominator.get("column")
     if column:
         return f"TRY_CAST({quote_ident(str(column))} AS DOUBLE)"
     return "1.0"

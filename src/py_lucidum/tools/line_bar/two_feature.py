@@ -127,7 +127,10 @@ def table(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
 def base_payload(result: dict[str, Any]) -> dict[str, Any]:
     return {
         "source": result["source_id"],
-        "groupings": result["groupings"],
+        "groupings": [
+            {key: value for key, value in grouping.items() if key != "query_column"}
+            for grouping in result["groupings"]
+        ],
         "plot_type": result["plot_type"],
         "tail_percent": result["tail_percent"],
         "row_count": result["row_count"],
@@ -175,6 +178,7 @@ def build_result(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
             raw,
             columns,
             source_id=context["field_sources"]["groupings"][index],
+            query_column=context["field_columns"]["groupings"][index],
             index=index,
             legacy_tail_percent=legacy_tail_percent,
         )
@@ -187,13 +191,21 @@ def build_result(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
     effective_filter_sql = line_bar_query.line_bar_analysis_filter(
         filter_sql,
         [
-            str(grouping["feature"])
+            str(grouping.get("query_column") or grouping["feature"])
             for grouping in groupings
             if grouping["missings"] == "hide"
         ],
     )
-    responses = line_bar_query.normalise_responses(request.get("responses"), columns)
+    responses = line_bar_query.normalise_responses(
+        request.get("responses"),
+        columns,
+        query_columns=context["field_columns"]["responses"],
+    )
     denominator = normalise_denominator(request.get("denominator", request.get("weight")), columns)
+    denominator = line_bar_query.denominator_with_query_column(
+        denominator,
+        context["field_columns"].get("denominator"),
+    )
     denominator_source = normalise_denominator_source(
         dataset,
         request.get("denominatorSource"),
@@ -252,7 +264,7 @@ def two_feature_context(
     source_id = dataset.normalise_source(request.get("source"))
     dataset_columns = dataset.column_map()
     columns = dict(dataset_columns)
-    prediction_sources: dict[str, ModelPredictionSource] = {}
+    prediction_sources: dict[tuple[str, str], ModelPredictionSource] = {}
     grouping_sources: list[str] = []
     requested_fields: list[tuple[str, str]] = []
     for raw in raw_groupings:
@@ -295,16 +307,24 @@ def two_feature_context(
         return {
             **complete_context,
             "field_sources": field_sources,
+            "field_columns": two_feature_field_columns(
+                [column_name for column_name, _field_source in requested_fields],
+                len(response_sources),
+                has_denominator_column(raw_denominator),
+            ),
         }
 
+    resolved_columns: list[str] = []
     for column_name, field_source in requested_fields:
-        line_bar_query.add_field_column(
-            dataset,
-            columns,
-            dataset_columns,
-            prediction_sources,
-            column_name,
-            field_source,
+        resolved_columns.append(
+            line_bar_query.add_field_column(
+                dataset,
+                columns,
+                dataset_columns,
+                prediction_sources,
+                column_name,
+                field_source,
+            )
         )
 
     relation = (
@@ -322,6 +342,25 @@ def two_feature_context(
         "columns": columns,
         "row_count": line_bar_query.relation_row_count(dataset, relation),
         "field_sources": field_sources,
+        "field_columns": two_feature_field_columns(
+            resolved_columns,
+            len(response_sources),
+            has_denominator_column(raw_denominator),
+        ),
+    }
+
+
+def two_feature_field_columns(
+    resolved_columns: list[str],
+    response_count: int,
+    has_denominator: bool,
+) -> dict[str, Any]:
+    response_start = 2
+    response_end = response_start + response_count
+    return {
+        "groupings": resolved_columns[:2],
+        "responses": resolved_columns[response_start:response_end],
+        "denominator": resolved_columns[response_end] if has_denominator and len(resolved_columns) > response_end else "",
     }
 
 
@@ -330,6 +369,7 @@ def normalise_grouping(
     columns: dict[str, ColumnInfo],
     *,
     source_id: str,
+    query_column: str,
     index: int,
     legacy_tail_percent: float,
 ) -> dict[str, Any]:
@@ -361,6 +401,7 @@ def normalise_grouping(
     return {
         "feature": feature,
         "source": source_id,
+        **({"query_column": query_column} if query_column and query_column != feature else {}),
         "kind": column.kind,
         "group_kind": group_kind,
         "band_width": json_number(band_width) or 0,
@@ -398,27 +439,28 @@ def build_grouped_sql(
 
     required: list[str] = []
     for column in [
-        *(grouping["feature"] for grouping in groupings),
-        *(response["numerator"] for response in responses),
-        denominator.get("column"),
+        *(grouping.get("query_column") or grouping["feature"] for grouping in groupings),
+        *(line_bar_query.response_query_column(response) for response in responses),
+        line_bar_query.denominator_query_column(denominator),
     ]:
         if column and column not in required:
             required.append(str(column))
     source_columns = "".join(f",\n    {quote_ident(column)}" for column in required)
     where_sql = f"\n  WHERE ({filter_sql})" if filter_sql else ""
     response_columns = "".join(
-        f",\n    TRY_CAST({quote_ident(response['numerator'])} AS DOUBLE) AS __resp{index}_value"
+        f",\n    TRY_CAST({quote_ident(line_bar_query.response_query_column(response))} AS DOUBLE) AS __resp{index}_value"
         for index, response in enumerate(responses)
     )
+    denominator_column = line_bar_query.denominator_query_column(denominator)
     denominator_sql = (
-        f"TRY_CAST({quote_ident(str(denominator['column']))} AS DOUBLE)"
-        if denominator.get("column")
+        f"TRY_CAST({quote_ident(denominator_column)} AS DOUBLE)"
+        if denominator_column
         else "1"
     )
 
     base_group_columns = []
     for index, grouping in enumerate(groupings):
-        column = quote_ident(grouping["feature"])
+        column = quote_ident(str(grouping.get("query_column") or grouping["feature"]))
         if is_numeric_kind(grouping["kind"]):
             base_group_columns.append(f"TRY_CAST({column} AS DOUBLE) AS __group{index}_raw")
         else:

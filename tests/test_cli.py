@@ -525,7 +525,7 @@ class CliRuntimeTests(unittest.TestCase):
                 result = main()
 
             self.assertEqual(result, 0)
-            self.assertIn("10 created", stdout.getvalue())
+            self.assertIn("11 created", stdout.getvalue())
             self.assertEqual(
                 sorted(path.name for path in destination.iterdir()),
                 [
@@ -535,6 +535,7 @@ class CliRuntimeTests(unittest.TestCase):
                     "02_external_glm_report_demo.py",
                     "03_external_gbm_summary_report_demo.py",
                     "03_external_glm_summary_report_demo.py",
+                    "04_external_double_lift_demo.py",
                     "external_model_helpers.py",
                     "external_model_results.py",
                     "external_report_helpers.py",
@@ -576,7 +577,7 @@ class CliRuntimeTests(unittest.TestCase):
             self.assertFalse(destination.exists())
 
         self.assertEqual(result, 0)
-        self.assertIn("10 to create", stdout.getvalue())
+        self.assertIn("11 to create", stdout.getvalue())
 
     def test_main_sync_examples_reports_invalid_destination(self) -> None:
         stderr = io.StringIO()

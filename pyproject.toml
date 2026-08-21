@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "py-lucidum"
-version = "0.5.22"
+version = "0.5.23"
 description = "Interactive data exploration workbench for local CSV files, Parquet files, and same-schema Parquet folders."
 readme = "README.md"
 requires-python = ">=3.13"
@@ -60,6 +60,7 @@ packages = ["src/py_lucidum"]
 "examples/02_external_glm_report_demo.py" = "py_lucidum/example_workflows/02_external_glm_report_demo.py"
 "examples/03_external_gbm_summary_report_demo.py" = "py_lucidum/example_workflows/03_external_gbm_summary_report_demo.py"
 "examples/03_external_glm_summary_report_demo.py" = "py_lucidum/example_workflows/03_external_glm_summary_report_demo.py"
+"examples/04_external_double_lift_demo.py" = "py_lucidum/example_workflows/04_external_double_lift_demo.py"
 "examples/external_model_helpers.py" = "py_lucidum/example_workflows/external_model_helpers.py"
 "examples/external_model_results.py" = "py_lucidum/example_workflows/external_model_results.py"
 "examples/external_report_helpers.py" = "py_lucidum/example_workflows/external_report_helpers.py"

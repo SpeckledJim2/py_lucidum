@@ -212,6 +212,12 @@ const glmNames = glm.series.map((series) => series.name);
 if (!glmNames.includes("Actual") || !glmNames.includes("GBM prediction") || !glmNames.includes("Weight") || !glmNames.includes("GLM")) throw new Error(glmNames.join("|"));
 if (glm.yAxis.length !== 2) throw new Error("A/E needs a response and weight axis");
 
+const comparison = lineBarChartOption({{
+  ...base,
+  transform: {{ mode: "none" }},
+}}, {{ content: "actual_expected", xAxisTitle: "Challenger / Baseline" }}).option;
+if (comparison.xAxis.name !== "Challenger / Baseline") throw new Error("comparison axis title failed");
+
 const currency = lineBarChartOption({{
   ...base,
   transform: {{ mode: "none" }},
@@ -331,6 +337,16 @@ if (values(result) !== "glm_prediction|gbm_prediction") throw new Error("compati
 if (sources(result) !== "glm:new-glm:predictions|gbm:new-gbm:predictions") throw new Error("compatible prediction pair was not rebound");
 if (result.partialDependence !== "both" || result.expectedChanged || result.partialDependenceChanged) throw new Error("compatible comparison state changed");
 
+const explicitPair = [
+  {{ ...glm("glm_prediction", "fixed-glm-a"), binding: "explicit" }},
+  {{ ...glm("glm_prediction", "fixed-glm-b"), binding: "explicit" }},
+];
+result = transition({{
+  expectedSelections: explicitPair, partialDependence: "none", activatedModelKind: "glm", metricsChanged: true,
+}});
+if (sources(result) !== "glm:fixed-glm-a:predictions|glm:fixed-glm-b:predictions") throw new Error("explicit comparison was rebound");
+if (result.expectedChanged) throw new Error("explicit comparison reported an Expected change");
+
 result = transition({{
   expectedSelections: [glm(), gbm()], partialDependence: "both", activatedModelKind: "gbm", metricsChanged: true,
 }});
@@ -372,6 +388,92 @@ result = transition({{
   activeModelAvailable: {{ glm: true, gbm: false }},
 }});
 if (values(result) !== "glm_prediction" || result.partialDependence !== "glm") throw new Error("final model deletion fallback failed");
+"""
+        self.run_node_script(script)
+
+    def test_line_bar_model_comparison_candidates_filter_defaults_and_labels(self) -> None:
+        module = Path("src/py_lucidum/static/app/line-bar-tool.js").resolve().as_uri()
+        script = f"""
+import {{
+  lineBarDefaultModelComparison,
+  lineBarModelComparisonCandidates,
+  lineBarOtherColumnToken,
+}} from "{module}";
+const column = (name) => ({{ name, kind: "numeric" }});
+const sources = [
+  {{
+    id: "glm:old:predictions", kind: "glm_predictions", model_id: "old", model_label: "Pricing",
+    active: false, created_at: "2026-01-01", response_column: "Actual", denominator_column: "Weight",
+    columns: [column("glm_prediction"), column("glm_prediction_rate")],
+  }},
+  {{
+    id: "glm:new:predictions", kind: "glm_predictions", model_id: "new", model_label: "Pricing",
+    active: true, created_at: "2026-02-01", response_column: "Actual", denominator_column: "Weight",
+    columns: [column("glm_prediction")],
+  }},
+  {{
+    id: "gbm:current:predictions", kind: "gbm_predictions", model_id: "current", model_label: "Challenger",
+    active: true, created_at: "2026-03-01", response_column: "Actual", offset_column: "Weight",
+    columns: [column("gbm_prediction")],
+  }},
+  {{
+    id: "gbm:wrong-kpi:predictions", kind: "gbm_predictions", model_id: "wrong-kpi", model_label: "Wrong",
+    active: false, created_at: "2026-04-01", response_column: "Other", offset_column: "Weight",
+    columns: [column("gbm_prediction")],
+  }},
+  {{
+    id: "gbm:no-primary:predictions", kind: "gbm_predictions", model_id: "no-primary", model_label: "Missing",
+    active: false, created_at: "2026-05-01", response_column: "Actual", offset_column: "Weight",
+    columns: [column("gbm_prediction_rate")],
+  }},
+];
+const kpi = {{ numerator: "Actual", numeratorSource: "dataset", denominator: "Weight", denominatorSource: "dataset" }};
+let candidates = lineBarModelComparisonCandidates(sources, kpi);
+if (candidates.map((candidate) => candidate.sourceId).join("|") !== "glm:old:predictions|glm:new:predictions|gbm:current:predictions") {{
+  throw new Error(`candidate filtering failed: ${{JSON.stringify(candidates)}}`);
+}}
+if (new Set(candidates.map((candidate) => candidate.label)).size !== candidates.length) throw new Error("duplicate picker labels were not disambiguated");
+if (!candidates[0].label.includes("(old)") || !candidates[1].label.includes("(new)")) throw new Error("duplicate model ids were not shown");
+let pair = lineBarDefaultModelComparison(candidates);
+if (pair.baseline.sourceId !== "glm:new:predictions" || pair.challenger.sourceId !== "gbm:current:predictions") {{
+  throw new Error("active GLM/GBM order was not preserved");
+}}
+pair = lineBarDefaultModelComparison(candidates, {{
+  baselineSourceId: "glm:old:predictions", challengerSourceId: "glm:new:predictions",
+}});
+if (pair.baseline.sourceId !== "glm:old:predictions" || pair.challenger.sourceId !== "glm:new:predictions") {{
+  throw new Error("existing exact pair was not preserved");
+}}
+candidates = lineBarModelComparisonCandidates(sources, kpi, {{ includeSourceIds: ["gbm:wrong-kpi:predictions"] }});
+const mismatch = candidates.find((candidate) => candidate.sourceId === "gbm:wrong-kpi:predictions");
+if (!mismatch || mismatch.compatible !== false) throw new Error("configured KPI mismatch was not retained and marked");
+const otherColumns = [column("Expected Value"), {{ name: "Segment", kind: "categorical" }}, column("Actual")];
+candidates = lineBarModelComparisonCandidates([sources[2]], kpi, {{ otherColumns }});
+const otherCandidates = candidates.filter((candidate) => candidate.family === "other");
+if (otherCandidates.map((candidate) => candidate.label).join("|") !== "Actual|Expected Value") {{
+  throw new Error(`OTHER numeric columns were not sorted and filtered: ${{JSON.stringify(otherCandidates)}}`);
+}}
+if (otherCandidates[1].comparisonId !== `other:${{lineBarOtherColumnToken("Expected Value")}}`) {{
+  throw new Error("OTHER column comparison id was not encoded");
+}}
+pair = lineBarDefaultModelComparison(candidates);
+if (pair.baseline.predictionColumn !== "Actual" || pair.challenger.sourceId !== "gbm:current:predictions") {{
+  throw new Error("single-model OTHER baseline default failed");
+}}
+pair = lineBarDefaultModelComparison(candidates, {{
+  baselineSourceId: "dataset", baselineColumn: "Expected Value",
+  challengerSourceId: "gbm:current:predictions",
+}});
+if (pair.baseline.predictionColumn !== "Expected Value" || pair.challenger.family !== "gbm") {{
+  throw new Error("configured OTHER baseline was not preserved");
+}}
+pair = lineBarDefaultModelComparison(candidates, {{
+  baselineSourceId: "gbm:current:predictions",
+  challengerSourceId: "dataset", challengerColumn: "Expected Value",
+}});
+if (pair.baseline.family !== "gbm" || pair.challenger.predictionColumn !== "Expected Value") {{
+  throw new Error("configured OTHER challenger was not preserved");
+}}
 """
         self.run_node_script(script)
 

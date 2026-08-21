@@ -5,6 +5,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from py_lucidum.core import (
+    add_metric_field,
     ColumnInfo,
     complete_source_relation_context,
     Dataset,
@@ -446,12 +447,13 @@ def banding_suggestion(dataset: Dataset, request: dict[str, Any]) -> dict[str, A
             context_request = {**request, "x": feature}
             context = chart_context(dataset, context_request)
             x_source = str((context.get("field_sources") or {}).get("x") or context["source_id"])
+            query_feature = str((context.get("field_columns") or {}).get("x") or feature)
             filter_sql = dataset.normalise_filter_for_relation(request.get("filter"), context["relation"])
             suggestion = relation_band_suggestion_for_column(
                 dataset,
                 context["relation"],
                 context["columns"],
-                feature,
+                query_feature,
                 filter_sql,
             )
             return {
@@ -519,12 +521,19 @@ def build_grouped_result(
     relation = context["relation"]
     columns = context["columns"]
     x_col = str(request.get("x") or "")
-    if x_col not in columns:
+    field_columns = context.get("field_columns") or {}
+    x_query_column = str(field_columns.get("x") or x_col)
+    if x_col not in columns or x_query_column not in columns:
         raise ValueError("Choose a valid x-axis feature")
 
     filter_sql = dataset.normalise_filter_for_relation(request.get("filter"), relation)
-    responses = normalise_responses(request.get("responses"), columns)
+    responses = normalise_responses(
+        request.get("responses"),
+        columns,
+        query_columns=field_columns.get("responses"),
+    )
     denominator = normalise_denominator(request.get("denominator", request.get("weight")), columns)
+    denominator = denominator_with_query_column(denominator, field_columns.get("denominator"))
     denominator_source = normalise_denominator_source(
         dataset,
         request.get("denominatorSource"),
@@ -534,7 +543,7 @@ def build_grouped_result(
     missings = normalise_missings(request.get("missings"))
     effective_filter_sql = line_bar_analysis_filter(
         filter_sql,
-        [x_col] if missings == "hide" else [],
+        [x_query_column] if missings == "hide" else [],
     )
     date_bucket = normalise_date_bucket(request.get("dateBucket")) if x_info.kind in {"date", "datetime"} else "none"
     empty_periods = normalise_empty_periods(request.get("emptyPeriods"))
@@ -544,7 +553,7 @@ def build_grouped_result(
         else None
     )
     x_sql = build_x_sql(
-        x_col=x_col,
+        x_col=x_query_column,
         kind=x_info.kind,
         band_width=request.get("bandWidth"),
         date_bucket=date_bucket,
@@ -575,7 +584,7 @@ def build_grouped_result(
         )
     grouped_sql = build_grouped_pipeline_sql(
         relation=relation,
-        x_col=x_col,
+        x_col=x_query_column,
         x_sql=x_sql,
         responses=responses,
         denominator=denominator,
@@ -854,7 +863,7 @@ def build_grouped_pipeline_sql(
     source_select_sql = ",\n    " + source_selects if source_selects else ""
     where_sql = f"\n  WHERE ({filter_sql})" if filter_sql else ""
     response_selects = ",\n    ".join(
-        f"TRY_CAST({quote_ident(response['numerator'])} AS DOUBLE) AS __resp{index}_value"
+        f"TRY_CAST({quote_ident(response_query_column(response))} AS DOUBLE) AS __resp{index}_value"
         for index, response in enumerate(responses)
     )
     denominator_select = denominator_value_select_sql(denominator)
@@ -963,14 +972,18 @@ def required_grouped_columns(
     denominator: dict[str, str | None],
 ) -> list[str]:
     required: list[str] = []
-    for column in [x_col, *(response["numerator"] for response in responses), denominator.get("column")]:
+    for column in [
+        x_col,
+        *(response_query_column(response) for response in responses),
+        denominator_query_column(denominator),
+    ]:
         if column and column not in required:
             required.append(str(column))
     return required
 
 
 def denominator_value_select_sql(denominator: dict[str, str | None]) -> str:
-    column = denominator.get("column")
+    column = denominator_query_column(denominator)
     if column:
         return f"TRY_CAST({quote_ident(str(column))} AS DOUBLE)"
     return "1"
@@ -1699,6 +1712,7 @@ def chart_context(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
             "columns": dataset.column_map_for_source(source_id),
             "row_count": dataset.row_count_for_source(source_id),
             "field_sources": None,
+            "field_columns": None,
         }
     return mixed_chart_context(dataset, request, source_id)
 
@@ -1718,7 +1732,7 @@ def uses_field_sources(request: dict[str, Any]) -> bool:
 def mixed_chart_context(dataset: Dataset, request: dict[str, Any], source_id: str) -> dict[str, Any]:
     dataset_columns = dataset.column_map()
     columns = dict(dataset_columns)
-    prediction_sources: dict[str, ModelPredictionSource] = {}
+    prediction_sources: dict[tuple[str, str], ModelPredictionSource] = {}
     field_sources: dict[str, Any] = {"x": "dataset", "responses": [], "denominator": "dataset"}
     requested_fields: list[tuple[str, str]] = []
     x_col = str(request.get("x") or "")
@@ -1752,16 +1766,24 @@ def mixed_chart_context(dataset: Dataset, request: dict[str, Any], source_id: st
         return {
             **complete_context,
             "field_sources": field_sources,
+            "field_columns": requested_field_columns(
+                [column_name for column_name, _field_source in requested_fields],
+                len(field_sources["responses"]),
+                has_denominator_column(raw_denominator),
+            ),
         }
 
+    resolved_columns: list[str] = []
     for column_name, field_source in requested_fields:
-        add_field_column(
-            dataset,
-            columns,
-            dataset_columns,
-            prediction_sources,
-            column_name,
-            field_source,
+        resolved_columns.append(
+            add_field_column(
+                dataset,
+                columns,
+                dataset_columns,
+                prediction_sources,
+                column_name,
+                field_source,
+            )
         )
     relation = mixed_relation_sql(
         dataset,
@@ -1774,6 +1796,24 @@ def mixed_chart_context(dataset: Dataset, request: dict[str, Any], source_id: st
         "columns": columns,
         "row_count": relation_row_count(dataset, relation),
         "field_sources": field_sources,
+        "field_columns": requested_field_columns(
+            resolved_columns,
+            len(field_sources["responses"]),
+            has_denominator_column(raw_denominator),
+        ),
+    }
+
+
+def requested_field_columns(
+    resolved_columns: list[str],
+    response_count: int,
+    has_denominator: bool,
+) -> dict[str, Any]:
+    response_end = 1 + response_count
+    return {
+        "x": resolved_columns[0] if resolved_columns else "",
+        "responses": resolved_columns[1:response_end],
+        "denominator": resolved_columns[response_end] if has_denominator and len(resolved_columns) > response_end else "",
     }
 
 
@@ -1788,45 +1828,24 @@ def add_field_column(
     dataset: Dataset,
     columns: dict[str, ColumnInfo],
     dataset_columns: dict[str, ColumnInfo],
-    prediction_sources: dict[str, ModelPredictionSource],
+    prediction_sources: dict[tuple[str, str], ModelPredictionSource],
     column_name: str,
     source_id: str,
-) -> None:
-    if not column_name:
-        return
-    prediction_source = dataset.model_prediction_source(source_id)
-    if prediction_source is not None:
-        source_columns = dataset.column_map_for_source(source_id)
-        source_column = source_columns.get(column_name)
-        model_prediction_columns = {
-            "gbm_prediction",
-            "gbm_prediction_rate",
-            "gbm_tabulated_prediction",
-            "glm_prediction",
-            "glm_prediction_rate",
-            "glm_tabulated_prediction",
-        }
-        if column_name in model_prediction_columns and source_column is not None and is_numeric_kind(source_column.kind):
-            if not prediction_source.relation_sql:
-                raise ValueError("Choose a valid model prediction source")
-            prediction_sources[f"{prediction_source.source_id}:{column_name}"] = ModelPredictionSource(
-                source_id=prediction_source.source_id,
-                column=column_name,
-                relation_sql=prediction_source.relation_sql,
-                active=prediction_source.active,
-                binding=prediction_source.bindings.get(column_name),
-                bindings=prediction_source.bindings,
-            )
-            columns[column_name] = ColumnInfo(name=column_name, duckdb_type="DOUBLE", kind="numeric")
-            return
-        if column_name == prediction_source.column:
-            if not prediction_source.column or not prediction_source.relation_sql:
-                raise ValueError("Choose a valid model prediction source")
-            prediction_sources[prediction_source.source_id] = prediction_source
-            columns[column_name] = ColumnInfo(name=column_name, duckdb_type="DOUBLE", kind="numeric")
-            return
-    if column_name in dataset_columns:
-        columns[column_name] = dataset_columns[column_name]
+) -> str:
+    try:
+        return add_metric_field(
+            dataset,
+            columns,
+            dataset_columns,
+            prediction_sources,
+            column_name,
+            source_id,
+        )
+    except ValueError:
+        if column_name in dataset_columns:
+            columns[column_name] = dataset_columns[column_name]
+            return column_name
+        raise
 
 
 def mixed_relation_sql(
@@ -1869,10 +1888,16 @@ def positional_mixed_relation_sql(dataset: Dataset, prediction_sources: list[Mod
     where_sql = f"\n  WHERE {base_where_sql}" if base_where_sql else ""
     joins: list[str] = []
     selects = [f"base.{quote_ident(name)}" for name in dataset_columns]
+    public_columns: set[str] = set()
     for index, source in enumerate(prediction_sources):
         alias = f"prediction_{index}"
         joins.append(f"POSITIONAL JOIN {source.binding.relation_sql} {alias}")
-        selects.append(f"{alias}.{quote_ident(source.column)} AS {quote_ident(source.column)}")
+        output_column = source.output_column or source.column
+        if source.column not in public_columns:
+            selects.append(f"{alias}.{quote_ident(source.column)} AS {quote_ident(source.column)}")
+            public_columns.add(source.column)
+        if output_column != source.column:
+            selects.append(f"{alias}.{quote_ident(source.column)} AS {quote_ident(output_column)}")
     select_sql = ",\n  ".join(selects) if selects else "*"
     join_sql = "\n".join(joins)
     return f"""(
@@ -1902,6 +1927,7 @@ def keyed_mixed_relation_sql(
     source_column_suffix = f",\n    {source_column_sql}" if source_column_sql else ""
     joins: list[str] = []
     selects = [f"base.{quote_ident(name)}" for name in dataset_columns]
+    public_columns: set[str] = set()
     scope_sql = ""
     if prediction_sources and not preserve_dataset_rows:
         scope_parts = [
@@ -1913,7 +1939,12 @@ def keyed_mixed_relation_sql(
     for index, source in enumerate(prediction_sources):
         alias = f"prediction_{index}"
         joins.append(f"LEFT JOIN {source.relation_sql} {alias} USING (__lucidum_row_id)")
-        selects.append(f"{alias}.{quote_ident(source.column)} AS {quote_ident(source.column)}")
+        output_column = source.output_column or source.column
+        if source.column not in public_columns:
+            selects.append(f"{alias}.{quote_ident(source.column)} AS {quote_ident(source.column)}")
+            public_columns.add(source.column)
+        if output_column != source.column:
+            selects.append(f"{alias}.{quote_ident(source.column)} AS {quote_ident(output_column)}")
     select_sql = ",\n  ".join(selects) if selects else "*"
     join_sql = "\n".join(joins)
     return f"""(
@@ -1972,22 +2003,60 @@ def relation_response_summary(
     ]
 
 
-def normalise_responses(raw: Any, columns: dict[str, ColumnInfo]) -> list[dict[str, str]]:
+def normalise_responses(
+    raw: Any,
+    columns: dict[str, ColumnInfo],
+    *,
+    query_columns: Any = None,
+) -> list[dict[str, str]]:
     responses: list[dict[str, str]] = []
     if not isinstance(raw, list):
         return responses
+    resolved_query_columns = query_columns if isinstance(query_columns, list) else []
+    field_index = 0
     for item in raw:
         if not isinstance(item, dict):
             continue
+        query_column = str(resolved_query_columns[field_index] or "") if field_index < len(resolved_query_columns) else ""
+        field_index += 1
         numerator = item.get("numerator")
         if not numerator or numerator not in columns:
             continue
         if not is_numeric_kind(columns[str(numerator)].kind):
             continue
+        if query_column and query_column not in columns:
+            continue
         label = item.get("label") or str(numerator)
         source = str(item.get("source") or "").strip()
-        responses.append({"label": str(label), "numerator": str(numerator), **({"source": source} if source else {})})
+        responses.append(
+            {
+                "label": str(label),
+                "numerator": str(numerator),
+                **({"source": source} if source else {}),
+                **({"query_column": query_column} if query_column and query_column != str(numerator) else {}),
+            }
+        )
     return responses[:3]
+
+
+def response_query_column(response: dict[str, str]) -> str:
+    return str(response.get("query_column") or response["numerator"])
+
+
+def denominator_query_column(denominator: dict[str, str | None]) -> str | None:
+    column = denominator.get("query_column") or denominator.get("column")
+    return str(column) if column else None
+
+
+def denominator_with_query_column(
+    denominator: dict[str, str | None],
+    query_column: Any,
+) -> dict[str, str | None]:
+    public_column = denominator.get("column")
+    resolved = str(query_column or "").strip()
+    if not public_column or not resolved or resolved == public_column:
+        return denominator
+    return {**denominator, "query_column": resolved}
 
 
 def use_quantiles(value: Any) -> bool:
@@ -2438,6 +2507,13 @@ def build_partial_dependence_overlay(
     mode = partial_dependence_mode(request.get("partialDependence"))
     if mode == "none":
         return None
+    overlay_responses = [
+        {key: value for key, value in response.items() if key != "query_column"}
+        for response in responses
+    ]
+    overlay_denominator = {
+        key: value for key, value in denominator.items() if key != "query_column"
+    }
     overlays: dict[str, dict[str, Any]] = {}
     if mode in {"shap", "both"}:
         try:
@@ -2448,8 +2524,8 @@ def build_partial_dependence_overlay(
                 x_col=x_col,
                 x_sql=x_sql,
                 x_group_kind=x_group_kind,
-                responses=responses,
-                denominator=denominator,
+                responses=overlay_responses,
+                denominator=overlay_denominator,
             )
         except Exception as exc:
             overlays["shap"] = empty_shap_partial_dependence_warning(f"SHAP overlay failed: {exc}")
@@ -2464,7 +2540,7 @@ def build_partial_dependence_overlay(
                 x_col=x_col,
                 x_sql=x_sql,
                 x_group_kind=x_group_kind,
-                denominator=denominator,
+                denominator=overlay_denominator,
             )
         except Exception as exc:
             from py_lucidum.tools.glm.overlay import empty_glm_partial_dependence_warning
@@ -2565,7 +2641,11 @@ def build_shap_partial_dependence_overlay(
     if "gbm_prediction" not in shap_source_columns:
         return empty_shap_partial_dependence_warning("The active GBM SHAP source does not include fitted predictions.")
 
-    overlay_responses = [response for response in responses if response.get("numerator") in shap_source_columns]
+    overlay_responses = [
+        {key: value for key, value in response.items() if key != "query_column"}
+        for response in responses
+        if response.get("numerator") in shap_source_columns
+    ]
     overlay_denominator = normalise_overlay_denominator(denominator, shap_source_columns)
     shap_relation = dataset.relation_sql_for_source(shap_source_id)
     filter_sql = dataset.normalise_filter_for_relation(request.get("filter"), shap_relation)
@@ -2708,10 +2788,11 @@ def normalise_overlay_denominator(
     columns: dict[str, ColumnInfo],
 ) -> dict[str, str | None]:
     column = denominator.get("column")
+    public_denominator = {key: value for key, value in denominator.items() if key != "query_column"}
     if not column:
-        return denominator
+        return public_denominator
     if column in columns:
-        return denominator
+        return public_denominator
     return {"column": None, "label": "Average row value", "bar_label": "Row count"}
 
 

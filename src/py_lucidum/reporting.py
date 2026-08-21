@@ -18,6 +18,7 @@ from py_lucidum.core.chart_controls import normalise_chart_controls as _normalis
 
 REPORT_CONTENT_VALUES = {"actual_expected", "shap_only"}
 PARTIAL_DEPENDENCE_VALUES = {"none", "glm", "shap"}
+MODEL_REPORT_SOURCE_VALUES = {"glm", "gbm"}
 DEFAULT_REPORT_CHART_HEIGHT = 600
 
 
@@ -206,6 +207,200 @@ def line_bar_chart(
                 "base": base,
                 "controls": settings,
                 "partial_dependence": partial_dependence,
+            },
+        }
+    finally:
+        dataset.con.close()
+
+
+def double_lift_chart(
+    dataset_path: str | Path,
+    *,
+    actual: str,
+    baseline_model_type: str,
+    baseline_model_id: str,
+    baseline_model_folder: str | Path,
+    challenger_model_type: str,
+    challenger_model_id: str,
+    challenger_model_folder: str | Path,
+    denominator: str | None = None,
+    sample_column: str = "SAMPLE",
+    sample_values: str | Sequence[str] = "all",
+    controls: Mapping[str, Any] | None = None,
+    kpi_spec: str | Path | None = None,
+    title: str | None = None,
+) -> dict[str, Any]:
+    """Build one static double-lift chart from two exact saved model folders."""
+
+    path = Path(dataset_path).expanduser().resolve()
+    baseline_type = _choice(baseline_model_type, MODEL_REPORT_SOURCE_VALUES, "Baseline model type")
+    challenger_type = _choice(challenger_model_type, MODEL_REPORT_SOURCE_VALUES, "Challenger model type")
+    baseline_id = str(baseline_model_id or "").strip()
+    challenger_id = str(challenger_model_id or "").strip()
+    if not baseline_id:
+        raise ValueError("Choose a Baseline model ID")
+    if not challenger_id:
+        raise ValueError("Choose a Challenger model ID")
+    if (baseline_type, baseline_id) == (challenger_type, challenger_id):
+        raise ValueError("Baseline and Challenger must be different saved models")
+
+    raw_controls = dict(controls or {})
+    banding_value = raw_controls.get("banding", "auto")
+    automatic_banding = str(banding_value or "").strip().lower() == "auto"
+    if automatic_banding:
+        raw_controls["banding"] = 0
+    settings = _normalise_chart_controls(raw_controls, transform="none")
+
+    kpi_spec_path = None
+    kpi = None
+    if kpi_spec is not None and str(kpi_spec).strip():
+        kpi_spec_path = Path(kpi_spec).expanduser().resolve()
+        kpi = _matching_kpi(
+            load_kpis(kpi_spec_path),
+            actual,
+            str(denominator or "").strip(),
+            kpi_spec_path,
+        )
+
+    dataset = Dataset(path)
+    try:
+        columns = dataset.column_map()
+        _require_numeric_column(columns, actual, "Actual")
+        _require_column(columns, sample_column, "SAMPLE")
+        if denominator:
+            _require_numeric_column(columns, denominator, "Denominator")
+
+        baseline = _register_exact_report_model(
+            dataset,
+            role="Baseline",
+            model_type=baseline_type,
+            model_id=baseline_id,
+            model_folder=baseline_model_folder,
+            expected_actual=actual,
+            expected_denominator=denominator,
+        )
+        challenger = _register_exact_report_model(
+            dataset,
+            role="Challenger",
+            model_type=challenger_type,
+            model_id=challenger_id,
+            model_folder=challenger_model_folder,
+            expected_actual=actual,
+            expected_denominator=denominator,
+        )
+
+        from py_lucidum.tools.line_bar.model_ratio import (
+            ModelPredictionRatioSourceProvider,
+            PREDICTION_RATIO_COLUMN,
+        )
+
+        ratio_provider = ModelPredictionRatioSourceProvider(
+            dataset=dataset,
+            prediction_providers=(baseline["provider"], challenger["provider"]),
+        )
+        dataset.register_data_source_provider(ratio_provider)
+        ratio_source_id = ratio_provider.prediction_ratio_source_id(
+            challenger_type,
+            challenger_id,
+            baseline_type,
+            baseline_id,
+        )
+        if not ratio_provider.has_source(ratio_source_id):
+            raise ValueError("The selected Baseline and Challenger predictions cannot be aligned")
+
+        filter_sql, resolved_samples, selected_rows = _sample_filter(
+            dataset,
+            sample_column,
+            sample_values,
+        )
+        if selected_rows <= 0:
+            raise ValueError("The selected SAMPLE values contain no rows")
+
+        baseline_label = f"{baseline_type.upper()} · {baseline['label']}"
+        challenger_label = f"{challenger_type.upper()} · {challenger['label']}"
+        request = {
+            "source": "dataset",
+            "x": PREDICTION_RATIO_COLUMN,
+            "xSource": ratio_source_id,
+            "sort": settings["sort"],
+            "lowGroup": settings["low_weights"],
+            "bandWidth": settings["quantiles"] or settings["banding"],
+            "quantileMode": "quantile" if settings["quantiles"] else "off",
+            "dateBucket": "none",
+            "emptyPeriods": "show",
+            "missings": settings["missings"],
+            "transform": "none",
+            "partialDependence": {"mode": "none"},
+            "base": "",
+            "sigma": settings["sigma"],
+            "filter": filter_sql,
+            "denominator": denominator or "__none__",
+            "denominatorSource": "dataset",
+            "responses": [
+                {"label": "Actual", "numerator": actual},
+                {
+                    "label": baseline_label,
+                    "numerator": baseline["prediction_column"],
+                    "source": baseline["source_id"],
+                },
+                {
+                    "label": challenger_label,
+                    "numerator": challenger["prediction_column"],
+                    "source": challenger["source_id"],
+                },
+            ],
+            "maxGroups": 10_000,
+        }
+
+        from py_lucidum.tools.line_bar.query import banding_suggestion, chart
+
+        if automatic_banding and not settings["quantiles"]:
+            suggested = banding_suggestion(
+                dataset,
+                {**request, "feature": PREDICTION_RATIO_COLUMN},
+            ).get("band_suggestion")
+            request["bandWidth"] = suggested or 0
+            settings["banding"] = suggested or 0
+
+        payload = chart(dataset, request)
+        if payload.get("groups_truncated") or not payload.get("rows"):
+            raise ValueError("The selected models did not produce a plottable double-lift result")
+
+        return {
+            "kind": "line_bar",
+            "title": str(title or "Double lift"),
+            "data": payload,
+            "presentation": {
+                "content": "actual_expected",
+                "labels": settings["labels"],
+                "transform": "none",
+                "sigma": settings["sigma"],
+                "theme": "light",
+                "xAxisTitle": f"{challenger_label} / {baseline_label}",
+                **(
+                    {
+                        "kpiFormat": {
+                            "decimals": int(kpi["decimals"]),
+                            "format": str(kpi["format"]),
+                        }
+                    }
+                    if kpi is not None
+                    else {}
+                ),
+            },
+            "metadata": {
+                "sample_column": sample_column,
+                "sample_values": resolved_samples,
+                "selected_rows": selected_rows,
+                "chart_rows": int(payload.get("filtered_row_count") or 0),
+                "actual": actual,
+                "denominator": denominator,
+                "baseline": _public_report_model_metadata(baseline),
+                "challenger": _public_report_model_metadata(challenger),
+                "ratio_source": ratio_source_id,
+                "ratio_direction": "Challenger / Baseline",
+                "controls": settings,
+                "kpi_spec": str(kpi_spec_path) if kpi_spec_path is not None else "",
             },
         }
     finally:
@@ -552,6 +747,100 @@ def _register_report_sources(
     return source_id
 
 
+def _register_exact_report_model(
+    dataset: Dataset,
+    *,
+    role: str,
+    model_type: str,
+    model_id: str,
+    model_folder: str | Path,
+    expected_actual: str,
+    expected_denominator: str | None,
+) -> dict[str, Any]:
+    model_root = _explicit_model_root(model_folder, model_id, role)
+    if model_type == "glm":
+        from py_lucidum.tools.glm.store import GlmModelStore, GlmSourceProvider
+
+        store = GlmModelStore(dataset.path, dataset=dataset, model_root=model_root)
+        provider = GlmSourceProvider(store)
+        source_id = store.source_id(model_id)
+        prediction_column = "glm_prediction"
+        prediction_path = store.artifact_path(model_id, "predictions")
+    else:
+        from py_lucidum.tools.gbm.store import GbmModelStore, GbmSourceProvider
+
+        store = GbmModelStore(dataset.path, dataset=dataset, model_root=model_root)
+        provider = GbmSourceProvider(store)
+        source_id = store.source_id(model_id, "predictions")
+        prediction_column = "gbm_prediction"
+        prediction_path = store.artifact_path(model_id, "predictions")
+
+    try:
+        manifest = store.manifest(model_id)
+    except (FileNotFoundError, ValueError) as exc:
+        raise ValueError(f"{role} model manifest is unavailable for {model_id!r}") from exc
+    if str(manifest.get("model_id") or "").strip() != model_id:
+        raise ValueError(f"{role} manifest does not identify model {model_id!r}")
+    manifest_tool = str(manifest.get("tool") or "").strip().lower()
+    if manifest_tool and manifest_tool != model_type:
+        raise ValueError(f"{role} manifest is not a {model_type.upper()} model")
+    manifest_actual = str(manifest.get("response_column") or "").strip()
+    if manifest_actual != str(expected_actual).strip():
+        raise ValueError(
+            f"{role} manifest response Numerator is {manifest_actual or 'missing'!r}; "
+            f"expected {str(expected_actual).strip()!r}"
+        )
+    denominator_key = "denominator_column" if model_type == "glm" else "offset_column"
+    manifest_denominator = str(manifest.get(denominator_key) or "").strip() or None
+    resolved_denominator = str(expected_denominator or "").strip() or None
+    if manifest_denominator != resolved_denominator:
+        raise ValueError(
+            f"{role} manifest Denominator is {manifest_denominator or 'None'!r}; "
+            f"expected {resolved_denominator or 'None'!r}"
+        )
+    if not prediction_path.is_file():
+        raise ValueError(f"{role} predictions are unavailable for model {model_id!r}")
+    try:
+        artifact_columns = {
+            column.name for column in dataset.parquet_artifact_metadata(prediction_path).columns
+        }
+    except (FileNotFoundError, ValueError) as exc:
+        raise ValueError(f"{role} prediction artifact cannot be read for model {model_id!r}") from exc
+    required_columns = {"__lucidum_row_id", prediction_column}
+    missing_columns = sorted(required_columns - artifact_columns)
+    if missing_columns:
+        raise ValueError(
+            f"{role} prediction artifact is missing required columns: {', '.join(missing_columns)}"
+        )
+
+    dataset.register_data_source_provider(provider)
+    source_columns = dataset.column_map_for_source(source_id)
+    _require_numeric_column(source_columns, prediction_column, f"{role} prediction")
+    return {
+        "provider": provider,
+        "model_type": model_type,
+        "model_id": model_id,
+        "label": str(manifest.get("label") or model_id),
+        "model_folder": str(Path(model_folder).expanduser().resolve()),
+        "source_id": source_id,
+        "prediction_column": prediction_column,
+    }
+
+
+def _public_report_model_metadata(model: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        key: model[key]
+        for key in (
+            "model_type",
+            "model_id",
+            "label",
+            "model_folder",
+            "source_id",
+            "prediction_column",
+        )
+    }
+
+
 def _explicit_model_root(
     model_folder: str | Path | None,
     model_id: str,
@@ -684,8 +973,27 @@ def _report_document(
     renderer_source: str,
     chart_height: int,
 ) -> str:
-    full_width_metadata = {"source parquet", "model"}
+    full_width_metadata = {
+        "source parquet",
+        "model",
+        "baseline build config",
+        "baseline model",
+        "challenger build config",
+        "challenger model",
+    }
     footer_metadata = {"importance measure"}
+    population_metadata = {
+        "sample column",
+        "sample_rows",
+        "source rows selected",
+        "rows available to chart",
+    }
+    has_population = any(
+        str(key).strip().lower() == "sample column"
+        and value is not None and value != "" and value != []
+        for key, value in report_metadata.items()
+    )
+    active_population_metadata = population_metadata if has_population else set()
     provenance_html = "".join(
         f"<div><dt>{html.escape(_metadata_label(key))}</dt><dd>{html.escape(_display_value(value))}</dd></div>"
         for key, value in report_metadata.items()
@@ -695,8 +1003,21 @@ def _report_document(
     metadata_html = "".join(
         f"<div><dt>{html.escape(_metadata_label(key))}</dt><dd>{html.escape(_display_value(value))}</dd></div>"
         for key, value in report_metadata.items()
-        if str(key).strip().lower() not in full_width_metadata | footer_metadata
+        if str(key).strip().lower()
+        not in full_width_metadata | footer_metadata | active_population_metadata
         and value is not None and value != "" and value != []
+    )
+    population_html = "".join(
+        f"<div><dt>{html.escape(_population_metadata_label(key))}</dt><dd>{html.escape(_display_value(value))}</dd></div>"
+        for key, value in report_metadata.items()
+        if str(key).strip().lower() in active_population_metadata
+        and value is not None and value != "" and value != []
+    )
+    population_section = (
+        '<section class="report-population"><p>Included population</p>'
+        f'<dl class="report-population-grid">{population_html}</dl></section>'
+        if population_html
+        else ""
     )
     footer_html = "".join(
         f"<div><dt>{html.escape(_metadata_label(key))}</dt><dd>{html.escape(_display_value(value))}</dd></div>"
@@ -746,6 +1067,9 @@ def _report_document(
     dl div {{ min-width: 0; }}
     .report-provenance {{ display: grid; gap: 10px; margin-bottom: 14px; }}
     .report-provenance div {{ width: 100%; }}
+    .report-population {{ margin: 0 0 16px; padding: 12px 14px; border: 1px solid #bfdbfe; border-radius: 8px; background: #eff6ff; }}
+    .report-population p {{ margin: 0 0 9px; color: #1d4ed8; font-size: 13px; font-weight: 700; }}
+    .report-population-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px 20px; }}
     .report-metadata-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px 24px; padding-top: 14px; border-top: 1px solid var(--line); }}
     .report-metadata-footer {{ margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }}
     dt {{ color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }}
@@ -763,6 +1087,7 @@ def _report_document(
   <main>
     <header class="report-header">
       <h1>{html.escape(title)}</h1>
+      {population_section}
       <dl class="report-provenance">{provenance_html}</dl>
       <dl class="report-metadata-grid">{metadata_html}</dl>
       {footer_section}
@@ -1466,6 +1791,12 @@ def _metadata_label(key: Any) -> str:
     return "SAMPLE_ROWS" if text.upper() == "SAMPLE_ROWS" else text.replace("_", " ").title()
 
 
+def _population_metadata_label(key: Any) -> str:
+    if str(key).strip().upper() == "SAMPLE_ROWS":
+        return "Selected SAMPLE values"
+    return _metadata_label(key)
+
+
 def _sample_label(values: Any) -> str:
     if not isinstance(values, list) or not values:
         return ""
@@ -1479,6 +1810,7 @@ def _base_label(metadata: Mapping[str, Any]) -> str:
 
 
 __all__ = [
+    "double_lift_chart",
     "gbm_evaluation_chart",
     "line_bar_chart",
     "report_filename",

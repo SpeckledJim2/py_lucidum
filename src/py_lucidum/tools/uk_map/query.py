@@ -99,6 +99,11 @@ def summary(dataset: Dataset, request: dict[str, Any], defaults: dict[str, str] 
         minimal_unit_metrics = compact_unit_points and str(request.get("compactUnitMetrics") or "").lower() == "minimal"
         response = normalise_response(request, columns)
         denominator = normalise_denominator(request.get("denominator", request.get("weight")), columns)
+        field_columns = context.get("field_columns") or []
+        if field_columns and field_columns[0] != response["numerator"]:
+            response = {**response, "query_column": str(field_columns[0])}
+        if denominator.get("column") and len(field_columns) > 1 and field_columns[1] != denominator["column"]:
+            denominator = {**denominator, "query_column": str(field_columns[1])}
         app_defaults = defaults or {}
         join_column = normalise_join_column(level, request, app_defaults, columns)
         filter_sql = dataset.normalise_filter_for_relation(request.get("filter"), relation)
@@ -258,6 +263,11 @@ def sector_smoothing_export_request(
     columns = context["columns"]
     response = normalise_response(request, columns)
     denominator = normalise_denominator(raw_denominator, columns)
+    field_columns = context.get("field_columns") or []
+    if field_columns and field_columns[0] != response["numerator"]:
+        response = {**response, "query_column": str(field_columns[0])}
+    if denominator.get("column") and len(field_columns) > 1 and field_columns[1] != denominator["column"]:
+        denominator = {**denominator, "query_column": str(field_columns[1])}
     join_column = normalise_join_column("sector", request, defaults or {}, columns)
     filter_sql = dataset.normalise_filter_for_relation(request.get("filter"), relation)
     raw_summary_sql = build_summary_sql(

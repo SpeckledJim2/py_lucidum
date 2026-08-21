@@ -196,7 +196,7 @@ export function lineBarChartOption(data, options = {}) {
     },
     xAxis: {
       type: "category",
-      name: data?.x || "",
+      name: presentation.xAxisTitle || data?.x || "",
       nameLocation: "middle",
       nameGap: xLabelPolicy.nameGap,
       nameTextStyle: { color: theme.text, fontSize: 13, fontWeight: 700 },

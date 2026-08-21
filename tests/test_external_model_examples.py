@@ -5,6 +5,7 @@ import asyncio
 import importlib.util
 import inspect
 import json
+import math
 import re
 import shutil
 import subprocess
@@ -39,6 +40,7 @@ GLM_REPORT_SCRIPT = EXAMPLES / "02_external_glm_report_demo.py"
 GBM_REPORT_SCRIPT = EXAMPLES / "02_external_gbm_report_demo.py"
 GLM_SUMMARY_SCRIPT = EXAMPLES / "03_external_glm_summary_report_demo.py"
 GBM_SUMMARY_SCRIPT = EXAMPLES / "03_external_gbm_summary_report_demo.py"
+DOUBLE_LIFT_SCRIPT = EXAMPLES / "04_external_double_lift_demo.py"
 EXAMPLE_HELPERS = EXAMPLES / "external_model_helpers.py"
 MODEL_RESULTS_WRITER = EXAMPLES / "external_model_results.py"
 LUCIDUM_INSTALLER = EXAMPLES / "lucidum_install.py"
@@ -390,6 +392,7 @@ class ExternalModelExampleTests(unittest.TestCase):
         helper_cases = (
             (load_model_helpers, GLM_SCRIPT, "config_glm.yaml"),
             (load_report_helpers, GLM_REPORT_SCRIPT, "config_glm_report.yaml"),
+            (load_report_helpers, DOUBLE_LIFT_SCRIPT, "config_double_lift.yaml"),
         )
         with TemporaryDirectory() as tmp_dir:
             explicit_config = Path(tmp_dir) / "custom.yaml"
@@ -469,6 +472,85 @@ class ExternalModelExampleTests(unittest.TestCase):
                 legacy_settings, _ = helpers.load_report_settings(report_path, "glm")
             self.assertIsNone(legacy_settings["kpi_spec_path"])
 
+    def test_double_lift_resolves_identically_named_relative_and_absolute_build_configs(self) -> None:
+        import yaml
+
+        helpers = load_report_helpers()
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            comparison_dir = root / "comparison"
+            comparison_dir.mkdir()
+            dataset_path = root / "data.csv"
+            dataset_path.write_text("Y,W,SAMPLE\n1,1,training\n", encoding="utf-8")
+            build_paths = []
+            for folder_name, model_id in (("baseline", "pricing-v12"), ("challenger", "pricing-v13")):
+                build_dir = root / folder_name
+                build_dir.mkdir()
+                build_path = build_dir / "config.yaml"
+                build_path.write_text(
+                    yaml.safe_dump(
+                        {
+                            "dataset": {
+                                "path": "../data.csv",
+                                "response_numerator": "Y",
+                                "denominator": "W",
+                                "sample_column": "SAMPLE",
+                            },
+                            "model": {"id": model_id, "label": model_id},
+                            "output": {"model_results_root": "results"},
+                        },
+                        sort_keys=False,
+                    ),
+                    encoding="utf-8",
+                )
+                build_paths.append(build_path)
+            comparison_path = comparison_dir / "config_double_lift.yaml"
+            comparison_path.write_text(
+                yaml.safe_dump(
+                    {
+                        "baseline": {
+                            "model_type": "glm",
+                            "build_config": "../baseline/config.yaml",
+                        },
+                        "challenger": {
+                            "model_type": "glm",
+                            "build_config": str(build_paths[1]),
+                        },
+                        "reports": [
+                            {
+                                "name": "validation",
+                                "title": "Validation Double Lift",
+                                "sample_values": ["validation"],
+                            }
+                        ],
+                        "output": {"directory": "reports"},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+
+            settings = helpers.load_double_lift_settings(comparison_path)
+
+            self.assertEqual(settings["baseline"]["build_config_path"], build_paths[0].resolve())
+            self.assertEqual(settings["challenger"]["build_config_path"], build_paths[1].resolve())
+            self.assertEqual(
+                settings["baseline"]["model_folder"],
+                (root / "baseline" / "results" / "glm" / "pricing-v12").resolve(),
+            )
+            self.assertEqual(
+                settings["challenger"]["model_folder"],
+                (root / "challenger" / "results" / "glm" / "pricing-v13").resolve(),
+            )
+            self.assertEqual(settings["chart"]["banding"], "auto")
+            self.assertEqual(settings["sample_column"], "SAMPLE")
+
+            challenger_build = yaml.safe_load(build_paths[1].read_text(encoding="utf-8"))
+            challenger_build["dataset"]["sample_column"] = "PARTITION"
+            build_paths[1].write_text(yaml.safe_dump(challenger_build, sort_keys=False), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "different SAMPLE column"):
+                helpers.load_double_lift_settings(comparison_path)
+
     def test_external_workflows_do_not_read_undefined_file_in_code_cells(self) -> None:
         scripts = (
             GLM_SCRIPT,
@@ -477,12 +559,14 @@ class ExternalModelExampleTests(unittest.TestCase):
             GBM_REPORT_SCRIPT,
             GLM_SUMMARY_SCRIPT,
             GBM_SUMMARY_SCRIPT,
+            DOUBLE_LIFT_SCRIPT,
         )
         report_scripts = {
             GLM_REPORT_SCRIPT,
             GBM_REPORT_SCRIPT,
             GLM_SUMMARY_SCRIPT,
             GBM_SUMMARY_SCRIPT,
+            DOUBLE_LIFT_SCRIPT,
         }
         for script in scripts:
             with self.subTest(script=script.name):
@@ -802,7 +886,13 @@ class ExternalModelExampleTests(unittest.TestCase):
         self.assertNotIn(".linear_predictor(", source)
 
     def test_report_scripts_keep_a_short_linear_teaching_flow(self) -> None:
-        for script in (GLM_REPORT_SCRIPT, GBM_REPORT_SCRIPT, GLM_SUMMARY_SCRIPT, GBM_SUMMARY_SCRIPT):
+        for script in (
+            GLM_REPORT_SCRIPT,
+            GBM_REPORT_SCRIPT,
+            GLM_SUMMARY_SCRIPT,
+            GBM_SUMMARY_SCRIPT,
+            DOUBLE_LIFT_SCRIPT,
+        ):
             source = script.read_text(encoding="utf-8")
             tree = ast.parse(source, filename=str(script))
             self.assertFalse(
@@ -820,6 +910,9 @@ class ExternalModelExampleTests(unittest.TestCase):
             elif script == GBM_SUMMARY_SCRIPT:
                 self.assertEqual(calls.count("gbm_evaluation_chart"), 1)
                 self.assertEqual(calls.count("write_gbm_summary_report"), 1)
+            elif script == DOUBLE_LIFT_SCRIPT:
+                self.assertEqual(calls.count("double_lift_chart"), 1)
+                self.assertEqual(calls.count("write_echarts_report"), 1)
             else:
                 self.assertEqual(calls.count("line_bar_chart"), 1)
                 self.assertEqual(calls.count("write_echarts_report"), 1)
@@ -1289,6 +1382,35 @@ FROM read_parquet({sql_literal(str(glm_dir / 'coefficients.parquet'))})
             # Point the result roots' optional active markers elsewhere to
             # prove reporting resolves the exact authoritative model folder.
             glm_report_config, gbm_report_config, glm_summary_config, gbm_summary_config = write_report_configs(root)
+            import yaml
+
+            double_lift_config = root / "config_double_lift.yaml"
+            double_lift_config.write_text(
+                yaml.safe_dump(
+                    {
+                        "baseline": {"model_type": "glm", "build_config": glm_config.name},
+                        "challenger": {"model_type": "gbm", "build_config": gbm_config.name},
+                        "kpi_spec": "kpi_spec.csv",
+                        "chart": {
+                            "banding": "auto",
+                            "quantiles": 0,
+                            "missings": "hide",
+                            "labels": "none",
+                            "sigma": 2,
+                        },
+                        "reports": [
+                            {
+                                "name": "validation_double_lift",
+                                "title": "External GLM versus GBM - Validation Double Lift",
+                                "sample_values": ["validation"],
+                            }
+                        ],
+                        "output": {"directory": "reports", "chart_height": 600},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
             _, loaded_report_features = load_report_helpers().load_report_settings(
                 glm_report_config,
                 "glm",
@@ -1319,6 +1441,7 @@ FROM read_parquet({sql_literal(str(glm_dir / 'coefficients.parquet'))})
             gbm_report_run = run_builder(GBM_REPORT_SCRIPT, gbm_report_config)
             glm_summary_run = run_builder(GLM_SUMMARY_SCRIPT, glm_summary_config)
             gbm_summary_run = run_builder(GBM_SUMMARY_SCRIPT, gbm_summary_config)
+            double_lift_run = run_builder(DOUBLE_LIFT_SCRIPT, double_lift_config)
             self.assertFalse((root / ".lucidum").exists())
 
             report_dir = root / "reports"
@@ -1327,17 +1450,20 @@ FROM read_parquet({sql_literal(str(glm_dir / 'coefficients.parquet'))})
             shap_report_path = report_dir / "motor_fixture_external_gbm_all_rows_rebased_shap.html"
             glm_summary_report_path = report_dir / "motor_fixture_external_glm_model_summary.html"
             gbm_summary_report_path = report_dir / "motor_fixture_external_gbm_model_summary.html"
+            double_lift_report_path = report_dir / "motor_fixture_external_double_lift_validation_double_lift.html"
             self.assertIn(str(glm_report_path.resolve()), glm_report_run.stdout)
             self.assertIn(str(gbm_report_path.resolve()), gbm_report_run.stdout)
             self.assertTrue(shap_report_path.is_file())
             self.assertIn(str(glm_summary_report_path.resolve()), glm_summary_run.stdout)
             self.assertIn(str(gbm_summary_report_path.resolve()), gbm_summary_run.stdout)
+            self.assertIn(str(double_lift_report_path.resolve()), double_lift_run.stdout)
 
             glm_report = report_payload(glm_report_path)
             gbm_report = report_payload(gbm_report_path)
             shap_report = report_payload(shap_report_path)
             glm_summary_report = report_payload(glm_summary_report_path)
             summary_report = report_payload(gbm_summary_report_path)
+            double_lift_report = report_payload(double_lift_report_path)
             self.assertEqual(glm_report["metadata"]["model"], str(glm_dir.resolve()))
             self.assertEqual(gbm_report["metadata"]["model"], str(gbm_dir.resolve()))
             self.assertEqual(shap_report["metadata"]["model"], str(gbm_dir.resolve()))
@@ -1346,6 +1472,23 @@ FROM read_parquet({sql_literal(str(glm_dir / 'coefficients.parquet'))})
             self.assertEqual(shap_report["metadata"]["KPI spec"], "kpi_spec.csv")
             self.assertEqual(summary_report["metadata"]["model"], str(gbm_dir.resolve()))
             self.assertEqual(glm_summary_report["metadata"]["model"], str(glm_dir.resolve()))
+            self.assertEqual(double_lift_report["metadata"]["baseline model"], str(glm_dir.resolve()))
+            self.assertEqual(double_lift_report["metadata"]["challenger model"], str(gbm_dir.resolve()))
+            self.assertEqual(double_lift_report["metadata"]["sample column"], "SAMPLE")
+            self.assertEqual(double_lift_report["metadata"]["SAMPLE_ROWS"], ["validation"])
+            double_chart = double_lift_report["charts"][0]
+            self.assertEqual(
+                [response["label"] for response in double_chart["data"]["responses"]],
+                ["Actual", "GLM · External integration GLM", "GBM · External integration GBM"],
+            )
+            self.assertTrue(
+                any(
+                    row.get("resp1") is not None
+                    and row.get("resp2") is not None
+                    and not math.isclose(float(row["resp1"]), float(row["resp2"]))
+                    for row in double_chart["data"]["rows"]
+                )
+            )
             self.assertEqual(
                 [row["sample"] for row in glm_summary_report["performance"]["rows"]],
                 ["Training", "Test", "Validation"],

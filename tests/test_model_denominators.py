@@ -397,6 +397,86 @@ COPY (
             },
         )
 
+    def test_same_family_model_response_and_denominator_are_source_scoped_across_tools(self) -> None:
+        numerator_source_id = "gbm:model-numerator:predictions"
+        numerator_dataset = self.dataset_with_predictions(
+            [5.0, 10.0, 15.0, 20.0],
+            source_id=numerator_source_id,
+        )
+        numerator_source = numerator_dataset.model_prediction_source(numerator_source_id)
+        self.assertIsNotNone(numerator_source)
+        self.dataset.register_data_source_provider(PredictionProvider(numerator_source))
+        request_fields = {
+            "source": numerator_source_id,
+            "denominator": "gbm_prediction",
+            "denominatorSource": MODEL_SOURCE,
+            "filter": "gbm_prediction >= 10",
+        }
+
+        line_bar_result = chart(
+            self.dataset,
+            {
+                **request_fields,
+                "x": "Segment",
+                "responses": [
+                    {
+                        "label": "Numerator model",
+                        "numerator": "gbm_prediction",
+                        "source": numerator_source_id,
+                    }
+                ],
+            },
+        )
+        histogram_result = histogram(
+            self.dataset,
+            {
+                **request_fields,
+                "actual": "gbm_prediction",
+                "bins": 2,
+                "distribution": "incremental",
+                "yAxis": "sum",
+                "logScale": "none",
+                "sampleMode": "all",
+            },
+        )
+        map_result = map_summary(
+            self.dataset,
+            {
+                **request_fields,
+                "level": "area",
+                "numerator": "gbm_prediction",
+            },
+        )
+        app = create_app(self.data_path, token="", tools=["line_bar"], use_saved_filters=False, use_kpis=False)
+        app.state.dataset.register_data_source_provider(
+            PredictionProvider(self.dataset.model_prediction_source(MODEL_SOURCE))
+        )
+        app.state.dataset.register_data_source_provider(PredictionProvider(numerator_source))
+        summary_status, summary_payload = asgi_post_json(
+            app,
+            "/api/metrics/summary",
+            {
+                **request_fields,
+                "actual": "gbm_prediction",
+            },
+        )
+
+        self.assertTrue(all(row["resp0"] == 0.5 for row in line_bar_result["rows"]))
+        self.assertEqual(line_bar_result["filtered_row_count"], 3)
+        weighted_mean = next(
+            row["value"]
+            for row in histogram_result["stats"]
+            if row["statistic"] == "Weighted mean"
+        )
+        self.assertEqual(weighted_mean, 0.5)
+        self.assertEqual(histogram_result["filtered_row_count"], 3)
+        self.assertTrue(all(row["value"] == 0.5 for row in map_result["rows"]))
+        self.assertEqual(summary_status, 200)
+        self.assertEqual(summary_payload["filtered_row_count"], 3)
+        self.assertEqual(summary_payload["response_summaries"][0]["value"], 0.5)
+        self.assertEqual(summary_payload["actual"]["column"], "gbm_prediction")
+        self.assertEqual(summary_payload["denominator"]["column"], "gbm_prediction")
+
     def test_only_primary_model_outputs_are_valid_denominators(self) -> None:
         with self.assertRaisesRegex(ValueError, "primary model prediction"):
             chart(

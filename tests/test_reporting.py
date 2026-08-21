@@ -12,6 +12,7 @@ from typing import Any
 import duckdb
 
 from py_lucidum import (
+    double_lift_chart,
     export_glm_tabulations,
     gbm_evaluation_chart,
     line_bar_chart,
@@ -48,7 +49,234 @@ class TweedieDistribution(NormalDistribution):
     power = 1.2
 
 
+def write_prediction_model(
+    root: Path,
+    family: str,
+    model_id: str,
+    label: str,
+    predictions: list[float | None],
+    *,
+    actual: str = "Y",
+    denominator: str | None = "W",
+    row_ids: list[int] | None = None,
+) -> Path:
+    folder = root / family / model_id
+    folder.mkdir(parents=True)
+    manifest = {
+        "model_id": model_id,
+        "label": label,
+        "tool": family,
+        "response_column": actual,
+    }
+    manifest["denominator_column" if family == "glm" else "offset_column"] = denominator
+    (folder / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    prediction_column = f"{family}_prediction"
+    con = duckdb.connect(database=":memory:")
+    try:
+        con.execute(
+            f"CREATE TABLE predictions (__lucidum_row_id BIGINT, {prediction_column} DOUBLE)"
+        )
+        con.executemany(
+            "INSERT INTO predictions VALUES (?, ?)",
+            list(
+                zip(
+                    row_ids or range(1, len(predictions) + 1),
+                    predictions,
+                    strict=True,
+                )
+            ),
+        )
+        con.execute(
+            f"COPY predictions TO {sql_literal(str(folder / 'predictions.parquet'))} (FORMAT PARQUET)"
+        )
+    finally:
+        con.close()
+    return folder
+
+
 class ReportingTests(unittest.TestCase):
+    def test_same_family_double_lift_uses_exact_models_samples_and_report_header(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            dataset_path = root / "pricing.csv"
+            dataset_path.write_text(
+                "Y,W,SAMPLE\n"
+                "10,1,training\n"
+                "20,2,test\n"
+                "30,3,validation\n"
+                "40,4,validation\n",
+                encoding="utf-8",
+            )
+            kpi_path = root / "kpi.csv"
+            kpi_path.write_text(
+                "group,name,actual,denominator,decimals,format\n"
+                "PRICING,Premium rate,Y,W,2,currency\n",
+                encoding="utf-8",
+            )
+            baseline_folder = write_prediction_model(
+                root / "baseline-results",
+                "glm",
+                "baseline",
+                "Pricing v12",
+                [10, 20, 30, 40],
+            )
+            challenger_folder = write_prediction_model(
+                root / "challenger-results",
+                "glm",
+                "challenger",
+                "Pricing v13",
+                [15, 30, 45, 80],
+            )
+
+            chart = double_lift_chart(
+                dataset_path,
+                actual="Y",
+                denominator="W",
+                baseline_model_type="glm",
+                baseline_model_id="baseline",
+                baseline_model_folder=baseline_folder,
+                challenger_model_type="glm",
+                challenger_model_id="challenger",
+                challenger_model_folder=challenger_folder,
+                sample_values=["VALIDATION"],
+                controls={"banding": "auto", "missings": "hide"},
+                kpi_spec=kpi_path,
+                title="Validation Double Lift",
+            )
+
+            self.assertEqual(chart["metadata"]["sample_values"], ["validation"])
+            self.assertEqual(chart["metadata"]["selected_rows"], 2)
+            self.assertEqual(chart["metadata"]["chart_rows"], 2)
+            self.assertGreater(chart["metadata"]["controls"]["banding"], 0)
+            self.assertEqual(
+                chart["presentation"]["kpiFormat"],
+                {"decimals": 2, "format": "currency"},
+            )
+            self.assertEqual(
+                [response["label"] for response in chart["data"]["responses"]],
+                ["Actual", "GLM · Pricing v12", "GLM · Pricing v13"],
+            )
+            self.assertEqual(
+                chart["data"]["field_sources"]["responses"],
+                ["dataset", "glm:baseline:predictions", "glm:challenger:predictions"],
+            )
+            rows = {float(row["x_sort"]): row for row in chart["data"]["rows"]}
+            self.assertAlmostEqual(rows[1.5]["resp0"], 10.0)
+            self.assertAlmostEqual(rows[1.5]["resp1"], 10.0)
+            self.assertAlmostEqual(rows[1.5]["resp2"], 15.0)
+            self.assertAlmostEqual(rows[1.5]["volume"], 3.0)
+            self.assertAlmostEqual(rows[2.0]["resp0"], 10.0)
+            self.assertAlmostEqual(rows[2.0]["resp1"], 10.0)
+            self.assertAlmostEqual(rows[2.0]["resp2"], 20.0)
+            self.assertAlmostEqual(rows[2.0]["volume"], 4.0)
+            self.assertEqual(
+                chart["presentation"]["xAxisTitle"],
+                "GLM · Pricing v13 / GLM · Pricing v12",
+            )
+
+            output_path = root / "double-lift.html"
+            write_echarts_report(
+                [chart],
+                output_path,
+                title="Validation Double Lift",
+                metadata={
+                    "source parquet": dataset_path,
+                    "sample column": "SAMPLE",
+                    "SAMPLE_ROWS": chart["metadata"]["sample_values"],
+                    "source rows selected": "2",
+                    "rows available to chart": "2",
+                },
+            )
+            document = output_path.read_text(encoding="utf-8")
+            header = re.search(r'<header class="report-header">(.*?)</header>', document, re.DOTALL)
+            self.assertIsNotNone(header)
+            self.assertIn('class="report-population"', header.group(1))
+            self.assertIn("Included population", header.group(1))
+            self.assertIn("Selected SAMPLE values", header.group(1))
+            self.assertIn("validation", header.group(1))
+            self.assertIn("presentation.xAxisTitle || data?.x", document)
+            with self.assertRaisesRegex(ValueError, "must be different"):
+                double_lift_chart(
+                    dataset_path,
+                    actual="Y",
+                    denominator="W",
+                    baseline_model_type="glm",
+                    baseline_model_id="baseline",
+                    baseline_model_folder=baseline_folder,
+                    challenger_model_type="glm",
+                    challenger_model_id="baseline",
+                    challenger_model_folder=baseline_folder,
+                )
+
+    def test_mixed_double_lift_aligns_row_ids_and_omits_null_or_zero_baselines(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            dataset_path = root / "data.csv"
+            dataset_path.write_text(
+                "Y,SAMPLE\n10,training\n20,test\n30,validation\n40,validation\n",
+                encoding="utf-8",
+            )
+            baseline_folder = write_prediction_model(
+                root / "baseline",
+                "glm",
+                "base",
+                "Sparse baseline",
+                [10, 0, None, 40],
+                denominator=None,
+            )
+            challenger_folder = write_prediction_model(
+                root / "challenger",
+                "gbm",
+                "challenge",
+                "Sparse challenger",
+                [20, 100],
+                denominator=None,
+                row_ids=[1, 4],
+            )
+
+            chart = double_lift_chart(
+                dataset_path,
+                actual="Y",
+                baseline_model_type="glm",
+                baseline_model_id="base",
+                baseline_model_folder=baseline_folder,
+                challenger_model_type="gbm",
+                challenger_model_id="challenge",
+                challenger_model_folder=challenger_folder,
+                sample_values=["training", "VALIDATION"],
+                controls={"banding": 0, "missings": "hide"},
+            )
+
+            self.assertEqual(chart["metadata"]["sample_values"], ["training", "validation"])
+            self.assertEqual(chart["metadata"]["selected_rows"], 3)
+            self.assertEqual(chart["metadata"]["chart_rows"], 2)
+            rows = {float(row["x_sort"]): row for row in chart["data"]["rows"]}
+            self.assertEqual(set(rows), {2.0, 2.5})
+            self.assertEqual(rows[2.0]["resp1"], 10.0)
+            self.assertEqual(rows[2.0]["resp2"], 20.0)
+            self.assertEqual(rows[2.0]["resp0"], 10.0)
+            self.assertEqual(rows[2.0]["volume"], 1.0)
+            self.assertEqual(rows[2.5]["resp1"], 40.0)
+            self.assertEqual(rows[2.5]["resp2"], 100.0)
+            self.assertEqual(rows[2.5]["resp0"], 40.0)
+            self.assertEqual(rows[2.5]["volume"], 1.0)
+
+            manifest_path = challenger_folder / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["response_column"] = "OTHER_RESPONSE"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "Challenger manifest response Numerator"):
+                double_lift_chart(
+                    dataset_path,
+                    actual="Y",
+                    baseline_model_type="glm",
+                    baseline_model_id="base",
+                    baseline_model_folder=baseline_folder,
+                    challenger_model_type="gbm",
+                    challenger_model_id="challenge",
+                    challenger_model_folder=challenger_folder,
+                )
+
     def test_glm_tweedie_family_link_label_includes_variance_power(self) -> None:
         estimator = SimpleNamespace(
             family_instance=TweedieDistribution(),

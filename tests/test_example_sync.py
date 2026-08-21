@@ -83,7 +83,7 @@ class ExampleSyncTests(unittest.TestCase):
             output = format_example_sync_result(result)
             self.assertIn(f"create: {create_name}", output)
             self.assertIn(f"update: {update_name}", output)
-            self.assertIn("8 unchanged", output)
+            self.assertIn("9 unchanged", output)
 
     def test_sync_rejects_non_directory_destination(self) -> None:
         with TemporaryDirectory() as tmp_dir:

@@ -608,6 +608,7 @@ LEFT JOIN read_parquet({sql_literal(str(tabulated_path))}) tabulated USING (__lu
                     "label": label,
                     "kind": info["kind"],
                     "model_id": model.get("model_id"),
+                    "model_label": model.get("label") or model.get("model_id"),
                     "active": bool(model.get("active")),
                     "response_column": model.get("response_column"),
                     "denominator_column": model.get("denominator_column"),

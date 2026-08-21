@@ -1,6 +1,8 @@
       import { createColumnProfileTool } from "./column-profile-tool.js";
       import {
         createLineBarTool,
+        lineBarModelComparisonCandidates,
+        lineBarOtherColumnToken,
         nextLineBarModelComparisonState,
       } from "./line-bar-tool.js";
       import { createHistogramTool } from "./histogram-tool.js";
@@ -74,9 +76,11 @@
       const MOBILE_LAYOUT_MAX_WIDTH = 640;
       const TOOL_BUTTON_TOOLTIP_DELAY_MS = 500;
       const LINE_BAR_RATIO_COLUMN = "gbm_to_glm_ratio";
+      const LINE_BAR_PREDICTION_RATIO_COLUMN = "prediction_ratio";
       const GLM_PREDICTION_COLUMNS = ["glm_prediction", "glm_prediction_rate", "glm_tabulated_prediction"];
       const GBM_PREDICTION_COLUMNS = ["gbm_prediction", "gbm_prediction_rate", "gbm_tabulated_prediction"];
       const MODEL_RATIO_SOURCE_RE = /^model_ratio:gbm_to_glm_ratio:[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+$/;
+      const PREDICTION_RATIO_SOURCE_RE = /^model_ratio:prediction_ratio:(?:(?:glm|gbm):[A-Za-z0-9_.-]+|other:[0-9a-f]+):(?:(?:glm|gbm):[A-Za-z0-9_.-]+|other:[0-9a-f]+)$/;
       const GLM_PREDICTION_SOURCE_RE = /^glm:[A-Za-z0-9_.-]+:predictions$/;
       const GBM_PREDICTION_SOURCE_RE = /^gbm:[A-Za-z0-9_.-]+:predictions$/;
       const FAVOURITE_SCOPES = new Set(["metrics", "metrics_filter", "line_bar_view", "histogram_view", "map_view", "dataset_view"]);
@@ -167,6 +171,7 @@
         featureSort: "alpha",
         expectedSort: "alpha",
         expectedSelections: [],
+        modelComparison: null,
         openSidebarSection: "favourites",
         collapsedKpiGroups: new Set(),
         kpiGroupsInitialised: false,
@@ -419,6 +424,8 @@
         bandSteps: BAND_STEPS,
         refreshLineBar,
         clearActiveFavouriteSelection: () => clearActiveFavouriteSelectionForScope("line_bar_view"),
+        modelComparisonCandidates,
+        setModelComparison,
       });
       const histogramTool = createHistogramTool({
         api,
@@ -1049,12 +1056,160 @@
       }
 
       function isModelRatioSourceId(sourceId) {
-        return MODEL_RATIO_SOURCE_RE.test(String(sourceId || ""));
+        const value = String(sourceId || "");
+        return MODEL_RATIO_SOURCE_RE.test(value) || PREDICTION_RATIO_SOURCE_RE.test(value);
+      }
+
+      function modelPredictionFamily(source) {
+        if (source?.kind === "glm_predictions") return "glm";
+        if (source?.kind === "gbm_predictions") return "gbm";
+        return "";
+      }
+
+      function primaryPredictionColumnForFamily(family) {
+        if (family === "glm") return "glm_prediction";
+        if (family === "gbm") return "gbm_prediction";
+        return "";
+      }
+
+      function modelPredictionBaseLabel(source) {
+        const family = modelPredictionFamily(source);
+        const modelLabel = String(source?.model_label || source?.model_id || "Model");
+        return `${family.toUpperCase()} · ${modelLabel}`;
+      }
+
+      function currentModelComparisonKpi() {
+        const actualOption = el("actualNumerator")?.selectedOptions?.[0];
+        const denominator = denominatorSelection();
+        return {
+          numerator: String(el("actualNumerator")?.value || ""),
+          numeratorSource: String(actualOption?.dataset.sourceId || "dataset"),
+          denominator: normaliseKpiDenominator(denominator.value),
+          denominatorSource: normaliseKpiDenominator(denominator.value) === "__none__"
+            ? "dataset"
+            : String(denominator.sourceId || "dataset"),
+        };
+      }
+
+      function modelPredictionSourceRecords(includeComparisonIds = null) {
+        const currentKpi = currentModelComparisonKpi();
+        const requestedIds = includeComparisonIds || [
+          state.modelComparison?.baselineComparisonId || state.modelComparison?.baselineSourceId,
+          state.modelComparison?.challengerComparisonId || state.modelComparison?.challengerSourceId,
+        ].filter(Boolean);
+        return lineBarModelComparisonCandidates(
+          state.schema?.data_sources || [],
+          currentKpi,
+          {
+            includeSourceIds: requestedIds.filter((sourceId) => (
+              GLM_PREDICTION_SOURCE_RE.test(sourceId) || GBM_PREDICTION_SOURCE_RE.test(sourceId)
+            )),
+            otherColumns: numericColumnsForSource("dataset"),
+          },
+        );
+      }
+
+      function modelComparisonCandidates() {
+        const configured = new Set([
+          state.modelComparison?.baselineComparisonId || state.modelComparison?.baselineSourceId,
+          state.modelComparison?.challengerComparisonId || state.modelComparison?.challengerSourceId,
+        ].filter(Boolean));
+        return modelPredictionSourceRecords().filter((candidate) => (
+          candidate.compatible
+          || configured.has(candidate.comparisonId || candidate.sourceId)
+          || configured.has(candidate.sourceId)
+        ));
+      }
+
+      function resolveModelComparison(baselineId, challengerId, baselineColumn = "", challengerColumn = "") {
+        const resolvedBaselineId = String(
+          baselineId === "dataset" && baselineColumn
+            ? `other:${lineBarOtherColumnToken(baselineColumn)}`
+            : baselineId || "",
+        );
+        const resolvedChallengerId = String(
+          challengerId === "dataset" && challengerColumn
+            ? `other:${lineBarOtherColumnToken(challengerColumn)}`
+            : challengerId || "",
+        );
+        const records = modelPredictionSourceRecords([resolvedBaselineId, resolvedChallengerId].filter(Boolean));
+        const baseline = records.find((candidate) => (
+          String(candidate.comparisonId || candidate.sourceId) === resolvedBaselineId
+        ));
+        const challenger = records.find((candidate) => (
+          String(candidate.comparisonId || candidate.sourceId) === resolvedChallengerId
+        ));
+        if (!baseline || !challenger) return null;
+        const baselineComparisonId = baseline.comparisonId || baseline.sourceId;
+        const challengerComparisonId = challenger.comparisonId || challenger.sourceId;
+        if (baselineComparisonId === challengerComparisonId) return null;
+        const sideToken = (candidate) => (
+          candidate.family === "other"
+            ? `other:${lineBarOtherColumnToken(candidate.predictionColumn)}`
+            : `${candidate.family}:${candidate.modelId}`
+        );
+        return {
+          baselineComparisonId,
+          challengerComparisonId,
+          baselineSourceId: baseline.sourceId,
+          challengerSourceId: challenger.sourceId,
+          baselineFamily: baseline.family,
+          challengerFamily: challenger.family,
+          baselineModelId: baseline.modelId,
+          challengerModelId: challenger.modelId,
+          baselineColumn: baseline.predictionColumn,
+          challengerColumn: challenger.predictionColumn,
+          baselineLabel: baseline.label,
+          challengerLabel: challenger.label,
+          ratioSourceId: `model_ratio:${LINE_BAR_PREDICTION_RATIO_COLUMN}:${sideToken(challenger)}:${sideToken(baseline)}`,
+        };
+      }
+
+      function setModelComparison(baselineComparisonId, challengerComparisonId) {
+        const comparison = resolveModelComparison(baselineComparisonId, challengerComparisonId);
+        if (!comparison) return null;
+        state.modelComparison = comparison;
+        fillMetricSelect(el("expectedNumerator"), true);
+        state.expectedSelections = [
+          {
+            value: comparison.baselineColumn,
+            sourceId: comparison.baselineSourceId,
+            metricKind: comparison.baselineFamily === "other" ? "metric" : "prediction",
+            label: comparison.baselineLabel,
+            binding: "explicit",
+            comparisonRole: "baseline",
+          },
+          {
+            value: comparison.challengerColumn,
+            sourceId: comparison.challengerSourceId,
+            metricKind: comparison.challengerFamily === "other" ? "metric" : "prediction",
+            label: comparison.challengerLabel,
+            binding: "explicit",
+            comparisonRole: "challenger",
+          },
+        ];
+        syncExpectedSelectToSelections();
+        return comparison;
+      }
+
+      function configuredModelRatioColumn() {
+        const comparison = state.modelComparison;
+        if (!comparison?.ratioSourceId) return null;
+        return {
+          name: LINE_BAR_PREDICTION_RATIO_COLUMN,
+          label: `${comparison.challengerLabel} / ${comparison.baselineLabel}`,
+          duckdb_type: "DOUBLE",
+          kind: "numeric",
+          band_suggestion: null,
+          source_id: comparison.ratioSourceId,
+          source_role: "model_prediction_ratio",
+        };
       }
 
       function lineBarFeatureColumns() {
         const currentSource = state.source || "dataset";
-        const currentKind = currentDataSource()?.kind || "";
+        const currentDataSourceRecord = currentDataSource();
+        const currentKind = currentDataSourceRecord?.kind || "";
         const columns = dataSourceColumns("dataset").map((column) => ({
           ...column,
           source_id: "dataset",
@@ -1067,10 +1222,22 @@
           ))
           .map((column) => ({
             ...column,
+            ...(isModelPredictionColumn(column) && modelPredictionFamily(currentDataSourceRecord)
+              ? { label: modelPredictionColumnLabel(currentDataSourceRecord, column.name) }
+              : {}),
             source_id: column.source_id || currentSource,
           }));
         const seen = new Set(columns.map((column) => `${column.source_id || "dataset"}\u0000${column.name}`));
-        for (const column of [...currentModelColumns, ...activeModelRatioColumns(), ...activePredictionColumns()]) {
+        const configuredRatio = configuredModelRatioColumn();
+        const legacyRatioColumns = state.x === LINE_BAR_RATIO_COLUMN || MODEL_RATIO_SOURCE_RE.test(state.xSource || "")
+          ? activeModelRatioColumns()
+          : [];
+        for (const column of [
+          ...currentModelColumns,
+          ...legacyRatioColumns,
+          ...(configuredRatio ? [configuredRatio] : []),
+          ...activePredictionColumns(),
+        ]) {
           const sourceId = column.source_id || "";
           const key = `${sourceId}\u0000${column.name}`;
           if (!sourceId || seen.has(key)) continue;
@@ -1095,6 +1262,14 @@
       function lineBarColumnExists(name, sourceId = "") {
         const columnName = String(name || "");
         if (!columnName) return false;
+        if (columnName === LINE_BAR_RATIO_COLUMN) {
+          const activeRatio = activeModelRatioColumns().find((column) => column.name === columnName);
+          if (activeRatio) {
+            return !sourceId
+              || sourceId === "dataset"
+              || lineBarColumnSourceId(activeRatio) === sourceId;
+          }
+        }
         return lineBarFeatureColumns().some((column) => (
           column.name === columnName && (!sourceId || lineBarColumnSourceId(column) === sourceId)
         ));
@@ -1110,6 +1285,9 @@
             ))
           : null;
         if (exact) return lineBarColumnSourceId(exact);
+        if (columnName === LINE_BAR_PREDICTION_RATIO_COLUMN && state.modelComparison?.ratioSourceId) {
+          return state.modelComparison.ratioSourceId;
+        }
         if (columnName === LINE_BAR_RATIO_COLUMN) {
           return activeModelRatioColumns().find((column) => column.name === columnName)?.source_id || "";
         }
@@ -2253,6 +2431,8 @@
           const option = new Option(metricColumnLabel(col), col.name);
           option.dataset.sourceId = col.source_id || state.source || "dataset";
           option.dataset.metricKind = isModelPredictionColumn(col) ? "prediction" : "metric";
+          option.dataset.displayLabel = metricColumnLabel(col);
+          if (comparisonHasPredictionSource(option.dataset.sourceId)) option.dataset.binding = "explicit";
           select.append(option);
         }
       }
@@ -2312,10 +2492,19 @@
             .filter(isModelPredictionColumn)
             .map((column) => ({
               ...column,
-              label: `${source.kind === "glm_predictions" ? "GLM" : "GBM"} · ${metricColumnLabel(column)}`,
+              label: modelPredictionColumnLabel(source, column.name),
               source_id: source.id,
             }))
         ));
+      }
+
+      function modelPredictionColumnLabel(source, columnName) {
+        const base = modelPredictionBaseLabel(source);
+        const primary = primaryPredictionColumnForFamily(modelPredictionFamily(source));
+        if (columnName === primary) return base;
+        if (String(columnName).endsWith("_prediction_rate")) return `${base} · rate`;
+        if (String(columnName).endsWith("_tabulated_prediction")) return `${base} · tabulated`;
+        return `${base} · ${columnName}`;
       }
 
       function activeModelRatioColumns() {
@@ -2329,12 +2518,28 @@
       }
 
       function expectedPredictionColumns() {
-        return activeModelSources(["glm_predictions", "gbm_predictions"]).flatMap((source) => (
+        const comparisonSources = new Set([
+          state.modelComparison?.baselineSourceId,
+          state.modelComparison?.challengerSourceId,
+        ].filter(Boolean));
+        const sources = (state.schema?.data_sources || []).filter((source) => (
+          ["glm_predictions", "gbm_predictions"].includes(source.kind)
+          && (source.active || comparisonSources.has(source.id))
+        ));
+        const seen = new Set();
+        return sources.flatMap((source) => (
           numericColumnsForSource(source.id)
             .filter(isModelPredictionColumn)
+            .filter((column) => source.active || column.name === primaryPredictionColumnForFamily(modelPredictionFamily(source)))
+            .filter((column) => {
+              const key = `${source.id}\u0000${column.name}`;
+              if (seen.has(key)) return false;
+              seen.add(key);
+              return true;
+            })
             .map((column) => ({
               ...column,
-              label: metricColumnLabel(column),
+              label: modelPredictionColumnLabel(source, column.name),
               source_id: source.id,
             }))
         ));
@@ -2428,6 +2633,7 @@
           value: option.value,
           sourceId: option.dataset.sourceId || state.source || "dataset",
           metricKind: option.dataset.metricKind || "metric",
+          label: option.dataset.displayLabel || option.textContent || option.value,
         };
       }
 
@@ -2445,12 +2651,25 @@
         return "";
       }
 
-      function resolveFavouriteSourceId(columnName = "", sourceId = "") {
+      function comparisonHasPredictionSource(sourceId = "") {
         const source = String(sourceId || "");
+        return Boolean(
+          (GLM_PREDICTION_SOURCE_RE.test(source) || GBM_PREDICTION_SOURCE_RE.test(source))
+          && [
+          state.modelComparison?.baselineSourceId,
+          state.modelComparison?.challengerSourceId,
+          ].includes(source)
+        );
+      }
+
+      function resolveFavouriteSourceId(columnName = "", sourceId = "", options = {}) {
+        const source = String(sourceId || "");
+        if (PREDICTION_RATIO_SOURCE_RE.test(source)) return source;
         if (String(columnName || "") === LINE_BAR_RATIO_COLUMN || isModelRatioSourceId(source)) {
           return activeModelSource("model_ratio")?.id || source;
         }
         const modelKind = modelKindForPredictionColumn(columnName) || modelKindForPredictionSource(source);
+        if (modelKind && (options.preserveExact || comparisonHasPredictionSource(source))) return source;
         if (modelKind) return activePredictionSourceForModelKind(modelKind)?.id || source;
         return source;
       }
@@ -2463,10 +2682,16 @@
           const value = String(selection?.value || selection?.column || "");
           if (!value) continue;
           const requestedSource = String(selection?.sourceId || selection?.source || "");
-          const targetSource = typeof resolveFavouriteSourceId === "function" ? resolveFavouriteSourceId(value, requestedSource) : requestedSource;
+          const preserveExact = selection?.binding === "explicit" || comparisonHasPredictionSource(requestedSource);
+          const targetSource = typeof resolveFavouriteSourceId === "function"
+            ? resolveFavouriteSourceId(value, requestedSource, { preserveExact })
+            : requestedSource;
           const option = expectedOptionForSelection(value, targetSource, { allowAnySource });
           const next = expectedSelectionFromOption(option);
           if (!next) continue;
+          if (selection?.label) next.label = String(selection.label);
+          if (preserveExact) next.binding = "explicit";
+          if (selection?.comparisonRole) next.comparisonRole = String(selection.comparisonRole);
           const key = expectedSelectionKey(next);
           if (seen.has(key)) continue;
           seen.add(key);
@@ -2719,7 +2944,9 @@
         const resolved = [];
         const activePredictionSource = activePredictionSourceForModelKind(modelKind);
         for (const selection of selections) {
-          if (modelKind && selection?.metricKind === "prediction" && isPredictionColumnForModelKind(selection.value, modelKind)) {
+          if (selection?.binding === "explicit") {
+            resolved.push(selection);
+          } else if (modelKind && selection?.metricKind === "prediction" && isPredictionColumnForModelKind(selection.value, modelKind)) {
             if (activePredictionSource?.id) {
               resolved.push({ ...selection, sourceId: activePredictionSource.id });
             }
@@ -4347,6 +4574,18 @@
           plotMetric: state.twoFeaturePlotMetric,
           heatmapLabels: state.heatmapLabels,
         };
+        if (state.modelComparison?.baselineSourceId && state.modelComparison?.challengerSourceId) {
+          view.modelComparison = {
+            baselineSourceId: state.modelComparison.baselineSourceId,
+            challengerSourceId: state.modelComparison.challengerSourceId,
+          };
+          if (state.modelComparison.baselineFamily === "other") {
+            view.modelComparison.baselineColumn = state.modelComparison.baselineColumn;
+          }
+          if (state.modelComparison.challengerFamily === "other") {
+            view.modelComparison.challengerColumn = state.modelComparison.challengerColumn;
+          }
+        }
         if (scope === "map_view") {
           view.map = ukMapTool.captureFavouriteState();
         }
@@ -4414,6 +4653,18 @@
         }
         const view = favourite?.view || {};
         state.activeLineBarFavouriteId = favourite?.id || "";
+        const savedComparison = view.modelComparison && typeof view.modelComparison === "object"
+          ? resolveModelComparison(
+              view.modelComparison.baselineSourceId,
+              view.modelComparison.challengerSourceId,
+              view.modelComparison.baselineColumn,
+              view.modelComparison.challengerColumn,
+            )
+          : null;
+        if (view.modelComparison && !savedComparison) {
+          throw new Error("Saved Baseline or Challenger model is no longer available.");
+        }
+        state.modelComparison = savedComparison;
         state.source = resolveFavouriteSourceId("", view.source || "dataset") || "dataset";
         const groupingViews = Array.isArray(view.groupings) && view.groupings.length
           ? view.groupings
