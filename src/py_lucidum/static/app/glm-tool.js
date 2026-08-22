@@ -3038,6 +3038,7 @@ export function createGlmTool({
           { title: "gini_te", field: "gini_te", sorter: "number", formatter: (cell) => escapeHtml(formatModelMetric(cell.getValue())), hozAlign: "right", headerHozAlign: "right", width: 76, headerSort: true, headerTooltip: "Normalized Gini for SAMPLE = test" },
           { title: "gini_vl", field: "gini_vl", sorter: "number", formatter: (cell) => escapeHtml(formatModelMetric(cell.getValue())), hozAlign: "right", headerHozAlign: "right", width: 76, headerSort: true, headerTooltip: "Normalized Gini for SAMPLE = validation" },
           { title: "Rows", field: "training_rows", sorter: "number", formatter: (cell) => Number(cell.getValue() || 0).toLocaleString(), hozAlign: "right", headerHozAlign: "right", width: 86, headerSort: true },
+          { title: "Scope", field: "scope_display", sorter: "string", formatter: (cell) => escapeHtml(cell.getValue()), width: 112, headerSort: true },
           { title: "Fit time", field: "fit_ms", sorter: "number", formatter: (cell) => escapeHtml(cell.getRow().getData().fit_display), hozAlign: "right", headerHozAlign: "right", width: 84, headerSort: true, tooltip: "Glum coefficient fitting time" },
           { title: "Overall time", field: "elapsed_ms", sorter: "number", formatter: (cell) => escapeHtml(cell.getRow().getData().elapsed_display), hozAlign: "right", headerHozAlign: "right", width: 104, headerSort: true, tooltip: "Full GLM build time, including fitting, scoring, diagnostics, feature importance, and artifact writing" },
         ],

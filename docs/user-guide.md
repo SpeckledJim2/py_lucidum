@@ -249,10 +249,13 @@ train it, then exposes that family's primary prediction as the sole Line and Bar
 Expected value. A compatible GLM/GBM prediction pair can remain selected when both
 models use the unchanged metric pair.
 
-Manually selected model comparisons remain visible when their training metrics no
-longer match the current KPI. Line and Bar shows a compatibility warning beside the
-affected prediction, GLM partial-dependence overlay, or GBM SHAP overlay. Restore the
-saved metric pair or remove the component to clear the warning.
+The Expected picker lists the primary prediction and available tabulated prediction
+for every saved GLM and GBM trained for the selected Numerator and Denominator.
+Prediction-rate variants are not Expected choices. Changing either metric removes
+incompatible Expected selections and clears an incompatible prediction-ratio pair;
+active GLM partial-dependence and GBM SHAP overlays retain their compatibility
+warnings. Legacy models without readable primary predictions or usable training KPI
+metadata are omitted.
 
 Building a new GLM or GBM is disabled while a model prediction is the Denominator.
 GBM prediction chaining remains available through `init_score`.
@@ -426,7 +429,7 @@ result over one or two selected features and add comparison series where require
 ### Choose responses and features
 
 The response consists of the shared Numerator and optional Denominator. Add up to two
-Expected series from numeric dataset columns or active model predictions.
+Expected series from numeric dataset columns or compatible saved model predictions.
 
 A normal feature click makes that field the only Feature 1. To add or remove Feature
 2, use Command-click on macOS or Ctrl-click on Windows/Linux. The Expected chooser
@@ -483,15 +486,24 @@ limit is exceeded.
 
 ### Expected values and model overlays
 
-Active GLM and GBM predictions behave like selectable numeric data sources. Line and
-Bar can also expose a model prediction-ratio feature and order features by saved
-importance.
+Every saved GLM and GBM whose training Numerator and Denominator match the selected
+pair contributes its primary prediction and, when available, its tabulated prediction
+to Expected. Models are grouped GLM then GBM, newest first within each family, and
+duplicate display names include the model id. **No expected line** remains fixed at
+the top; compatible model rows appear next in the scrollable list, followed by the
+ordinary numeric dataset fields. The Expected **Original**/**A-Z** control orders only
+those ordinary fields. Line and Bar can also expose a model prediction-ratio feature
+and order features by saved importance.
 
 When compatible saved primary model predictions are available, the gold **Prediction
 ratio…** row opens a comparison chooser. Both the Baseline and Challenger lists group
 saved models under GLM and GBM, followed by an OTHER group containing every numeric
-column in the loaded dataset. Choose a model or dataset column on either side and
-apply; **Swap** reverses any two distinct choices. Lucidum then sets:
+column in the loaded dataset. The chooser omits models built for another Numerator or
+Denominator. Its dynamic guidance reads: “GLM and GBM choices are limited to models
+built for `<numerator> / <denominator>`; OTHER contains numeric dataset columns. The
+x-axis is the Challenger value divided by the Baseline value.” Choose a model or
+dataset column on either side and apply; **Swap** reverses any two distinct choices.
+Lucidum then sets:
 
 - Feature 1 to `Challenger value / Baseline value` and clears Feature 2.
 - Expected 1 to the Baseline model prediction or dataset column and Expected 2 to the
@@ -506,9 +518,10 @@ banding. Model rows, legends, and tables use names such as `GLM · Pricing v12` 
 of technical prediction-column names; OTHER Baselines use the dataset column name.
 
 The chosen models remain exact when another GLM or GBM is activated. Changing the KPI
-also retains the comparison and displays the normal compatibility warning. Clicking
-the configured ratio row reopens the chooser; selecting another x-axis feature keeps
-the two model Expected lines.
+clears the pair if either model is no longer compatible and returns Feature 1 to a
+valid dataset field without choosing a replacement. Clicking a compatible configured
+ratio row reopens the chooser; selecting another x-axis feature keeps its compatible
+Expected lines.
 
 For a one-feature chart:
 
@@ -533,8 +546,10 @@ missing and grouping controls, plot choice, tail handling, heatmap labels, and t
 one-feature empty-period choice. Optional stale Feature 2 settings can be dropped
 while a valid Feature 1 is restored. A model-pair favourite restores the exact ordered
 Baseline and Challenger, and reports a clear validation error if either saved model
-has since been deleted. Older model-output favourites continue to follow the active
-model of each family.
+has since been deleted. If its saved model selections do not match the restored
+Numerator and Denominator, Lucidum removes those selections without rewriting the
+favourite and reports the adjustment. Older model-output favourites continue to
+follow the active model of each family when that model is compatible.
 
 [Back to contents ↑](#contents)
 
@@ -824,8 +839,8 @@ create a generated sample split.
 After fitting, Lucidum scores the eligible rows and saves the model in the current
 dataset workspace. The coefficient table is sortable and provides copy and download
 actions. The model navigator shows the active model, formula/model size context,
-training choices, diagnostics, [split normalized Gini](#normalized-gini), and whether
-tabulations exist.
+fitted row count, training scope (`All`, `Training`, or `Training + Test`), diagnostics,
+[split normalized Gini](#normalized-gini), and whether tabulations exist.
 
 Select saved model rows to rename one model, activate one model, open its folder when
 local desktop access is available, or delete one or more models. Deleting the active

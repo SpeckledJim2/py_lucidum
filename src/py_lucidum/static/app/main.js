@@ -1,6 +1,7 @@
       import { createColumnProfileTool } from "./column-profile-tool.js";
       import {
         createLineBarTool,
+        lineBarCompatibleExpectedColumns,
         lineBarModelComparisonCandidates,
         lineBarOtherColumnToken,
         nextLineBarModelComparisonState,
@@ -425,6 +426,7 @@
         refreshLineBar,
         clearActiveFavouriteSelection: () => clearActiveFavouriteSelectionForScope("line_bar_view"),
         modelComparisonCandidates,
+        modelComparisonKpi: currentModelComparisonKpi,
         setModelComparison,
       });
       const histogramTool = createHistogramTool({
@@ -1091,34 +1093,19 @@
         };
       }
 
-      function modelPredictionSourceRecords(includeComparisonIds = null) {
+      function modelPredictionSourceRecords() {
         const currentKpi = currentModelComparisonKpi();
-        const requestedIds = includeComparisonIds || [
-          state.modelComparison?.baselineComparisonId || state.modelComparison?.baselineSourceId,
-          state.modelComparison?.challengerComparisonId || state.modelComparison?.challengerSourceId,
-        ].filter(Boolean);
         return lineBarModelComparisonCandidates(
           state.schema?.data_sources || [],
           currentKpi,
           {
-            includeSourceIds: requestedIds.filter((sourceId) => (
-              GLM_PREDICTION_SOURCE_RE.test(sourceId) || GBM_PREDICTION_SOURCE_RE.test(sourceId)
-            )),
             otherColumns: numericColumnsForSource("dataset"),
           },
         );
       }
 
       function modelComparisonCandidates() {
-        const configured = new Set([
-          state.modelComparison?.baselineComparisonId || state.modelComparison?.baselineSourceId,
-          state.modelComparison?.challengerComparisonId || state.modelComparison?.challengerSourceId,
-        ].filter(Boolean));
-        return modelPredictionSourceRecords().filter((candidate) => (
-          candidate.compatible
-          || configured.has(candidate.comparisonId || candidate.sourceId)
-          || configured.has(candidate.sourceId)
-        ));
+        return modelPredictionSourceRecords();
       }
 
       function resolveModelComparison(baselineId, challengerId, baselineColumn = "", challengerColumn = "") {
@@ -1132,7 +1119,7 @@
             ? `other:${lineBarOtherColumnToken(challengerColumn)}`
             : challengerId || "",
         );
-        const records = modelPredictionSourceRecords([resolvedBaselineId, resolvedChallengerId].filter(Boolean));
+        const records = modelPredictionSourceRecords();
         const baseline = records.find((candidate) => (
           String(candidate.comparisonId || candidate.sourceId) === resolvedBaselineId
         ));
@@ -2432,7 +2419,11 @@
           option.dataset.sourceId = col.source_id || state.source || "dataset";
           option.dataset.metricKind = isModelPredictionColumn(col) ? "prediction" : "metric";
           option.dataset.displayLabel = metricColumnLabel(col);
-          if (comparisonHasPredictionSource(option.dataset.sourceId)) option.dataset.binding = "explicit";
+          if (comparisonHasPredictionSource(option.dataset.sourceId)) {
+            option.dataset.binding = "explicit";
+          } else if (option.dataset.metricKind === "prediction") {
+            option.dataset.binding = col.model_binding || "model";
+          }
           select.append(option);
         }
       }
@@ -2518,31 +2509,10 @@
       }
 
       function expectedPredictionColumns() {
-        const comparisonSources = new Set([
-          state.modelComparison?.baselineSourceId,
-          state.modelComparison?.challengerSourceId,
-        ].filter(Boolean));
-        const sources = (state.schema?.data_sources || []).filter((source) => (
-          ["glm_predictions", "gbm_predictions"].includes(source.kind)
-          && (source.active || comparisonSources.has(source.id))
-        ));
-        const seen = new Set();
-        return sources.flatMap((source) => (
-          numericColumnsForSource(source.id)
-            .filter(isModelPredictionColumn)
-            .filter((column) => source.active || column.name === primaryPredictionColumnForFamily(modelPredictionFamily(source)))
-            .filter((column) => {
-              const key = `${source.id}\u0000${column.name}`;
-              if (seen.has(key)) return false;
-              seen.add(key);
-              return true;
-            })
-            .map((column) => ({
-              ...column,
-              label: modelPredictionColumnLabel(source, column.name),
-              source_id: source.id,
-            }))
-        ));
+        return lineBarCompatibleExpectedColumns(
+          state.schema?.data_sources || [],
+          currentModelComparisonKpi(),
+        );
       }
 
       function expectedColumns() {
@@ -2634,6 +2604,7 @@
           sourceId: option.dataset.sourceId || state.source || "dataset",
           metricKind: option.dataset.metricKind || "metric",
           label: option.dataset.displayLabel || option.textContent || option.value,
+          ...(option.dataset.binding ? { binding: option.dataset.binding } : {}),
         };
       }
 
@@ -2722,6 +2693,43 @@
         state.expectedSelections = normalised;
         syncExpectedSelectToSelections();
         return normalised.length === selections.filter((selection) => String(selection?.value || selection?.column || "")).slice(0, 2).length;
+      }
+
+      function reconcileLineBarModelSelectionsForCurrentKpi(options = {}) {
+        const previousExpected = expectedSelectionsSnapshot();
+        const previousKeys = previousExpected.map(expectedSelectionKey);
+        fillMetricSelect(el("expectedNumerator"), true);
+        setExpectedSelections(previousExpected, { allowAnySource: false });
+        const nextKeys = expectedSelections().map(expectedSelectionKey);
+        const expectedRemoved = previousKeys.filter((key) => !nextKeys.includes(key)).length;
+
+        let comparisonCleared = false;
+        const previousComparison = state.modelComparison;
+        if (previousComparison?.baselineSourceId && previousComparison?.challengerSourceId) {
+          const resolved = resolveModelComparison(
+            previousComparison.baselineSourceId,
+            previousComparison.challengerSourceId,
+            previousComparison.baselineColumn,
+            previousComparison.challengerColumn,
+          );
+          if (resolved) {
+            state.modelComparison = resolved;
+          } else {
+            state.modelComparison = null;
+            comparisonCleared = true;
+            if (state.x === LINE_BAR_PREDICTION_RATIO_COLUMN) {
+              state.xSource = "";
+              syncLineBarXFallback();
+            }
+          }
+        }
+
+        if (options.render !== false) {
+          lineBarTool.renderExpectedNumerators({ preserveScroll: true });
+          lineBarTool.renderFeatures({ preserveScroll: true });
+          lineBarTool.updateAxisControls();
+        }
+        return { expectedRemoved, comparisonCleared };
       }
 
       function clearExpectedSelections() {
@@ -2954,7 +2962,7 @@
             resolved.push(selection);
           }
         }
-        return setExpectedSelections(resolved, { allowAnySource: true });
+        return setExpectedSelections(resolved, { allowAnySource: false });
       }
 
       function modelMetricSelection(model, modelKind = "") {
@@ -3144,6 +3152,7 @@
           }
           : previousDenominator;
         const denominatorRestored = setDenominatorSelection(requestedDenominator, { preserveUnavailable: true });
+        fillMetricSelect(el("expectedNumerator"), true);
         const metricsChanged = previousActual !== el("actualNumerator").value
           || previousActualSource !== actualSelectionSourceId()
           || previousDenominator.value !== denominatorSelection().value
@@ -3160,6 +3169,7 @@
         if (!comparisonTransition) {
           restoreExpectedSelectionsAfterModelMutation(previousExpectedSelections, modelKind);
         }
+        const reconciliation = reconcileLineBarModelSelectionsForCurrentKpi({ render: false });
         syncLineBarXFallback();
         lineBarTool.renderExpectedNumerators();
         lineBarTool.renderFeatures();
@@ -3168,7 +3178,12 @@
         gbmTool.syncDenominatorBuildState();
         syncKpiSelectionFromMetrics();
         if (metricsChanged) clearActiveFavouriteSelectionForScope("metrics");
-        else if (comparisonTransition?.expectedChanged || comparisonTransition?.partialDependenceChanged) {
+        else if (
+          comparisonTransition?.expectedChanged
+          || comparisonTransition?.partialDependenceChanged
+          || reconciliation.expectedRemoved
+          || reconciliation.comparisonCleared
+        ) {
           clearActiveFavouriteSelectionForScope("line_bar_view");
         }
         renderKpis();
@@ -3213,6 +3228,10 @@
         renderFavourites();
         await refreshFavourites();
         syncKpiSelectionFromMetrics();
+        const reconciliation = reconcileLineBarModelSelectionsForCurrentKpi({ render: false });
+        if (reconciliation.expectedRemoved || reconciliation.comparisonCleared) {
+          clearActiveFavouriteSelectionForScope("line_bar_view");
+        }
         lineBarTool.renderExpectedNumerators();
         lineBarTool.renderFeatures();
         lineBarTool.updateAxisControls();
@@ -3520,10 +3539,12 @@
           setDenominatorSelection("__none__");
         }
         syncKpiSelectionFromMetrics();
-        return previousActual !== el("actualNumerator").value
+        const changed = previousActual !== el("actualNumerator").value
           || previousActualSource !== actualSelectionSourceId()
           || previousDenominator.value !== denominatorSelection().value
           || previousDenominator.sourceId !== denominatorSelection().sourceId;
+        if (changed) reconcileLineBarModelSelectionsForCurrentKpi();
+        return changed;
       }
 
       function selectKpi(kpi) {
@@ -3746,6 +3767,7 @@
           return message;
         }
         const scope = favouriteScope(favourite);
+        let runtimeMessage = "";
         try {
           if (scope === "map_view") {
             await applyMapFavouriteView(favourite);
@@ -3755,7 +3777,8 @@
             await applyDatasetFavouriteView(favourite);
           } else if (scope === "line_bar_view") {
             if (toolEnabled("line_bar")) setTool("line_bar", false);
-            await applyLineBarFavouriteView(favourite, options);
+            const result = await applyLineBarFavouriteView(favourite, options);
+            runtimeMessage = String(result?.message || "");
           } else {
             state.activeLineBarFavouriteId = favourite.id || "";
             const metricsChanged = applyFavouriteMetricState(favourite);
@@ -3772,7 +3795,7 @@
             }
           }
           const warnings = favouriteValidationWarnings(favourite);
-          const message = warnings.length ? warnings.join(" ") : "";
+          const message = [runtimeMessage, ...warnings].filter(Boolean).join(" ");
           setStatus(message, Boolean(message));
           renderFavourites();
           return "";
@@ -4653,18 +4676,10 @@
         }
         const view = favourite?.view || {};
         state.activeLineBarFavouriteId = favourite?.id || "";
-        const savedComparison = view.modelComparison && typeof view.modelComparison === "object"
-          ? resolveModelComparison(
-              view.modelComparison.baselineSourceId,
-              view.modelComparison.challengerSourceId,
-              view.modelComparison.baselineColumn,
-              view.modelComparison.challengerColumn,
-            )
+        const savedComparisonConfig = view.modelComparison && typeof view.modelComparison === "object"
+          ? view.modelComparison
           : null;
-        if (view.modelComparison && !savedComparison) {
-          throw new Error("Saved Baseline or Challenger model is no longer available.");
-        }
-        state.modelComparison = savedComparison;
+        state.modelComparison = null;
         state.source = resolveFavouriteSourceId("", view.source || "dataset") || "dataset";
         const groupingViews = Array.isArray(view.groupings) && view.groupings.length
           ? view.groupings
@@ -4730,15 +4745,12 @@
         const allSavedFilterRowsRestored = restoreSavedFilterRows(view.savedFilterRows);
         normaliseRestoredFavouriteFilter(allSavedFilterRowsRestored);
         fillMetricSelect(el("actualNumerator"));
-        fillMetricSelect(el("expectedNumerator"), true);
         fillDenominatorSelect(el("denominator"));
         const actual = view.actual && typeof view.actual === "object" ? view.actual : {};
         const actualSource = resolveFavouriteSourceId(actual.value, actual.sourceId || state.source || "dataset");
         if (!setActualSelection(actual.value, actualSource)) {
           chooseFirstActualSelection();
         }
-        const expectedSelections = Array.isArray(view.expectedSelections) ? view.expectedSelections : [];
-        setExpectedSelections(expectedSelections, { allowAnySource: true });
         const denominator = String(view.denominator || "__none__");
         if (!setDenominatorSelection({
           value: denominator,
@@ -4746,6 +4758,25 @@
         }, { preserveUnavailable: true })) {
           setDenominatorSelection("__none__");
         }
+        state.modelComparison = savedComparisonConfig
+          ? resolveModelComparison(
+              savedComparisonConfig.baselineSourceId,
+              savedComparisonConfig.challengerSourceId,
+              savedComparisonConfig.baselineColumn,
+              savedComparisonConfig.challengerColumn,
+            )
+          : null;
+        fillMetricSelect(el("expectedNumerator"), true);
+        const expectedSelections = Array.isArray(view.expectedSelections) ? view.expectedSelections : [];
+        setExpectedSelections(expectedSelections, { allowAnySource: false });
+        reconcileLineBarModelSelectionsForCurrentKpi({ render: false });
+        const comparisonDropped = Boolean(savedComparisonConfig && !state.modelComparison);
+        const requestedExpectedCount = expectedSelections
+          .filter((selection) => String(selection?.value || selection?.column || ""))
+          .slice(0, 2)
+          .length;
+        const selectionDropped = expectedSelectionsSnapshot().length < requestedExpectedCount;
+        if (comparisonDropped || selectionDropped) state.activeLineBarFavouriteId = "";
         syncKpiSelectionFromMetrics();
         syncLineBarXFallback();
         setLineBarManualGroupingKeys();
@@ -4772,6 +4803,11 @@
         } else {
           lineBarTool.setView(state.view, { refresh: false });
         }
+        return {
+          message: comparisonDropped || selectionDropped
+            ? "Favourite model selections that do not match the restored Numerator and Denominator were removed."
+            : "",
+        };
       }
 
       function chooseDefaults() {
@@ -4793,7 +4829,6 @@
         state.missings = "show";
         state.missings2 = "show";
         fillMetricSelect(el("actualNumerator"));
-        fillMetricSelect(el("expectedNumerator"), true);
         fillDenominatorSelect(el("denominator"));
         const requestedActual = requestedDefault("actual");
         const requestedExpected = requestedDefault("expected");
@@ -4803,10 +4838,6 @@
           el("actualNumerator").value = numericColumnExists(requestedActual) ? requestedActual : numericColumns()[0]?.name || "";
         }
         if (!el("actualNumerator").value) chooseFirstActualSelection();
-        setExpectedSelections([
-          { value: requestedExpected, sourceId: "" },
-          { value: requestedExpected2, sourceId: "" },
-        ]);
         if (!setDenominatorSelection({
           value: requestedDenominator,
           sourceId: "dataset",
@@ -4814,6 +4845,12 @@
           setDenominatorSelection("__none__");
         }
         applyInitialKpiDefault();
+        fillMetricSelect(el("expectedNumerator"), true);
+        setExpectedSelections([
+          { value: requestedExpected, sourceId: "" },
+          { value: requestedExpected2, sourceId: "" },
+        ]);
+        reconcileLineBarModelSelectionsForCurrentKpi({ render: false });
       }
 
       function applyInitialKpiDefault() {
@@ -5400,12 +5437,14 @@
           if (syncActualSourceFromSelection()) {
             syncControlsForSourceChange({ actualValue, actualSource });
           }
+          reconcileLineBarModelSelectionsForCurrentKpi();
           syncKpiSelectionFromMetrics();
           clearActiveFavouriteSelectionForScope("metrics");
           refreshMetricSummary();
           refreshActiveToolForMetricChange();
         });
         el("denominator").addEventListener("change", () => {
+          reconcileLineBarModelSelectionsForCurrentKpi();
           syncKpiSelectionFromMetrics();
           glmTool.syncDenominatorBuildState();
           gbmTool.syncDenominatorBuildState();

@@ -220,8 +220,8 @@ results, or simply exploring a KPI interactively across one or two features.
 Set the Numerator and Denominator in the sidebar, either from the dropdowns at the
 top or by choosing a saved KPI in the **KPIs** section.
 
-- Plot Actual and up to two Expected series, including active GLM and GBM
-  predictions.
+- Plot Actual and up to two Expected series, including predictions from every
+  saved GLM and GBM built for the selected Numerator and Denominator.
 - Analyse one feature with line and bar charts, or two features with continuous
   surfaces, continuous-by-factor lines, and factor-by-factor heatmaps.
 - Group numeric features with fixed bands or quantiles, bucket dates by calendar

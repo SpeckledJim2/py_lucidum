@@ -395,6 +395,7 @@ if (values(result) !== "glm_prediction" || result.partialDependence !== "glm") t
         module = Path("src/py_lucidum/static/app/line-bar-tool.js").resolve().as_uri()
         script = f"""
 import {{
+  lineBarCompatibleExpectedColumns,
   lineBarDefaultModelComparison,
   lineBarModelComparisonCandidates,
   lineBarOtherColumnToken,
@@ -404,7 +405,7 @@ const sources = [
   {{
     id: "glm:old:predictions", kind: "glm_predictions", model_id: "old", model_label: "Pricing",
     active: false, created_at: "2026-01-01", response_column: "Actual", denominator_column: "Weight",
-    columns: [column("glm_prediction"), column("glm_prediction_rate")],
+    columns: [column("glm_prediction"), column("glm_prediction_rate"), column("glm_tabulated_prediction")],
   }},
   {{
     id: "glm:new:predictions", kind: "glm_predictions", model_id: "new", model_label: "Pricing",
@@ -426,6 +427,11 @@ const sources = [
     active: false, created_at: "2026-05-01", response_column: "Actual", offset_column: "Weight",
     columns: [column("gbm_prediction_rate")],
   }},
+  {{
+    id: "gbm:invalid-primary:predictions", kind: "gbm_predictions", model_id: "invalid-primary", model_label: "Invalid",
+    active: false, created_at: "2026-05-02", response_column: "Actual", offset_column: "Weight",
+    columns: [{{ name: "gbm_prediction", kind: "categorical" }}],
+  }},
 ];
 const kpi = {{ numerator: "Actual", numeratorSource: "dataset", denominator: "Weight", denominatorSource: "dataset" }};
 let candidates = lineBarModelComparisonCandidates(sources, kpi);
@@ -444,9 +450,34 @@ pair = lineBarDefaultModelComparison(candidates, {{
 if (pair.baseline.sourceId !== "glm:old:predictions" || pair.challenger.sourceId !== "glm:new:predictions") {{
   throw new Error("existing exact pair was not preserved");
 }}
-candidates = lineBarModelComparisonCandidates(sources, kpi, {{ includeSourceIds: ["gbm:wrong-kpi:predictions"] }});
+candidates = lineBarModelComparisonCandidates(sources, kpi);
 const mismatch = candidates.find((candidate) => candidate.sourceId === "gbm:wrong-kpi:predictions");
-if (!mismatch || mismatch.compatible !== false) throw new Error("configured KPI mismatch was not retained and marked");
+if (mismatch) throw new Error("configured KPI mismatch was retained");
+const expectedColumns = lineBarCompatibleExpectedColumns(sources, kpi);
+const expectedKeys = expectedColumns.map((item) => `${{item.source_id}}:${{item.name}}`).join("|");
+if (expectedKeys !== [
+  "glm:new:predictions:glm_prediction",
+  "glm:old:predictions:glm_prediction",
+  "glm:old:predictions:glm_tabulated_prediction",
+  "gbm:current:predictions:gbm_prediction",
+].join("|")) throw new Error(`compatible Expected ordering failed: ${{expectedKeys}}`);
+if (expectedColumns.some((item) => item.name.endsWith("_prediction_rate"))) throw new Error("prediction rate leaked into Expected");
+if (expectedColumns[0].label !== "GLM · Pricing (new)" || expectedColumns[1].label !== "GLM · Pricing (old)") {{
+  throw new Error(`duplicate Expected labels were not disambiguated: ${{JSON.stringify(expectedColumns)}}`);
+}}
+if (expectedColumns[2].label !== "GLM · Pricing (old) · tabulated") throw new Error("tabulated label failed");
+if (expectedColumns[0].model_binding !== "model") throw new Error("active Expected binding failed");
+if (expectedColumns[1].model_binding !== "explicit" || expectedColumns[2].model_binding !== "explicit") {{
+  throw new Error("inactive Expected bindings were not exact");
+}}
+const noDenominatorSource = {{
+  id: "glm:none:predictions", kind: "glm_predictions", model_id: "none", model_label: "No denominator",
+  active: false, created_at: "2026-06-01", response_column: "Actual", denominator_column: "",
+  columns: [column("glm_prediction")],
+}};
+if (lineBarCompatibleExpectedColumns([noDenominatorSource], {{
+  numerator: "Actual", numeratorSource: "dataset", denominator: "Average row value", denominatorSource: "dataset",
+}}).length !== 1) throw new Error("no-denominator Expected matching failed");
 const otherColumns = [column("Expected Value"), {{ name: "Segment", kind: "categorical" }}, column("Actual")];
 candidates = lineBarModelComparisonCandidates([sources[2]], kpi, {{ otherColumns }});
 const otherCandidates = candidates.filter((candidate) => candidate.family === "other");
@@ -2020,7 +2051,7 @@ if (!resizeObserver || observedCount !== 2) throw new Error("resize observer fai
         glm_module = Path("src/py_lucidum/static/app/glm-model-navigator.js").resolve().as_uri()
         gbm_module = Path("src/py_lucidum/static/app/gbm-model-navigator.js").resolve().as_uri()
         script = f"""
-import {{ createGlmModelNavigator }} from "{glm_module}";
+import {{ createGlmModelNavigator, glmTrainingScopeLabel }} from "{glm_module}";
 import {{ createGbmModelNavigator }} from "{gbm_module}";
 
 const target = () => ({{ innerHTML: "", querySelectorAll: () => [] }});
@@ -2041,7 +2072,7 @@ const glmNavigator = createGlmModelNavigator({{
 }});
 const glmTarget = target();
 glmNavigator.renderFallback(glmTarget, [
-  {{ model_id: "new", label: "New GLM", n_terms: 3, n_features: 2, n_interactions: 1, tabulated: true, diagnostics: {{ gini_tr: 0.81234, gini_te: -0.25, gini_vl: null }} }},
+  {{ model_id: "new", label: "New GLM", training_scope: "training_test", n_terms: 3, n_features: 2, n_interactions: 1, tabulated: true, diagnostics: {{ gini_tr: 0.81234, gini_te: -0.25, gini_vl: null }} }},
   {{ model_id: "legacy", label: "Legacy GLM", tabulated: false, diagnostics: {{}} }},
 ]);
 if (!glmTarget.innerHTML.includes("<th>Name</th>")) throw new Error("GLM fallback Name heading missing");
@@ -2052,12 +2083,20 @@ if (!glmTarget.innerHTML.includes("<th>Tabulated</th>")) throw new Error("GLM fa
 if (!glmTarget.innerHTML.includes(">gini_tr</th>")) throw new Error("GLM fallback gini_tr heading missing");
 if (!glmTarget.innerHTML.includes(">gini_te</th>")) throw new Error("GLM fallback gini_te heading missing");
 if (!glmTarget.innerHTML.includes(">gini_vl</th>")) throw new Error("GLM fallback gini_vl heading missing");
+if (!glmTarget.innerHTML.includes("<th>Rows</th>\\n            <th>Scope</th>\\n            <th>Fit time</th>")) throw new Error("GLM fallback scope heading order failed");
 if (!glmTarget.innerHTML.includes('<td class="numeric">0.81234</td>')) throw new Error("GLM gini_tr value missing");
 if (!glmTarget.innerHTML.includes('<td class="numeric">-0.25</td>')) throw new Error("GLM gini_te value missing");
 if (!glmTarget.innerHTML.includes('<td class="numeric">--</td>')) throw new Error("GLM null Gini value missing");
 if (!glmTarget.innerHTML.includes('<td class="numeric">3</td>\\n        <td class="numeric">2</td>\\n        <td class="numeric">1</td>\\n        <td>Yes</td>')) throw new Error("GLM captured metadata missing");
 if (!glmTarget.innerHTML.includes('<td class="numeric"></td>\\n        <td class="numeric"></td>\\n        <td class="numeric"></td>\\n        <td>-</td>')) throw new Error("GLM legacy metadata fallback failed");
+if (!glmTarget.innerHTML.includes("<td>Training + Test</td>")) throw new Error("GLM training + test scope missing");
+if (!glmTarget.innerHTML.includes("<td>All</td>")) throw new Error("GLM legacy scope fallback missing");
 if (glmNavigator.optionalCount(null) !== "" || glmNavigator.optionalCount(0) !== "0") throw new Error("GLM optional count formatting failed");
+if (glmTrainingScopeLabel("all") !== "All") throw new Error("GLM all scope mapping failed");
+if (glmTrainingScopeLabel("training") !== "Training") throw new Error("GLM training scope mapping failed");
+if (glmTrainingScopeLabel("training_test") !== "Training + Test") throw new Error("GLM training + test scope mapping failed");
+if (glmTrainingScopeLabel(undefined) !== "All" || glmTrainingScopeLabel("   ") !== "All") throw new Error("GLM missing legacy scope mapping failed");
+if (glmTrainingScopeLabel("future_scope") !== "--") throw new Error("GLM invalid scope mapping failed");
 
 const gbmNavigator = createGbmModelNavigator({{
   escapeHtml,

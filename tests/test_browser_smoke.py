@@ -14393,6 +14393,7 @@ COPY (
                     kpis_path=kpis_path,
                     use_kpis=True,
                     features_path=features_path,
+                    defaults={"actual": "actualNumerator", "denominator": "denominator"},
                 )
                 try:
                     self.exercise_gbm_tool(base_url)
@@ -15103,6 +15104,7 @@ COPY (
                 "Disposable smoke GLM B",
                 "2026-05-25T00:00:05Z",
                 [0.19, 0.29, 0.39],
+                training_scope="training_test",
             )
             glm_store.activate_model("browser-smoke-glm")
             base_url, server, thread = self.start_app(data_path, tools=["column_profile", "line_bar", "glm", "gbm"], features_path=features_path)
@@ -15222,6 +15224,64 @@ COPY (
                         self.assertEqual(request["responses"][1]["source"], expected_source)
 
                     try:
+                        page.goto(
+                            f"{base_url}/?tool=line_bar&x=Segment&actual=num_a"
+                            "&expected=gbm_prediction&denominator=den_a",
+                            wait_until="domcontentloaded",
+                        )
+                        wait_for_line_bar()
+                        self.assertEqual(
+                            page.locator("#expectedList > .line-bar-scroll-region .feature.line-bar-special-row").evaluate_all(
+                                "buttons => buttons.map(button => button.dataset.sourceId || '')"
+                            ),
+                            ["glm:metric-glm-a:predictions", "gbm:metric-gbm-a:predictions"],
+                        )
+                        if page.locator("#lineBarSideControlsToggleBtn").get_attribute("aria-expanded") == "false":
+                            page.locator("#lineBarSideControlsToggleBtn").click()
+                        ratio_row = page.locator('#featureList .feature[data-value="prediction_ratio"]')
+                        ratio_row.click()
+                        ratio_options = page.locator(
+                            '.line-bar-model-comparison-popover option[value^="glm:"], '
+                            '.line-bar-model-comparison-popover option[value^="gbm:"]'
+                        ).evaluate_all("options => options.map(option => option.value)")
+                        self.assertEqual(
+                            sorted(set(ratio_options)),
+                            ["gbm:metric-gbm-a:predictions", "glm:metric-glm-a:predictions"],
+                        )
+                        with page.expect_response(
+                            lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                            timeout=10_000,
+                        ):
+                            page.locator('.line-bar-model-comparison-popover [data-action="apply"]').click()
+                        with page.expect_response(
+                            lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                            timeout=10_000,
+                        ):
+                            page.locator("#actualNumerator").select_option("num_b")
+                        self.assertEqual(
+                            page.locator("#expectedList .feature.active.expected-none-option").count(),
+                            1,
+                        )
+                        self.assertNotEqual(
+                            page.locator("#featureList .feature.active").get_attribute("data-value"),
+                            "prediction_ratio",
+                        )
+                        self.assertEqual(
+                            page.locator("#expectedList > .line-bar-scroll-region .feature.line-bar-special-row").count(),
+                            0,
+                        )
+                        with page.expect_response(
+                            lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                            timeout=10_000,
+                        ):
+                            page.locator("#denominator").select_option("den_b")
+                        self.assertEqual(
+                            page.locator("#expectedList > .line-bar-scroll-region .feature.line-bar-special-row").evaluate_all(
+                                "buttons => buttons.map(button => button.dataset.sourceId || '')"
+                            ),
+                            ["glm:metric-glm-b:predictions", "gbm:metric-gbm-b:predictions"],
+                        )
+
                         page.goto(
                             f"{base_url}/?tool=line_bar&x=Segment&actual=num_a"
                             "&expected=gbm_prediction&denominator=den_a",
@@ -15908,14 +15968,19 @@ COPY (
 
                         select_metric("#actualNumerator", "num_a")
                         page.wait_for_function(
-                            '() => document.querySelector("#chartMessage")?.textContent.includes("selected KPI is num_a / den_b")',
+                            """
+                            () => document.querySelector("#chartMessage")?.textContent.includes(
+                              "GLM partial dependence was trained for num_b / den_b; selected KPI is num_a / den_b."
+                            )
+                            """,
                             timeout=10_000,
                         )
+                        self.assertEqual(active_expected_values(), [""])
                         select_metric("#denominator", "den_a")
                         page.wait_for_function(
                             """
                             () => document.querySelector("#chartMessage")?.textContent.includes(
-                              "GLM prediction and partial dependence were trained for num_b / den_b; selected KPI is num_a / den_a."
+                              "GLM partial dependence was trained for num_b / den_b; selected KPI is num_a / den_a."
                             )
                             """,
                             timeout=10_000,
@@ -15937,6 +16002,14 @@ COPY (
                             page.locator("#chartExpectedToggle").click()
                         platform = page.evaluate("() => navigator.userAgentData?.platform || navigator.platform || ''")
                         additive_modifier = "Meta" if re.search(r"mac|iphone|ipad|ipod", platform, re.I) else "Control"
+                        with page.expect_response(
+                            lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                            timeout=10_000,
+                        ):
+                            page.locator(
+                                '#expectedList .feature[data-value="glm_prediction"]'
+                                '[data-source-id="glm:comparison-glm-b:predictions"]'
+                            ).click()
                         with page.expect_response(
                             lambda response: response.url.endswith("/api/chart") and response.status == 200,
                             timeout=10_000,
@@ -15994,14 +16067,13 @@ COPY (
                         self.assertIn("GLM · Comparison GLM C", names)
                         self.assertFalse(any(name.startswith("GBM ·") for name in names))
 
-                        with page.expect_response(
-                            lambda response: response.url.endswith("/api/chart") and response.status == 200,
-                            timeout=10_000,
-                        ):
+                        self.assertEqual(
                             page.locator(
                                 '#expectedList .feature[data-value="gbm_prediction"]'
                                 '[data-source-id="gbm:comparison-gbm-b2:predictions"]'
-                            ).click(modifiers=[additive_modifier])
+                            ).count(),
+                            0,
+                        )
                         with page.expect_response(
                             lambda response: response.url.endswith("/api/chart") and response.status == 200,
                             timeout=10_000,
@@ -16010,7 +16082,7 @@ COPY (
                         page.wait_for_function(
                             """
                             () => document.querySelector("#chartMessage")?.textContent.includes(
-                              "GBM prediction and SHAP were trained for num_b / den_b; selected KPI is num_c / N."
+                              "GBM SHAP was trained for num_b / den_b; selected KPI is num_c / N."
                             )
                             """,
                             timeout=10_000,
@@ -16018,23 +16090,6 @@ COPY (
                         mismatch_message = page.locator("#chartMessage").text_content()
                         self.assertNotIn("KPI mismatch: GLM", mismatch_message)
                         self.assertEqual(page.locator("#chartMessage").get_attribute("title"), mismatch_message)
-
-                        with page.expect_response(
-                            lambda response: response.url.endswith("/api/chart") and response.status == 200,
-                            timeout=10_000,
-                        ):
-                            page.locator(
-                                '#expectedList .feature.active[data-value="gbm_prediction"]'
-                                '[data-source-id="gbm:comparison-gbm-b2:predictions"]'
-                            ).click(modifiers=[additive_modifier])
-                        page.wait_for_function(
-                            """
-                            () => document.querySelector("#chartMessage")?.textContent.includes(
-                              "GBM SHAP was trained for num_b / den_b; selected KPI is num_c / N."
-                            )
-                            """,
-                            timeout=10_000,
-                        )
                         with page.expect_response(
                             lambda response: (
                                 response.url.endswith("/api/line-bar/glm-overlay")
@@ -19101,12 +19156,61 @@ COPY (
                                     "featureSort": "alpha",
                                     "expectedSort": "alpha",
                                     "actual": {"value": "actualNumerator", "sourceId": "dataset", "metricKind": "dataset"},
-                                    "denominator": "gbm_prediction",
-                                    "denominatorSource": saved_gbm_source,
+                                    "denominator": "denominator",
+                                    "denominatorSource": "dataset",
                                     "expectedSelections": [
                                         {"value": "glm_prediction", "sourceId": saved_glm_source, "metricKind": "prediction"},
                                         {"value": "gbm_prediction", "sourceId": saved_gbm_source, "metricKind": "prediction"},
                                     ],
+                                    "filter": "Segment = 'B'",
+                                    "filterSelectionMode": "single",
+                                    "filterOperator": "and",
+                                    "savedFilterRows": [],
+                                },
+                            },
+                            {
+                                "id": "incompatible-exact-view",
+                                "name": "Incompatible exact view",
+                                "created_at": "2026-06-28T00:00:01Z",
+                                "updated_at": "2026-06-28T00:00:01Z",
+                                "view": {
+                                    "version": 2,
+                                    "source": "dataset",
+                                    "x": "prediction_ratio",
+                                    "xSource": "model_ratio:prediction_ratio:gbm:saved-gbm:glm:saved-glm",
+                                    "view": "chart",
+                                    "sort": "alpha",
+                                    "lowGroup": "0",
+                                    "labels": "none",
+                                    "bandWidth": "1",
+                                    "quantileMode": "off",
+                                    "dateBucket": "none",
+                                    "transform": "none",
+                                    "sigma": "0",
+                                    "partialDependence": "none",
+                                    "featureSort": "alpha",
+                                    "expectedSort": "alpha",
+                                    "actual": {"value": "actualNumerator", "sourceId": "dataset", "metricKind": "dataset"},
+                                    "denominator": "__none__",
+                                    "denominatorSource": "dataset",
+                                    "expectedSelections": [
+                                        {
+                                            "value": "glm_prediction",
+                                            "sourceId": saved_glm_source,
+                                            "metricKind": "prediction",
+                                            "binding": "explicit",
+                                        },
+                                        {
+                                            "value": "gbm_prediction",
+                                            "sourceId": saved_gbm_source,
+                                            "metricKind": "prediction",
+                                            "binding": "explicit",
+                                        },
+                                    ],
+                                    "modelComparison": {
+                                        "baselineSourceId": saved_glm_source,
+                                        "challengerSourceId": saved_gbm_source,
+                                    },
                                     "filter": "Segment = 'B'",
                                     "filterSelectionMode": "single",
                                     "filterOperator": "and",
@@ -19169,8 +19273,8 @@ COPY (
                             """
                             () => {
                               const option = echarts.getInstanceByDom(document.querySelector("#chart"))?.getOption?.();
-                              return option?.yAxis?.[0]?.name === "actualNumerator / gbm_prediction"
-                                && option?.yAxis?.[1]?.name === "gbm_prediction";
+                              return option?.yAxis?.[0]?.name === "actualNumerator / denominator"
+                                && option?.yAxis?.[1]?.name === "denominator";
                             }
                             """,
                             timeout=10_000,
@@ -19207,15 +19311,15 @@ COPY (
 
                         self.assertEqual(request_body["x"], "gbm_to_glm_ratio")
                         self.assertEqual(request_body["xSource"], active_ratio_source)
-                        self.assertEqual(request_body["denominator"], "gbm_prediction")
-                        self.assertEqual(request_body["denominatorSource"], active_gbm_source)
+                        self.assertEqual(request_body["denominator"], "denominator")
+                        self.assertEqual(request_body["denominatorSource"], "dataset")
                         self.assertEqual(request_body["responses"][1]["source"], active_glm_source)
                         self.assertEqual(request_body["responses"][2]["source"], active_gbm_source)
-                        self.assertEqual(axis_presentation["responseName"], "actualNumerator / gbm_prediction")
-                        self.assertEqual(axis_presentation["denominatorName"], "gbm_prediction")
+                        self.assertEqual(axis_presentation["responseName"], "actualNumerator / denominator")
+                        self.assertEqual(axis_presentation["denominatorName"], "denominator")
                         self.assertEqual(
                             axis_presentation["primaryLegendLabel"],
-                            "actualNumerator / gbm_prediction",
+                            "actualNumerator / denominator",
                         )
                         self.assertGreater(
                             axis_presentation["gridRight"],
@@ -19236,13 +19340,16 @@ COPY (
                         )
                         self.assertEqual(
                             selected_denominator,
-                            {"value": "gbm_prediction", "source": active_gbm_source, "kind": "prediction"},
+                            {"value": "denominator", "source": "dataset", "kind": "dataset"},
                         )
                         self.assertNotIn("missing x-axis source", status_text)
                         self.assertNotIn("cannot be used", status_text)
 
                         page.locator("#glmTool").click()
                         page.locator("#glmBuildBtn").wait_for(timeout=10_000)
+                        self.assertFalse(page.locator("#glmBuildBtn").is_disabled())
+                        self.assertFalse(page.locator("#glmModelDenominatorBuildNotice").is_visible())
+                        page.locator("#denominator").select_option("gbm_prediction")
                         self.assertTrue(page.locator("#glmBuildBtn").is_disabled())
                         self.assertTrue(page.locator("#glmModelDenominatorBuildNotice").is_visible())
                         page.locator("#denominator").select_option("__none__")
@@ -19322,6 +19429,42 @@ COPY (
                             "reopening Line/Bar after a GBM activation should issue one deferred chart request",
                         )
                         self.assertNotIn("Banding estimate failed", status_text)
+                        with page.expect_response(
+                            lambda response: response.url.endswith("/api/chart") and response.status == 200,
+                            timeout=10_000,
+                        ) as incompatible_response_info:
+                            page.locator(
+                                '.saved-favourite-option[data-favourite-id="incompatible-exact-view"]'
+                            ).click()
+                        incompatible_request = incompatible_response_info.value.request.post_data_json
+                        self.assertEqual(incompatible_request["denominator"], "__none__")
+                        self.assertNotEqual(incompatible_request["x"], "prediction_ratio")
+                        self.assertEqual(len(incompatible_request["responses"]), 1)
+                        self.assertEqual(
+                            page.locator("#expectedList .feature.active.expected-none-option").count(),
+                            1,
+                        )
+                        self.assertFalse(
+                            page.locator(
+                                '.saved-favourite-option[data-favourite-id="incompatible-exact-view"]'
+                            ).evaluate("button => button.classList.contains('active')")
+                        )
+                        self.assertIn(
+                            "Favourite model selections that do not match the restored Numerator and Denominator were removed.",
+                            page.locator("#status").text_content(timeout=10_000) or "",
+                        )
+                        stored_favourites = json.loads(favourites_path.read_text(encoding="utf-8"))["favourites"]
+                        stored_incompatible = next(
+                            favourite for favourite in stored_favourites
+                            if favourite["id"] == "incompatible-exact-view"
+                        )
+                        self.assertEqual(
+                            stored_incompatible["view"]["modelComparison"],
+                            {
+                                "baselineSourceId": saved_glm_source,
+                                "challengerSourceId": saved_gbm_source,
+                            },
+                        )
                         self.assertEqual(page_errors, [])
                     finally:
                         browser.close()
@@ -19357,7 +19500,7 @@ COPY (
             base_url, server, thread = self.start_app(
                 data_path,
                 tools=["line_bar", "glm"],
-                defaults={"x": "Segment", "actual": "actualNumerator", "denominator": "__none__"},
+                defaults={"x": "Segment", "actual": "actualNumerator", "denominator": "denominator"},
             )
             held_expected_routes: list[Any] = []
             held_old_chart_routes: list[Any] = []
@@ -19955,7 +20098,7 @@ COPY (
             base_url, server, thread = self.start_app(
                 data_path,
                 tools=["line_bar", "glm"],
-                defaults={"x": "Segment", "actual": "actualNumerator", "denominator": "__none__"},
+                defaults={"x": "Segment", "actual": "actualNumerator", "denominator": "denominator"},
             )
             held_routes: list[Any] = []
 
@@ -24402,33 +24545,63 @@ COPY (
                           value: button.dataset.value || "",
                           source: button.dataset.sourceId || "",
                         }));
-                      const scrollValues = [...document.querySelectorAll("#expectedList > .line-bar-scroll-region > .feature")]
-                        .map((button) => button.dataset.value || "");
+                      const modelRows = [...document.querySelectorAll(
+                        "#expectedList > .line-bar-scroll-region > .feature.line-bar-special-row"
+                      )].map((button) => ({
+                        value: button.dataset.value || "",
+                        source: button.dataset.sourceId || "",
+                      }));
+                      const datasetValues = [...document.querySelectorAll(
+                        "#expectedList > .line-bar-scroll-region > .feature:not(.line-bar-special-row)"
+                      )].map((button) => button.dataset.value || "");
                       const none = document.querySelector("#expectedList > .line-bar-pinned-region > .feature.expected-none-option");
                       const noneKind = none?.querySelector(".kind");
-                      const special = document.querySelector('#expectedList > .line-bar-pinned-region > .feature[data-value="glm_prediction"]');
+                      const special = document.querySelector('#expectedList > .line-bar-scroll-region > .feature[data-value="glm_prediction"]');
+                      const selectedSpecial = document.querySelector(
+                        '#expectedList > .line-bar-scroll-region > .feature.active[data-source-id="glm:browser-smoke-glm:predictions"]'
+                      );
                       return {
                         pinned,
-                        scrollValues,
+                        modelRows,
+                        datasetValues,
                         noneFontWeight: none ? getComputedStyle(none).fontWeight : "",
                         noneKindFontWeight: noneKind ? getComputedStyle(noneKind).fontWeight : "",
                         noneTextTransform: noneKind ? getComputedStyle(noneKind).textTransform : "",
                         specialBackground: special ? getComputedStyle(special).backgroundColor : "",
+                        selectedSpecialBackground: selectedSpecial ? getComputedStyle(selectedSpecial).backgroundColor : "",
                       };
                     }
                     """
                 )
                 self.assertEqual(
-                    [row["value"] for row in expected_pinned_state["pinned"][:7]],
-                    ["", "glm_prediction", "gbm_prediction", "glm_prediction_rate", "gbm_prediction_rate", "glm_tabulated_prediction", "gbm_tabulated_prediction"],
+                    [row["value"] for row in expected_pinned_state["pinned"]],
+                    [""],
                 )
                 self.assertEqual(expected_pinned_state["pinned"][0]["text"], "No expected lineoff")
                 self.assertEqual(expected_pinned_state["noneFontWeight"], "400")
                 self.assertEqual(expected_pinned_state["noneKindFontWeight"], "400")
                 self.assertEqual(expected_pinned_state["noneTextTransform"], "none")
-                self.assertIn("glm_tabulated_prediction", [row["value"] for row in expected_pinned_state["pinned"]])
-                self.assertIn("gbm_tabulated_prediction", [row["value"] for row in expected_pinned_state["pinned"]])
+                self.assertEqual(
+                    expected_pinned_state["modelRows"],
+                    [
+                        {"value": "glm_prediction", "source": "glm:browser-smoke-glm-delete-b:predictions"},
+                        {"value": "glm_prediction", "source": "glm:browser-smoke-glm-delete-a:predictions"},
+                        {"value": "glm_prediction", "source": "glm:browser-smoke-glm-2:predictions"},
+                        {"value": "glm_prediction", "source": "glm:browser-smoke-glm:predictions"},
+                        {"value": "glm_tabulated_prediction", "source": "glm:browser-smoke-glm:predictions"},
+                        {"value": "gbm_prediction", "source": "gbm:browser-smoke-model-2:predictions"},
+                        {"value": "gbm_tabulated_prediction", "source": "gbm:browser-smoke-model-2:predictions"},
+                        {"value": "gbm_prediction", "source": "gbm:browser-smoke-model:predictions"},
+                    ],
+                )
+                self.assertNotIn("glm_prediction_rate", [row["value"] for row in expected_pinned_state["modelRows"]])
+                self.assertNotIn("gbm_prediction_rate", [row["value"] for row in expected_pinned_state["modelRows"]])
                 self.assertTrue(expected_pinned_state["specialBackground"])
+                self.assertTrue(expected_pinned_state["selectedSpecialBackground"])
+                self.assertNotEqual(
+                    expected_pinned_state["selectedSpecialBackground"],
+                    expected_pinned_state["specialBackground"],
+                )
                 page.locator("#chartExpectedToggle").click()
                 page.wait_for_function(
                     """
@@ -24450,16 +24623,24 @@ COPY (
                     () => ({
                       pinned: [...document.querySelectorAll("#expectedList > .line-bar-pinned-region > .feature")]
                         .map((button) => button.dataset.value || ""),
-                      scroll: [...document.querySelectorAll("#expectedList > .line-bar-scroll-region > .feature")]
-                        .map((button) => button.dataset.value || ""),
+                      models: [...document.querySelectorAll(
+                        "#expectedList > .line-bar-scroll-region > .feature.line-bar-special-row"
+                      )].map((button) => `${button.dataset.sourceId || ""}:${button.dataset.value || ""}`),
+                      dataset: [...document.querySelectorAll(
+                        "#expectedList > .line-bar-scroll-region > .feature:not(.line-bar-special-row)"
+                      )].map((button) => button.dataset.value || ""),
                     })
                     """
                 )
                 self.assertEqual(
-                    expected_alpha_state["pinned"][:7],
-                    ["", "glm_prediction", "gbm_prediction", "glm_prediction_rate", "gbm_prediction_rate", "glm_tabulated_prediction", "gbm_tabulated_prediction"],
+                    expected_alpha_state["pinned"],
+                    [""],
                 )
-                self.assertEqual(expected_alpha_state["scroll"], sorted(expected_alpha_state["scroll"], key=str.casefold))
+                self.assertEqual(
+                    expected_alpha_state["models"],
+                    [f'{row["source"]}:{row["value"]}' for row in expected_pinned_state["modelRows"]],
+                )
+                self.assertEqual(expected_alpha_state["dataset"], sorted(expected_alpha_state["dataset"], key=str.casefold))
                 page.locator('.segmented[data-control="expectedSort"] button[data-value="original"]').click()
 
                 feature_state = page.evaluate(
@@ -24581,6 +24762,11 @@ COPY (
                 )
                 self.assertEqual(baseline_picker.input_value(), "glm:browser-smoke-glm:predictions")
                 self.assertEqual(challenger_picker.input_value(), "gbm:browser-smoke-model-2:predictions")
+                self.assertEqual(
+                    page.locator(".line-bar-model-comparison-help").text_content(),
+                    "GLM and GBM choices are limited to models built for actualNumerator / denominator; "
+                    "OTHER contains numeric dataset columns. The x-axis is the Challenger value divided by the Baseline value.",
+                )
 
                 glm_ratio_source_id = "model_ratio:prediction_ratio:glm:browser-smoke-glm-2:glm:browser-smoke-glm"
                 baseline_picker.select_option("glm:browser-smoke-glm:predictions")
@@ -25153,6 +25339,12 @@ COPY (
                         activeDotCenterDelta,
                         fitTimeText: document.querySelector('#glmModelGrid .tabulator-row .tabulator-cell[tabulator-field="fit_ms"]')?.textContent.trim() || "",
                         overallTimeText: document.querySelector('#glmModelGrid .tabulator-row .tabulator-cell[tabulator-field="elapsed_ms"]')?.textContent.trim() || "",
+                        scopeByModel: Object.fromEntries(
+                          [...document.querySelectorAll("#glmModelGrid .tabulator-row")].map((row) => [
+                            row.querySelector('.tabulator-cell[tabulator-field="model_label"]')?.textContent.trim() || "",
+                            row.querySelector('.tabulator-cell[tabulator-field="scope_display"]')?.textContent.trim() || "",
+                          ]),
+                        ),
                         capturedModel: (() => {
                           const row = [...document.querySelectorAll("#glmModelGrid .tabulator-row")]
                             .find((candidate) => candidate.textContent.includes("Browser smoke GLM"));
@@ -25164,6 +25356,7 @@ COPY (
                             giniTr: row?.querySelector('.tabulator-cell[tabulator-field="gini_tr"]')?.textContent.trim() || "",
                             giniTe: row?.querySelector('.tabulator-cell[tabulator-field="gini_te"]')?.textContent.trim() || "",
                             giniVl: row?.querySelector('.tabulator-cell[tabulator-field="gini_vl"]')?.textContent.trim() || "",
+                            scope: row?.querySelector('.tabulator-cell[tabulator-field="scope_display"]')?.textContent.trim() || "",
                           };
                         })(),
                         legacyModel: (() => {
@@ -25177,6 +25370,7 @@ COPY (
                             giniTr: row?.querySelector('.tabulator-cell[tabulator-field="gini_tr"]')?.textContent.trim() || "",
                             giniTe: row?.querySelector('.tabulator-cell[tabulator-field="gini_te"]')?.textContent.trim() || "",
                             giniVl: row?.querySelector('.tabulator-cell[tabulator-field="gini_vl"]')?.textContent.trim() || "",
+                            scope: row?.querySelector('.tabulator-cell[tabulator-field="scope_display"]')?.textContent.trim() || "",
                           };
                         })(),
                         selectedRows: document.querySelectorAll("#glmModelGrid .tabulator-row.tabulator-selected").length,
@@ -25189,12 +25383,14 @@ COPY (
                 )
                 self.assertEqual(
                     glm_navigator_state["headers"],
-                    ["Name", "Created", "Response", "Weight", "Family", "Terms", "Features", "Interactions", "Tabulated", "Deviance", "AIC", "BIC", "gini_tr", "gini_te", "gini_vl", "Rows", "Fit time", "Overall time"],
+                    ["Name", "Created", "Response", "Weight", "Family", "Terms", "Features", "Interactions", "Tabulated", "Deviance", "AIC", "BIC", "gini_tr", "gini_te", "gini_vl", "Rows", "Scope", "Fit time", "Overall time"],
                 )
                 self.assertEqual(glm_navigator_state["fitTimeText"], "1.2s")
                 self.assertEqual(glm_navigator_state["overallTimeText"], "1m 03s")
-                self.assertEqual(glm_navigator_state["capturedModel"], {"terms": "3", "features": "2", "interactions": "1", "tabulated": "Yes", "giniTr": "0.8123", "giniTe": "-0.25", "giniVl": "--"})
-                self.assertEqual(glm_navigator_state["legacyModel"], {"terms": "", "features": "", "interactions": "", "tabulated": "-", "giniTr": "--", "giniTe": "--", "giniVl": "--"})
+                self.assertEqual(glm_navigator_state["capturedModel"], {"terms": "3", "features": "2", "interactions": "1", "tabulated": "Yes", "giniTr": "0.8123", "giniTe": "-0.25", "giniVl": "--", "scope": "All"})
+                self.assertEqual(glm_navigator_state["legacyModel"], {"terms": "", "features": "", "interactions": "", "tabulated": "-", "giniTr": "--", "giniTe": "--", "giniVl": "--", "scope": "All"})
+                self.assertEqual(glm_navigator_state["scopeByModel"]["Second smoke GLM"], "Training")
+                self.assertEqual(glm_navigator_state["scopeByModel"]["Disposable smoke GLM B"], "Training + Test")
                 self.assertEqual(glm_navigator_state["borderWidth"], "0px")
                 self.assertEqual(glm_navigator_state["borderRadius"], "0px")
                 self.assertEqual(glm_navigator_state["gridBorderLeftWidth"], "0px")
@@ -25238,6 +25434,31 @@ COPY (
                 self.assertTrue(glm_navigator_state["renameDisabled"])
                 self.assertTrue(glm_navigator_state["activateDisabled"])
                 self.assertTrue(glm_navigator_state["deleteDisabled"])
+                page.locator('#glmModelGrid .tabulator-col[tabulator-field="scope_display"] .tabulator-col-sorter').click()
+                page.wait_for_function(
+                    """
+                    () => document.querySelector('#glmModelGrid .tabulator-col[tabulator-field="scope_display"]')
+                      ?.getAttribute("aria-sort") === "ascending"
+                    """,
+                    timeout=10_000,
+                )
+                sorted_scope_values = page.locator(
+                    '#glmModelGrid .tabulator-row .tabulator-cell[tabulator-field="scope_display"]'
+                ).evaluate_all("cells => cells.map((cell) => cell.textContent.trim())")
+                self.assertEqual(sorted_scope_values, ["All", "All", "Training", "Training + Test"])
+                page.evaluate(
+                    """
+                    () => window.Tabulator?.findTable?.("#glmModelGrid")?.[0]
+                      ?.setSort?.("created_sort", "desc")
+                    """
+                )
+                page.wait_for_function(
+                    """
+                    () => document.querySelector('#glmModelGrid .tabulator-col[tabulator-field="created_sort"]')
+                      ?.getAttribute("aria-sort") === "descending"
+                    """,
+                    timeout=10_000,
+                )
                 page.locator("#glmModelGrid .tabulator-row", has_text="Disposable smoke GLM A").click()
                 page.locator("#glmModelGrid .tabulator-row", has_text="Disposable smoke GLM B").click()
                 plain_glm_selection = page.evaluate(
@@ -26669,7 +26890,7 @@ COPY (
                       .map((button) => button.textContent || "")
                     """
                 )
-                self.assertTrue(any("GBM · Second smoke model" in option for option in expected_options))
+                self.assertFalse(any("GBM · Second smoke model" in option for option in expected_options))
                 self.assertFalse(any("SHAP__" in option for option in expected_options))
 
                 chart_requests_before = chart_requests

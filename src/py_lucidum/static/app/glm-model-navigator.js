@@ -32,6 +32,7 @@ export function createGlmModelNavigator({
         n_features: modelNumberOrNull(model.n_features ?? diagnostics.n_features),
         n_interactions: modelNumberOrNull(model.n_interactions ?? diagnostics.n_interactions),
         training_rows: Number(model.training_rows || diagnostics.training_rows || 0),
+        scope_display: glmTrainingScopeLabel(model.training_scope),
         fit_ms: timingMilliseconds(model, "fit_ms"),
         fit_display: timingDisplay(model, "fit_ms"),
         elapsed_ms: timingMilliseconds(model, "elapsed_ms"),
@@ -66,9 +67,10 @@ export function createGlmModelNavigator({
             <th class="numeric" title="Normalized Gini for SAMPLE = training">gini_tr</th>
             <th class="numeric" title="Normalized Gini for SAMPLE = test">gini_te</th>
             <th class="numeric" title="Normalized Gini for SAMPLE = validation">gini_vl</th>
-            <th>rows</th>
-            <th>fit time</th>
-            <th>overall time</th>
+            <th>Rows</th>
+            <th>Scope</th>
+            <th>Fit time</th>
+            <th>Overall time</th>
           </tr>
         </thead>
         <tbody>
@@ -105,6 +107,7 @@ export function createGlmModelNavigator({
         <td class="numeric">${escapeHtml(formatModelMetric(model.gini_te ?? diagnostics.gini_te))}</td>
         <td class="numeric">${escapeHtml(formatModelMetric(model.gini_vl ?? diagnostics.gini_vl))}</td>
         <td class="numeric">${Number(model.training_rows || diagnostics.training_rows || 0).toLocaleString()}</td>
+        <td>${escapeHtml(glmTrainingScopeLabel(model.training_scope))}</td>
         <td class="numeric">${escapeHtml(timingDisplay(model, "fit_ms"))}</td>
         <td class="numeric">${escapeHtml(timingDisplay(model, "elapsed_ms"))}</td>
       </tr>
@@ -127,6 +130,14 @@ export function createGlmModelNavigator({
     rowHtml,
     rows,
   };
+}
+
+export function glmTrainingScopeLabel(value) {
+  const scope = String(value ?? "").trim().toLowerCase();
+  if (!scope || scope === "all") return "All";
+  if (scope === "training") return "Training";
+  if (scope === "training_test") return "Training + Test";
+  return "--";
 }
 
 function optionalCount(value) {

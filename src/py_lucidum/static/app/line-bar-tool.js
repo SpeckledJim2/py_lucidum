@@ -36,6 +36,11 @@ const LINE_BAR_PRIMARY_EXPECTED_COLUMNS = {
   gbm: "gbm_prediction",
 };
 
+const LINE_BAR_TABULATED_EXPECTED_COLUMNS = {
+  glm: "glm_tabulated_prediction",
+  gbm: "gbm_tabulated_prediction",
+};
+
 function lineBarExpectedModelFamily(selection) {
   const sourceId = String(selection?.sourceId || selection?.source || "");
   if (sourceId.startsWith("glm:")) return "glm";
@@ -105,13 +110,27 @@ function lineBarModelTrainingPair(source, family) {
 }
 
 function lineBarKpiPairMatches(left, right) {
+  const normalise = (pair) => {
+    if (!pair) return null;
+    const denominator = lineBarNormaliseKpiDenominator(pair.denominator);
+    return {
+      numerator: String(pair.numerator || "").trim(),
+      numeratorSource: String(pair.numeratorSource || "dataset"),
+      denominator,
+      denominatorSource: denominator === "__none__"
+        ? "dataset"
+        : String(pair.denominatorSource || "dataset"),
+    };
+  };
+  const normalisedLeft = normalise(left);
+  const normalisedRight = normalise(right);
   return Boolean(
-    left
-    && right
-    && left.numerator === right.numerator
-    && left.numeratorSource === right.numeratorSource
-    && left.denominator === right.denominator
-    && left.denominatorSource === right.denominatorSource
+    normalisedLeft
+    && normalisedRight
+    && normalisedLeft.numerator === normalisedRight.numerator
+    && normalisedLeft.numeratorSource === normalisedRight.numeratorSource
+    && normalisedLeft.denominator === normalisedRight.denominator
+    && normalisedLeft.denominatorSource === normalisedRight.denominatorSource
   );
 }
 
@@ -345,15 +364,17 @@ export function lineBarAdditiveSelectionRequested(event, platform = "") {
 }
 
 export function lineBarModelComparisonCandidates(dataSources = [], currentKpi = null, options = {}) {
-  const includeSourceIds = new Set((options.includeSourceIds || []).map(String).filter(Boolean));
   const rawCandidates = (Array.isArray(dataSources) ? dataSources : []).flatMap((source) => {
     const family = lineBarModelFamilyForSource(source);
     if (!family || String(source?.kind || "") !== `${family}_predictions`) return [];
     const predictionColumn = LINE_BAR_PRIMARY_EXPECTED_COLUMNS[family];
-    if (!(source?.columns || []).some((column) => String(column?.name || "") === predictionColumn)) return [];
+    if (!(source?.columns || []).some((column) => (
+      String(column?.name || "") === predictionColumn
+      && ["integer", "numeric"].includes(String(column?.kind || ""))
+    ))) return [];
     const trainingKpi = lineBarModelTrainingPair(source, family);
     const compatible = lineBarKpiPairMatches(trainingKpi, currentKpi);
-    if (!compatible && !includeSourceIds.has(String(source?.id || ""))) return [];
+    if (!compatible) return [];
     const baseLabel = `${family.toUpperCase()} · ${String(source?.model_label || source?.model_id || "Model")}`;
     return [{
       comparisonId: String(source?.id || ""),
@@ -398,6 +419,58 @@ export function lineBarModelComparisonCandidates(dataSources = [], currentKpi = 
       ? `${candidate.baseLabel} (${candidate.modelId})`
       : candidate.baseLabel,
   })), ...otherCandidates];
+}
+
+export function lineBarCompatibleExpectedColumns(dataSources = [], currentKpi = null) {
+  const familyOrder = { glm: 0, gbm: 1 };
+  const sources = (Array.isArray(dataSources) ? dataSources : []).flatMap((source) => {
+    const family = lineBarModelFamilyForSource(source);
+    if (!family || String(source?.kind || "") !== `${family}_predictions`) return [];
+    const columns = Array.isArray(source?.columns) ? source.columns : [];
+    const primary = LINE_BAR_PRIMARY_EXPECTED_COLUMNS[family];
+    if (!columns.some((column) => (
+      String(column?.name || "") === primary
+      && ["integer", "numeric"].includes(String(column?.kind || ""))
+    ))) return [];
+    if (!lineBarKpiPairMatches(lineBarModelTrainingPair(source, family), currentKpi)) return [];
+    const modelId = String(source?.model_id || "");
+    const baseLabel = `${family.toUpperCase()} · ${String(source?.model_label || modelId || "Model")}`;
+    return [{
+      source,
+      family,
+      modelId,
+      baseLabel,
+      createdAt: String(source?.created_at || ""),
+    }];
+  });
+  const labelCounts = new Map();
+  sources.forEach((source) => {
+    labelCounts.set(source.baseLabel, (labelCounts.get(source.baseLabel) || 0) + 1);
+  });
+  sources.sort((left, right) => (
+    familyOrder[left.family] - familyOrder[right.family]
+    || right.createdAt.localeCompare(left.createdAt)
+    || left.baseLabel.localeCompare(right.baseLabel, undefined, { sensitivity: "base", numeric: true })
+    || left.modelId.localeCompare(right.modelId, undefined, { sensitivity: "base", numeric: true })
+  ));
+  return sources.flatMap(({ source, family, modelId, baseLabel }) => {
+    const label = (labelCounts.get(baseLabel) || 0) > 1 ? `${baseLabel} (${modelId})` : baseLabel;
+    const expectedNames = [
+      LINE_BAR_PRIMARY_EXPECTED_COLUMNS[family],
+      LINE_BAR_TABULATED_EXPECTED_COLUMNS[family],
+    ];
+    const columnsByName = new Map((source.columns || []).map((column) => [String(column?.name || ""), column]));
+    return expectedNames.flatMap((name, index) => {
+      const column = columnsByName.get(name);
+      if (!column || !["integer", "numeric"].includes(String(column.kind || ""))) return [];
+      return [{
+        ...column,
+        label: index === 0 ? label : `${label} · tabulated`,
+        source_id: String(source.id || ""),
+        model_binding: source.active ? "model" : "explicit",
+      }];
+    });
+  });
 }
 
 export function lineBarOtherColumnToken(columnName = "") {
@@ -494,6 +567,7 @@ export function createLineBarTool({
   refreshLineBar,
   clearActiveFavouriteSelection = () => false,
   modelComparisonCandidates = () => [],
+  modelComparisonKpi = () => null,
   setModelComparison = () => null,
 }) {
   const CHART_MAX_GROUPS = 10000;
@@ -866,7 +940,7 @@ export function createLineBarTool({
 
   function expectedDisplayColumns() {
     const columns = expectedColumns().filter((column) => column.source_role !== "gbm_shap_value");
-    const specialColumns = orderedLineBarSpecialColumns(columns);
+    const specialColumns = columns.filter(isLineBarSpecialColumn);
     const otherColumns = columns.filter((column) => !isLineBarSpecialColumn(column));
     if (state.expectedSort === "alpha") {
       otherColumns.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
@@ -1682,7 +1756,7 @@ export function createLineBarTool({
     for (const col of specialColumns) {
       const label = String(col.label || col.name);
       if (query && !`${col.name} ${label}`.toLowerCase().includes(query)) continue;
-      addExpectedButton(pinned, label, col.name, col.kind, col.source_id || state.source || "dataset", "line-bar-special-row");
+      addExpectedButton(scroll, label, col.name, col.kind, col.source_id || state.source || "dataset", "line-bar-special-row");
     }
     pinned.hidden = pinned.childElementCount === 0;
 
@@ -1796,11 +1870,12 @@ export function createLineBarTool({
     popover.setAttribute("role", "dialog");
     popover.setAttribute("aria-label", "Choose prediction ratio sources");
     popover._anchor = anchor;
+    const kpiLabel = lineBarKpiPairLabel(modelComparisonKpi());
     popover.innerHTML = `
       <div class="line-bar-model-comparison-title">Prediction ratio</div>
       <label>Baseline<select data-role="baseline"></select></label>
       <label>Challenger<select data-role="challenger"></select></label>
-      <div class="line-bar-model-comparison-help">X-axis is Challenger value / Baseline value.</div>
+      <div class="line-bar-model-comparison-help">GLM and GBM choices are limited to models built for ${escapeHtml(kpiLabel)}; OTHER contains numeric dataset columns. The x-axis is the Challenger value divided by the Baseline value.</div>
       <div class="line-bar-model-comparison-actions">
         <button type="button" class="secondary" data-action="swap">Swap</button>
         <span></span>

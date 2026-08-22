@@ -1711,7 +1711,7 @@
       }
 
       .glm-model-table {
-        min-width: 1320px;
+        min-width: 1432px;
       }
 
       .glm-model-table th,
@@ -1808,10 +1808,14 @@
       }
 
       .glm-model-table th:nth-child(18) {
-        width: 84px;
+        width: 112px;
       }
 
       .glm-model-table th:nth-child(19) {
+        width: 84px;
+      }
+
+      .glm-model-table th:nth-child(20) {
         width: 104px;
       }
 
