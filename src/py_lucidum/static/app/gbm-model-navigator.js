@@ -26,6 +26,9 @@ export function createGbmModelNavigator({
       constraint_display: modelInteractionConstraintLabel(model.feature_interaction_constraints),
       best_training_metric: bestMetric(model, "training"),
       best_test_metric: bestMetric(model, "test"),
+      gini_tr: modelNumberOrNull(model.gini_tr),
+      gini_te: modelNumberOrNull(model.gini_te),
+      gini_vl: modelNumberOrNull(model.gini_vl),
       param_num_iterations: parameterNumber(model, "num_iterations"),
       param_learning_rate: parameterNumber(model, "learning_rate"),
       param_num_leaves: parameterNumber(model, "num_leaves"),
@@ -61,6 +64,9 @@ export function createGbmModelNavigator({
             <th class="numeric">Best iter.</th>
             <th class="numeric compact" title="Training metric at best iteration">tr@best</th>
             <th class="numeric compact" title="Test metric at best iteration">te@best</th>
+            <th class="numeric compact" title="Normalized Gini for SAMPLE = training">gini_tr</th>
+            <th class="numeric compact" title="Normalized Gini for SAMPLE = test">gini_te</th>
+            <th class="numeric compact" title="Normalized Gini for SAMPLE = validation">gini_vl</th>
             <th class="numeric compact" title="num_iterations">n_iter</th>
             <th class="numeric compact" title="learning_rate">lr</th>
             <th class="numeric compact" title="num_leaves">leaves</th>
@@ -91,6 +97,9 @@ export function createGbmModelNavigator({
               <td class="numeric">${count(model.best_iteration)}</td>
               <td class="numeric">${escapeHtml(formatModelMetric(model.best_training_metric))}</td>
               <td class="numeric">${escapeHtml(formatModelMetric(model.best_test_metric))}</td>
+              <td class="numeric">${escapeHtml(formatModelMetric(model.gini_tr))}</td>
+              <td class="numeric">${escapeHtml(formatModelMetric(model.gini_te))}</td>
+              <td class="numeric">${escapeHtml(formatModelMetric(model.gini_vl))}</td>
               <td class="numeric">${escapeHtml(integer(model.param_num_iterations))}</td>
               <td class="numeric">${escapeHtml(decimal(model.param_learning_rate))}</td>
               <td class="numeric">${escapeHtml(integer(model.param_num_leaves))}</td>

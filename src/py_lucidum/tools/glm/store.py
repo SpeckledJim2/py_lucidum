@@ -357,6 +357,8 @@ class GlmModelStore:
         item["sources"] = self.model_sources(model_id)
         item["diagnostics"] = diagnostics
         item["metrics"] = diagnostics
+        for field in ("gini_tr", "gini_te", "gini_vl"):
+            item[field] = json_safe_number(diagnostics.get(field))
         if diagnostics.get("training_rows") is not None:
             item["training_rows"] = diagnostics.get("training_rows")
         if diagnostics.get("scored_rows") is not None:

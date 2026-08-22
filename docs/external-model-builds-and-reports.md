@@ -215,6 +215,12 @@ The two `01` scripts follow the same six-part sequence:
 5. Calculate and save normal model results.
 6. Optionally install the saved model in Lucidum.
 
+Both `01` writers save `gini_tr`, `gini_te`, and `gini_vl` from final predictions.
+They use Lucidum's canonical [Normalized Gini definition](user-guide.md#normalized-gini),
+including exposure/rate treatment, tie handling, undefined cases, and configured
+sample-label mapping. These metrics are diagnostic only and do not affect fitting,
+early stopping, or model selection.
+
 ### GLM settings
 
 The supplied `config_glm.yaml` demonstrates these fields:
@@ -321,6 +327,10 @@ Training and Test are passed to LightGBM. Validation is not used for fitting or
 early stopping. After the model has scored all rows, the configured metric is
 calculated on Validation from those saved predictions and stored as one result
 at the best iteration.
+
+The three normalized-Gini suffixes always refer to the configured Training, Test,
+and Validation sample roles, not to whether a role was used as a holdout. See the
+[canonical definition and undefined cases](user-guide.md#normalized-gini).
 
 For Poisson, Gamma, and Tweedie objectives with a denominator, the script uses
 `log(denominator)` as the LightGBM offset. It saves both the predicted numerator
@@ -483,10 +493,13 @@ The HTML contains:
 - Source, model, and tabulated-score paths plus other run information.
 - The fitted family and link; Tweedie models also show their variance power.
 - Model performance for Training, Test, and Validation. Every family shows
-  deviance and deviance explained. Binomial models also show weighted AUC,
-  Gini, and log loss; other models show weighted RMSE and MAE.
+  deviance, deviance explained, and normalized Gini. Binomial models also show
+  weighted AUC and log loss; other models show weighted RMSE and MAE.
 - The fitted coefficient table, including p-value styling when inference is
   available.
+- The tabulated model's Mean error, linear SD error, and number of missing
+  tabulated predictions, matching the diagnostics shown in Lucidum's GLM
+  Tabulations model table.
 - The tabulation index with table name, dimensions, cell counts, and Min, Max,
   and Span shown to four decimal places. It links to the full XLSX path.
 

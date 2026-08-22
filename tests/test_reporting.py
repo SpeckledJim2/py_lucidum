@@ -632,6 +632,21 @@ COPY (
                     "denominator_column": "W",
                 },
             )
+            store.write_json(
+                store.artifact_path(model_id, "diagnostics"),
+                {"gini_tr": 0.812345, "gini_te": 0.456789, "gini_vl": None},
+            )
+            store.write_json(
+                store.artifact_path(model_id, "tabulation_manifest"),
+                {
+                    "model_id": model_id,
+                    "diagnostics": {
+                        "mean_linear_error": 0.00123456,
+                        "linear_sd_error": 0.00234567,
+                        "missing_tabulated_prediction_rows": 7,
+                    },
+                },
+            )
             with store.artifact_path(model_id, "estimator").open("wb") as handle:
                 pickle.dump(
                     SimpleNamespace(
@@ -671,7 +686,7 @@ TO {sql_literal(str(store.artifact_path(model_id, 'coefficients')))} (FORMAT PAR
                 con.close()
                 dataset.con.close()
             workbook_path = model_dir / "tabulations" / "summary-model_tabulations_linear.xlsx"
-            workbook_path.parent.mkdir(parents=True)
+            workbook_path.parent.mkdir(parents=True, exist_ok=True)
             workbook_path.write_bytes(b"xlsx placeholder")
             tabulation_export = {
                 "path": workbook_path,
@@ -715,8 +730,35 @@ TO {sql_literal(str(store.artifact_path(model_id, 'coefficients')))} (FORMAT PAR
             self.assertEqual(payload["metadata"]["SAMPLE_ROWS"], ["fit", "CHECK", "future"])
             self.assertEqual(payload["performance"]["prediction_source"], "glm_prediction")
             self.assertEqual(payload["performance"]["rows"][0]["prediction"], "£10.33")
+            self.assertEqual(
+                [row["gini"] for row in payload["performance"]["rows"]],
+                ["0.8123", "0.4568", "—"],
+            )
+            self.assertIn(
+                {"key": "gini", "label": "Normalized Gini"},
+                payload["performance"]["columns"],
+            )
             self.assertNotIn("999", json.dumps(payload["performance"]))
             self.assertEqual(payload["tabulations"]["rows"], tabulation_export["index"]["rows"])
+            self.assertEqual(
+                payload["tabulations"]["diagnostics"]["rows"],
+                [
+                    {
+                        "model": "Summary model",
+                        "mean_error": "0.0012",
+                        "linear_sd_error": "0.0023",
+                        "missing": "7",
+                    }
+                ],
+            )
+            self.assertEqual(
+                payload["tabulations"]["diagnostics"]["raw"],
+                {
+                    "mean_linear_error": 0.00123456,
+                    "linear_sd_error": 0.00234567,
+                    "missing_tabulated_prediction_rows": 7.0,
+                },
+            )
             self.assertEqual(payload["coefficients"]["rows"][0]["estimate"], "1.2346")
             self.assertEqual(payload["coefficients"]["rows"][0]["p_value"], "0.5%")
             self.assertEqual(payload["coefficients"]["rows"][1]["std_error"], "--")
@@ -726,6 +768,9 @@ TO {sql_literal(str(store.artifact_path(model_id, 'coefficients')))} (FORMAT PAR
             self.assertIn(workbook_path.resolve().as_uri(), document)
             self.assertIn("<td>1.0000</td>", document)
             self.assertIn("<td>0.0000</td>", document)
+            self.assertIn("<code>gini_tr</code>", document)
+            self.assertIn('class="summary-table tabulation-diagnostics-table"', document)
+            self.assertIn("Number missing", document)
             for section in ("performance", "coefficients", "tabulations"):
                 self.assertIn(f'data-summary-section="{section}"', document)
 

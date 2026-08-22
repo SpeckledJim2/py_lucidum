@@ -711,6 +711,37 @@ class ExternalModelExampleTests(unittest.TestCase):
                 f"{script.name} must remain independent of py_lucidum",
             )
 
+    def test_external_gini_helper_maps_configured_sample_labels(self) -> None:
+        writer = load_model_results_writer()
+        roles = writer.canonical_sample_roles(
+            pd.Series(
+                [
+                    " Fit Rows ",
+                    "fit rows",
+                    "TEST ROWS",
+                    "Test Rows",
+                    "Future Rows",
+                    "future rows",
+                ]
+            ),
+            {
+                "training_value": "Fit Rows",
+                "test_value": "Test Rows",
+                "validation_value": "Future Rows",
+            },
+        )
+        metrics, warnings = writer.split_gini_metrics(
+            actual=[0, 1, 0, 1, 0, 1],
+            prediction=[0, 1, 1, 0, 0.5, 0.5],
+            sample_roles=roles,
+        )
+
+        self.assertEqual(
+            metrics,
+            {"gini_tr": 1.0, "gini_te": -1.0, "gini_vl": 0.0},
+        )
+        self.assertEqual(warnings, [])
+
     def test_external_glm_coefficients_use_stored_glum_inference(self) -> None:
         import numpy as np
         import pandas as pd
@@ -1234,6 +1265,12 @@ COPY (
             )
             self.assertIn(GLM_MODEL_ID, training_test_run.stdout)
             self.assertEqual(training_test_manifest["training_scope"], "training_test")
+            self.assertTrue(
+                all(
+                    training_test_diagnostics[field] is not None
+                    for field in ("gini_tr", "gini_te", "gini_vl")
+                )
+            )
 
             glm_payload["model"]["training_scope"] = "all"
             glm_config.write_text(yaml.safe_dump(glm_payload, sort_keys=False), encoding="utf-8")
@@ -1256,6 +1293,12 @@ COPY (
             self.assertGreater(
                 diagnostics["training_rows"],
                 training_test_diagnostics["training_rows"],
+            )
+            self.assertTrue(
+                all(
+                    diagnostics[field] is not None
+                    for field in ("gini_tr", "gini_te", "gini_vl")
+                )
             )
             self.assertTrue(formula["fit_intercept"])
             self.assertFalse(formula["estimator_fit_intercept"])
@@ -1346,6 +1389,19 @@ FROM read_parquet({sql_literal(str(glm_dir / 'predictions.parquet'))})
             self.assertFalse((model_results_root / "lucidum_artifacts.json").exists())
             self.assertNotIn("feature_config.json", {path.name for path in gbm_dir.iterdir()})
             self.assertNotIn("training_log.json", {path.name for path in gbm_dir.iterdir()})
+            glm_diagnostics = json.loads(
+                (glm_dir / "diagnostics.json").read_text(encoding="utf-8")
+            )
+            gbm_manifest = json.loads(
+                (gbm_dir / "manifest.json").read_text(encoding="utf-8")
+            )
+            for artifact in (glm_diagnostics, gbm_manifest):
+                self.assertTrue(
+                    all(
+                        artifact[field] is not None
+                        for field in ("gini_tr", "gini_te", "gini_vl")
+                    )
+                )
 
             con = duckdb.connect(database=":memory:")
             try:
@@ -1495,6 +1551,39 @@ FROM read_parquet({sql_literal(str(glm_dir / 'coefficients.parquet'))})
             )
             self.assertEqual(glm_summary_report["performance"]["prediction_source"], "glm_prediction")
             self.assertTrue(all(row["rmse"] != "—" for row in glm_summary_report["performance"]["rows"]))
+            glm_diagnostics = json.loads((glm_dir / "diagnostics.json").read_text(encoding="utf-8"))
+            self.assertIn(
+                {"key": "gini", "label": "Normalized Gini"},
+                glm_summary_report["performance"]["columns"],
+            )
+            self.assertEqual(
+                [row["gini"] for row in glm_summary_report["performance"]["rows"]],
+                [
+                    f"{glm_diagnostics['gini_tr']:.4f}",
+                    f"{glm_diagnostics['gini_te']:.4f}",
+                    f"{glm_diagnostics['gini_vl']:.4f}",
+                ],
+            )
+            glm_tabulation_manifest = json.loads(
+                (glm_dir / "tabulations" / "tabulation_manifest.json").read_text(encoding="utf-8")
+            )
+            glm_tabulation_diagnostics = glm_tabulation_manifest["diagnostics"]
+            summary_diagnostics = glm_summary_report["tabulations"]["diagnostics"]
+            self.assertEqual(
+                [column["label"] for column in summary_diagnostics["columns"]],
+                ["Model", "Mean error", "linear SD error", "Number missing"],
+            )
+            self.assertEqual(
+                summary_diagnostics["raw"],
+                {
+                    "mean_linear_error": glm_tabulation_diagnostics["mean_linear_error"],
+                    "linear_sd_error": glm_tabulation_diagnostics["linear_sd_error"],
+                    "missing_tabulated_prediction_rows": float(
+                        glm_tabulation_diagnostics["missing_tabulated_prediction_rows"]
+                    ),
+                },
+            )
+            self.assertEqual(summary_diagnostics["rows"][0]["missing"], "0")
             self.assertTrue(glm_summary_report["coefficients"]["rows"])
             self.assertEqual(
                 [column["label"] for column in glm_summary_report["coefficients"]["columns"]],

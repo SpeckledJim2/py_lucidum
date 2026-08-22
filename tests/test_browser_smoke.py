@@ -892,8 +892,31 @@ output:
                             ["Model performance", "Coefficients and p-values", "Tabulation summary"],
                         )
                         self.assertEqual(page.locator(".performance-table tbody tr").count(), 3)
+                        gini_column = page.locator(
+                            '.performance-table thead th:has-text("Normalized Gini")'
+                        )
+                        self.assertEqual(gini_column.count(), 1)
+                        gini_index = gini_column.evaluate(
+                            "element => Array.from(element.parentElement.children).indexOf(element) + 1"
+                        )
+                        gini_values = page.locator(
+                            f".performance-table tbody tr td:nth-child({gini_index})"
+                        ).all_inner_texts()
+                        self.assertTrue(
+                            all(re.fullmatch(r"-?\d+\.\d{4}", value) for value in gini_values),
+                            gini_values,
+                        )
                         self.assertGreater(page.locator(".coefficient-table tbody tr").count(), 1)
                         self.assertGreater(page.locator(".tabulation-table tbody tr").count(), 1)
+                        self.assertEqual(
+                            page.locator(".tabulation-diagnostics-table th").all_inner_texts(),
+                            ["MODEL", "MEAN ERROR", "LINEAR SD ERROR", "NUMBER MISSING"],
+                        )
+                        tabulation_diagnostic_values = page.locator(
+                            ".tabulation-diagnostics-table tbody tr td"
+                        ).all_inner_texts()
+                        self.assertIn("External browser GLM", tabulation_diagnostic_values)
+                        self.assertEqual(tabulation_diagnostic_values[-1], "0")
                         tabulation_values = page.locator(
                             ".tabulation-table tbody tr td:nth-child(5), "
                             ".tabulation-table tbody tr td:nth-child(6), "
@@ -14167,6 +14190,9 @@ COPY (
                         "shap_rows": 3 if model_id in {"browser-smoke-model", "browser-smoke-model-2"} else 0,
                         "sample_column": "SAMPLE",
                         "sample_source": "dataset",
+                        "gini_tr": 0.73456 if model_id == "browser-smoke-model" else None,
+                        "gini_te": -0.125 if model_id == "browser-smoke-model" else None,
+                        "gini_vl": None,
                         "timings": {"training_seconds": 1.234 if model_id == "browser-smoke-model" else 62.0},
                         "feature_scenario": (
                             {"name": "scenario1", "features": ["Age", "Segment"]}
@@ -15041,6 +15067,9 @@ COPY (
                 n_terms=3,
                 n_features=2,
                 n_interactions=1,
+                gini_tr=0.81234,
+                gini_te=-0.25,
+                gini_vl=None,
             )
             self.write_glm_tabulation_artifacts(glm_store, "browser-smoke-glm", include_segment=True, offset=0.0)
             self.write_tabulated_prediction_sidecar(
@@ -21432,6 +21461,9 @@ COPY (
         *,
         response_column: str = "actualNumerator",
         offset_column: str = "denominator",
+        gini_tr: float | None = None,
+        gini_te: float | None = None,
+        gini_vl: float | None = None,
     ) -> None:
         model_dir = store.create_model_dir(model_id)
         store.write_json(
@@ -21449,6 +21481,9 @@ COPY (
                 "scored_rows": len(predictions),
                 "sample_column": "SAMPLE",
                 "sample_source": "dataset",
+                "gini_tr": gini_tr,
+                "gini_te": gini_te,
+                "gini_vl": gini_vl,
             },
         )
         write_gbm_feature_config(
@@ -21514,6 +21549,9 @@ COPY (
         deviance: float = 67.89,
         dispersion: float = 1.2,
         coefficient_rows: int = 3,
+        gini_tr: float | None = None,
+        gini_te: float | None = None,
+        gini_vl: float | None = None,
     ) -> None:
         model_dir = store.create_model_dir(model_id)
         diagnostics = {
@@ -21523,6 +21561,9 @@ COPY (
             "na_in_fitted": 0,
             "training_rows": 2,
             "scored_rows": len(predictions),
+            "gini_tr": gini_tr,
+            "gini_te": gini_te,
+            "gini_vl": gini_vl,
         }
         if n_terms is not None:
             diagnostics["n_terms"] = n_terms
@@ -25120,6 +25161,9 @@ COPY (
                             features: row?.querySelector('.tabulator-cell[tabulator-field="n_features"]')?.textContent.trim() || "",
                             interactions: row?.querySelector('.tabulator-cell[tabulator-field="n_interactions"]')?.textContent.trim() || "",
                             tabulated: row?.querySelector('.tabulator-cell[tabulator-field="tabulated"]')?.textContent.trim() || "",
+                            giniTr: row?.querySelector('.tabulator-cell[tabulator-field="gini_tr"]')?.textContent.trim() || "",
+                            giniTe: row?.querySelector('.tabulator-cell[tabulator-field="gini_te"]')?.textContent.trim() || "",
+                            giniVl: row?.querySelector('.tabulator-cell[tabulator-field="gini_vl"]')?.textContent.trim() || "",
                           };
                         })(),
                         legacyModel: (() => {
@@ -25130,6 +25174,9 @@ COPY (
                             features: row?.querySelector('.tabulator-cell[tabulator-field="n_features"]')?.textContent.trim() || "",
                             interactions: row?.querySelector('.tabulator-cell[tabulator-field="n_interactions"]')?.textContent.trim() || "",
                             tabulated: row?.querySelector('.tabulator-cell[tabulator-field="tabulated"]')?.textContent.trim() || "",
+                            giniTr: row?.querySelector('.tabulator-cell[tabulator-field="gini_tr"]')?.textContent.trim() || "",
+                            giniTe: row?.querySelector('.tabulator-cell[tabulator-field="gini_te"]')?.textContent.trim() || "",
+                            giniVl: row?.querySelector('.tabulator-cell[tabulator-field="gini_vl"]')?.textContent.trim() || "",
                           };
                         })(),
                         selectedRows: document.querySelectorAll("#glmModelGrid .tabulator-row.tabulator-selected").length,
@@ -25142,12 +25189,12 @@ COPY (
                 )
                 self.assertEqual(
                     glm_navigator_state["headers"],
-                    ["Name", "Created", "Response", "Weight", "Family", "Terms", "Features", "Interactions", "Tabulated", "Deviance", "AIC", "BIC", "Rows", "Fit time", "Overall time"],
+                    ["Name", "Created", "Response", "Weight", "Family", "Terms", "Features", "Interactions", "Tabulated", "Deviance", "AIC", "BIC", "gini_tr", "gini_te", "gini_vl", "Rows", "Fit time", "Overall time"],
                 )
                 self.assertEqual(glm_navigator_state["fitTimeText"], "1.2s")
                 self.assertEqual(glm_navigator_state["overallTimeText"], "1m 03s")
-                self.assertEqual(glm_navigator_state["capturedModel"], {"terms": "3", "features": "2", "interactions": "1", "tabulated": "Yes"})
-                self.assertEqual(glm_navigator_state["legacyModel"], {"terms": "", "features": "", "interactions": "", "tabulated": "-"})
+                self.assertEqual(glm_navigator_state["capturedModel"], {"terms": "3", "features": "2", "interactions": "1", "tabulated": "Yes", "giniTr": "0.8123", "giniTe": "-0.25", "giniVl": "--"})
+                self.assertEqual(glm_navigator_state["legacyModel"], {"terms": "", "features": "", "interactions": "", "tabulated": "-", "giniTr": "--", "giniTe": "--", "giniVl": "--"})
                 self.assertEqual(glm_navigator_state["borderWidth"], "0px")
                 self.assertEqual(glm_navigator_state["borderRadius"], "0px")
                 self.assertEqual(glm_navigator_state["gridBorderLeftWidth"], "0px")
@@ -33890,6 +33937,14 @@ COPY (
                       rows: document.querySelectorAll("#gbmModelGrid .tabulator-row").length,
                       activeDots: document.querySelectorAll("#gbmModelGrid .gbm-model-active-dot").length,
                       activeDotRowText: document.querySelector("#gbmModelGrid .gbm-model-active-dot")?.closest(".tabulator-row")?.textContent || "",
+                      activeGini: (() => {
+                        const row = document.querySelector("#gbmModelGrid .gbm-model-active-dot")?.closest(".tabulator-row");
+                        return {
+                          tr: row?.querySelector('.tabulator-cell[tabulator-field="gini_tr"]')?.textContent.trim() || "",
+                          te: row?.querySelector('.tabulator-cell[tabulator-field="gini_te"]')?.textContent.trim() || "",
+                          vl: row?.querySelector('.tabulator-cell[tabulator-field="gini_vl"]')?.textContent.trim() || "",
+                        };
+                      })(),
                       selectedRows: document.querySelectorAll("#gbmModelGrid .tabulator-row.tabulator-selected").length,
                       renameDisabled: document.querySelector("#gbmRenameModelBtn")?.disabled,
                       activateDisabled: document.querySelector("#gbmActivateModelBtn")?.disabled,
@@ -33902,12 +33957,16 @@ COPY (
                     navigator_state["headers"],
                     [
                         "Name", "Created", "Response", "Weight", "Objective", "Metric", "Mode", "Constraints", "Train", "Best iter.",
-                        "tr@best", "te@best", "n_iter", "lr", "leaves", "depth", "min_leaf", "ES", "Run time", "Sample",
+                        "tr@best", "te@best", "gini_tr", "gini_te", "gini_vl", "n_iter", "lr", "leaves", "depth", "min_leaf", "ES", "Run time", "Sample",
                     ],
                 )
                 self.assertEqual(navigator_state["rows"], 4)
                 self.assertEqual(navigator_state["activeDots"], 1)
                 self.assertIn("Browser smoke model", navigator_state["activeDotRowText"])
+                self.assertEqual(
+                    navigator_state["activeGini"],
+                    {"tr": "0.7346", "te": "-0.125", "vl": "--"},
+                )
                 self.assertEqual(navigator_state["selectedRows"], 0)
                 self.assertTrue(navigator_state["renameDisabled"])
                 self.assertTrue(navigator_state["activateDisabled"])
@@ -36864,7 +36923,7 @@ COPY (
                     navigator_state["headers"],
                     [
                         "Name", "Created", "Response", "Weight", "Objective", "Metric", "Mode", "Constraints", "Train", "Best iter.",
-                        "tr@best", "te@best", "n_iter", "lr", "leaves", "depth", "min_leaf", "ES", "Run time", "Sample",
+                        "tr@best", "te@best", "gini_tr", "gini_te", "gini_vl", "n_iter", "lr", "leaves", "depth", "min_leaf", "ES", "Run time", "Sample",
                     ],
                 )
                 self.assertEqual(navigator_state["borderWidth"], "0px")
@@ -36905,6 +36964,9 @@ COPY (
                 self.assertIn("SAMPLE", navigator_state["firstCells"])
                 self.assertIn("7.31", navigator_state["firstCells"])
                 self.assertIn("7.3022", navigator_state["firstCells"])
+                self.assertIn("0.7346", navigator_state["firstCells"])
+                self.assertIn("-0.125", navigator_state["firstCells"])
+                self.assertIn("--", navigator_state["firstCells"])
                 self.assertIn("77", navigator_state["firstCells"])
                 self.assertIn("0.11", navigator_state["firstCells"])
                 self.assertIn("25", navigator_state["firstCells"])

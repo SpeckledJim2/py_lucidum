@@ -95,6 +95,22 @@ def save_glm_model_results(
         if denominator is not None
         else rate_predictions
     )
+    sample_column = str(dataset.get("sample_column") or "").strip()
+    sample_roles = (
+        canonical_sample_roles(data[sample_column], dataset)
+        if sample_column and sample_column in data.columns
+        else None
+    )
+    gini_metrics, gini_warnings = split_gini_metrics(
+        actual=target.loc[scoring_mask].to_numpy(dtype=float),
+        prediction=rate_predictions,
+        weight=(
+            denominator.loc[scoring_mask].to_numpy(dtype=float)
+            if denominator is not None
+            else None
+        ),
+        sample_roles=(sample_roles[scoring_mask.to_numpy()] if sample_roles is not None else None),
+    )
     scored_row_ids = np.flatnonzero(scoring_mask.to_numpy()).astype("int64") + 1
     source_columns = [
         str(name)
@@ -135,7 +151,11 @@ def save_glm_model_results(
             "n_interactions": len(
                 {tuple(sorted(row["features"])) for row in coefficients if len(row["features"]) > 1}
             ),
-            "warnings": [inference_warning] if inference_warning else [],
+            **gini_metrics,
+            "warnings": [
+                *([inference_warning] if inference_warning else []),
+                *gini_warnings,
+            ],
         }
     )
 
@@ -285,6 +305,20 @@ def save_gbm_model_results(
     prediction_series = aligned_predictions(data, predictions)
     saved_predictions = prediction_series.loc[eligible].to_numpy(dtype=float)
     row_ids = np.flatnonzero(eligible.to_numpy()).astype("int64") + 1
+    if denominator is not None:
+        gini_weight = denominator.loc[eligible].to_numpy(dtype=float)
+        gini_actual = response.loc[eligible].to_numpy(dtype=float) / gini_weight
+        gini_prediction = saved_predictions / gini_weight
+    else:
+        gini_weight = None
+        gini_actual = response.loc[eligible].to_numpy(dtype=float)
+        gini_prediction = saved_predictions
+    gini_metrics, gini_warnings = split_gini_metrics(
+        actual=gini_actual,
+        prediction=gini_prediction,
+        weight=gini_weight,
+        sample_roles=canonical_sample_roles(sample.loc[eligible], dataset),
+    )
 
     prediction_frame = pd.DataFrame(
         {"__lucidum_row_id": row_ids, "gbm_prediction": saved_predictions}
@@ -355,8 +389,12 @@ def save_gbm_model_results(
         "sample_column": str(dataset["sample_column"]),
         "sample_source": "dataset",
         "shap_rows": int(len(shap_values)),
+        **gini_metrics,
         "timings": {"training_seconds": round(time.perf_counter() - started, 3)},
-        "warnings": [str(warning) for warning in warnings or [] if str(warning).strip()],
+        "warnings": [
+            *[str(warning) for warning in warnings or [] if str(warning).strip()],
+            *gini_warnings,
+        ],
         "feature_scenario": {
             "name": str(features_config["scenario_column"]),
             "features": feature_names,
@@ -743,6 +781,121 @@ def replace_directory(staging: Path, target: Path, *, replace_existing: bool) ->
 # ---------------------------------------------------------------------------
 # Small serialization helpers
 # ---------------------------------------------------------------------------
+
+
+def split_gini_metrics(
+    *,
+    actual: Any,
+    prediction: Any,
+    weight: Any | None = None,
+    sample_roles: Any | None = None,
+) -> tuple[dict[str, float | None], list[str]]:
+    """Mirror Lucidum's normalized Gini without importing the application."""
+
+    actual_values = np.asarray(actual, dtype="float64").reshape(-1)
+    prediction_values = np.asarray(prediction, dtype="float64").reshape(-1)
+    if actual_values.shape != prediction_values.shape:
+        raise ValueError("Gini actuals and predictions must have the same shape")
+    weights = (
+        np.ones(actual_values.size, dtype="float64")
+        if weight is None
+        else np.asarray(weight, dtype="float64").reshape(-1)
+    )
+    if weights.shape != actual_values.shape:
+        raise ValueError("Gini weights must have the same shape as actuals")
+    roles = None if sample_roles is None else np.asarray(sample_roles).reshape(-1)
+    if roles is not None and roles.shape != actual_values.shape:
+        raise ValueError("Gini SAMPLE roles must have the same shape as actuals")
+
+    metrics = {"gini_tr": None, "gini_te": None, "gini_vl": None}
+    warnings: list[str] = []
+    for role, field, label in (
+        ("training", "gini_tr", "Training"),
+        ("test", "gini_te", "Test"),
+        ("validation", "gini_vl", "Validation"),
+    ):
+        if roles is None:
+            if role != "training":
+                continue
+            mask = np.ones(actual_values.size, dtype=bool)
+        else:
+            mask = roles == role
+        if not bool(mask.any()):
+            continue
+        value, reason = normalized_gini(
+            actual_values[mask],
+            prediction_values[mask],
+            weights[mask],
+        )
+        metrics[field] = value
+        if reason:
+            warnings.append(f"{label} Gini could not be calculated: {reason}")
+    return metrics, warnings
+
+
+def canonical_sample_roles(sample: pd.Series, dataset: dict[str, Any]) -> np.ndarray:
+    values = sample.astype("string").str.strip().str.lower().fillna("")
+    role_values = {
+        str(dataset.get("training_value") or "training").strip().lower(): "training",
+        str(dataset.get("test_value") or dataset.get("early_stopping_value") or "test")
+        .strip()
+        .lower(): "test",
+        str(dataset.get("validation_value") or "validation").strip().lower(): "validation",
+    }
+    return values.map(role_values).fillna("").to_numpy()
+
+
+def normalized_gini(
+    actual: Any,
+    prediction: Any,
+    weight: Any,
+) -> tuple[float | None, str | None]:
+    actual_values = np.asarray(actual, dtype="float64").reshape(-1)
+    prediction_values = np.asarray(prediction, dtype="float64").reshape(-1)
+    weights = np.asarray(weight, dtype="float64").reshape(-1)
+    usable = (
+        np.isfinite(actual_values)
+        & np.isfinite(prediction_values)
+        & np.isfinite(weights)
+        & (weights > 0)
+    )
+    if int(usable.sum()) < 2:
+        return None, (
+            "needs at least two rows with finite actuals and predictions and positive weights"
+        )
+    actual_values = actual_values[usable]
+    prediction_values = prediction_values[usable]
+    weights = weights[usable]
+    if bool((actual_values < 0).any()):
+        return None, "actual values must be non-negative"
+    if float(np.sum(actual_values * weights)) <= 0:
+        return None, "total actual must be positive"
+    perfect = concentration_gini(actual_values, actual_values, weights)
+    if not math.isfinite(perfect) or abs(perfect) <= 1e-12:
+        return None, "actual values do not provide a non-constant perfect ranking"
+    value = concentration_gini(actual_values, prediction_values, weights) / perfect
+    if not math.isfinite(value):
+        return None, "calculation produced a non-finite value"
+    if abs(value) <= 1e-12:
+        value = 0.0
+    return min(1.0, max(-1.0, float(value))), None
+
+
+def concentration_gini(actual: Any, score: Any, weight: Any) -> float:
+    order = np.argsort(np.asarray(score, dtype="float64"), kind="stable")
+    ordered_score = np.asarray(score, dtype="float64")[order]
+    ordered_weight = np.asarray(weight, dtype="float64")[order]
+    ordered_actual_weight = np.asarray(actual, dtype="float64")[order] * ordered_weight
+    starts = np.flatnonzero(
+        np.concatenate(([True], ordered_score[1:] != ordered_score[:-1]))
+    )
+    group_weight = np.add.reduceat(ordered_weight, starts)
+    group_actual = np.add.reduceat(ordered_actual_weight, starts)
+    x = np.cumsum(group_weight) / float(np.sum(group_weight))
+    y = np.cumsum(group_actual) / float(np.sum(group_actual))
+    previous_x = np.concatenate(([0.0], x[:-1]))
+    previous_y = np.concatenate(([0.0], y[:-1]))
+    return 1.0 - float(np.sum((x - previous_x) * (y + previous_y)))
 
 
 def aligned_predictions(data: pd.DataFrame, predictions: pd.Series) -> pd.Series:

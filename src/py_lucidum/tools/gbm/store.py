@@ -390,6 +390,8 @@ class GbmModelStore:
         item["objective"] = str(parameters.get("objective") or "")
         item["metric"] = str(parameters.get("metric") or "")
         item["best_metrics"] = self.model_best_metrics(model_id, item["metric"], item.get("best_iteration"))
+        for field in ("gini_tr", "gini_te", "gini_vl"):
+            item[field] = json_safe_number(item.get(field))
         item["active"] = model_id == active_model_id
         return item
 

@@ -1112,6 +1112,62 @@ if result.get("iteration") != 10:
 
         self.assertEqual(fit_frame["Segment"].tolist(), ["training-only", "test-only"])
 
+    def test_split_gini_is_independent_of_glm_fit_scope_and_handles_no_sample(self) -> None:
+        self.require_glm_dependencies()
+        path = self.root / "glm_gini_splits.csv"
+        path.write_text(
+            "y,x,SAMPLE\n"
+            "1,1,training\n"
+            "3,3,TRAINING\n"
+            "2,2, training \n"
+            "2,2,test\n"
+            "1,1,TEST\n"
+            "4,4, test \n"
+            "5,5,validation\n"
+            "2,2,VALIDATION\n"
+            "3,3, validation \n",
+            encoding="utf-8",
+        )
+        dataset = Dataset(path)
+        store = GlmModelStore(path)
+        payload = {
+            "formula": "1 + x",
+            "response_column": "y",
+            "family": "normal",
+            "regularization": {"mode": "manual", "alpha": 0.001, "l1_ratio": 0.0},
+        }
+
+        for scope in ("training_test", "all"):
+            with self.subTest(scope=scope):
+                result = train_model(
+                    dataset,
+                    store,
+                    {**payload, "training_scope": scope, "label": scope},
+                    activate=False,
+                )
+                persisted = store.model_diagnostics(result["model_id"])
+                for field in ("gini_tr", "gini_te", "gini_vl"):
+                    self.assertAlmostEqual(result[field], 1.0)
+                    self.assertEqual(result[field], result["diagnostics"][field])
+                    self.assertEqual(result[field], persisted[field])
+
+        no_sample_path = self.root / "glm_gini_no_sample.csv"
+        no_sample_path.write_text(
+            "y,x\n1,1\n3,3\n2,2\n4,4\n",
+            encoding="utf-8",
+        )
+        no_sample_dataset = Dataset(no_sample_path)
+        no_sample_store = GlmModelStore(no_sample_path)
+        no_sample_result = train_model(
+            no_sample_dataset,
+            no_sample_store,
+            {**payload, "training_scope": "all", "label": "no sample"},
+            activate=False,
+        )
+        self.assertAlmostEqual(no_sample_result["gini_tr"], 1.0)
+        self.assertIsNone(no_sample_result["gini_te"])
+        self.assertIsNone(no_sample_result["gini_vl"])
+
     def test_glm_training_projection_uses_only_required_formula_columns(self) -> None:
         self.require_glm_dependencies()
         path = self.root / "projection.csv"
@@ -1161,7 +1217,10 @@ if result.get("iteration") != 10:
         self.assertTrue(intercept["ok"], intercept)
         self.assertTrue(transformed["ok"], transformed)
         self.assertTrue(dot_formula["ok"], dot_formula)
-        self.assertEqual(required_training_columns(dataset, intercept), ["response", "denominator"])
+        self.assertEqual(
+            required_training_columns(dataset, intercept),
+            ["response", "denominator", "SAMPLE"],
+        )
         projected = required_training_columns(dataset, transformed)
         self.assertEqual(
             projected,
@@ -1177,10 +1236,13 @@ if result.get("iteration") != 10:
         )
 
         stateful_cases = [
-            ("bs(`Age Years`, df=4)", ["response", "Age Years"]),
-            ("cs(`Age Years`, df=4)", ["response", "Age Years"]),
-            ("poly(`Age Years`, degree=2)", ["response", "Age Years"]),
-            ("bs(`Age Years`, df=4):C(Segment)", ["response", "Age Years", "Segment"]),
+            ("bs(`Age Years`, df=4)", ["response", "Age Years", "SAMPLE"]),
+            ("cs(`Age Years`, df=4)", ["response", "Age Years", "SAMPLE"]),
+            ("poly(`Age Years`, degree=2)", ["response", "Age Years", "SAMPLE"]),
+            (
+                "bs(`Age Years`, df=4):C(Segment)",
+                ["response", "Age Years", "Segment", "SAMPLE"],
+            ),
         ]
         for formula, expected_columns in stateful_cases:
             with self.subTest(formula=formula):
@@ -4313,6 +4375,8 @@ COPY (
         self.assertEqual(renamed["model_id"], "renamed-glm")
         self.assertEqual(store.active_model_id(), "renamed-glm")
         self.assertEqual(renamed["sources"]["predictions"], "glm:renamed-glm:predictions")
+        for field in ("gini_tr", "gini_te", "gini_vl"):
+            self.assertEqual(renamed[field], first[field])
         store.delete_model("renamed-glm")
         self.assertEqual(store.active_model_id(), second["model_id"])
         store.delete_model(second["model_id"])
@@ -4335,6 +4399,9 @@ COPY (
         store.write_json(store.artifact_path(model_id, "diagnostics"), {"coefficient_count": 3})
 
         listed = store.list_models()[0]
+        self.assertIsNone(listed["gini_tr"])
+        self.assertIsNone(listed["gini_te"])
+        self.assertIsNone(listed["gini_vl"])
         self.assertNotIn("n_terms", listed)
         self.assertNotIn("n_features", listed)
         self.assertNotIn("n_interactions", listed)
