@@ -473,10 +473,13 @@ The HTML contains:
 - Source, model, and tabulated-score paths plus other run information.
 - The fitted family and link; Tweedie models also show their variance power.
 - Model performance for Training, Test, and Validation. Every family shows
-  deviance and deviance explained. Binomial models also show weighted AUC,
-  Gini, and log loss; other models show weighted RMSE and MAE.
+  deviance, deviance explained, and normalized Gini. Binomial models also show
+  weighted AUC and log loss; other models show weighted RMSE and MAE.
 - The fitted coefficient table, including p-value styling when inference is
   available.
+- The tabulated model's Mean error, linear SD error, and number of missing
+  tabulated predictions, matching the diagnostics shown in Lucidum's GLM
+  Tabulations model table.
 - The tabulation index with table name, dimensions, cell counts, and Min, Max,
   and Span shown to four decimal places. It links to the full XLSX path.
 

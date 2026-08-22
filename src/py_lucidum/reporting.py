@@ -454,6 +454,11 @@ def write_glm_summary_report(
             store.model_diagnostics(model_id, manifest),
         )
         coefficients = _glm_coefficients(store.read_parquet_records(store.artifact_path(model_id, "coefficients")))
+        tabulation_manifest = store.read_json(store.artifact_path(model_id, "tabulation_manifest"), {})
+        tabulation_diagnostics = _glm_tabulation_diagnostics_summary(
+            tabulation_manifest,
+            model_label=str(manifest.get("label") or model_id),
+        )
         actual_link = _glm_link_name(estimator)
         report_metadata = {
             "source parquet": path,
@@ -480,6 +485,7 @@ def write_glm_summary_report(
             "path": str(workbook_path),
             "href": _file_uri(workbook_path),
             "scale": str(tabulation_export.get("scale") or ""),
+            "diagnostics": tabulation_diagnostics,
             "columns": list(index_summary.get("columns") or []),
             "rows": list(index_summary.get("rows") or []),
         },
@@ -1127,6 +1133,37 @@ def _add_split_gini_to_glm_performance(
     performance["columns"] = columns
 
 
+def _glm_tabulation_diagnostics_summary(
+    manifest: Mapping[str, Any],
+    *,
+    model_label: str,
+) -> dict[str, Any]:
+    diagnostics = manifest.get("diagnostics")
+    values = diagnostics if isinstance(diagnostics, Mapping) else {}
+    missing = _finite_number(values.get("missing_tabulated_prediction_rows"))
+    return {
+        "columns": [
+            {"key": "model", "label": "Model"},
+            {"key": "mean_error", "label": "Mean error"},
+            {"key": "linear_sd_error", "label": "linear SD error"},
+            {"key": "missing", "label": "Number missing"},
+        ],
+        "rows": [
+            {
+                "model": model_label,
+                "mean_error": _format_model_metric(values.get("mean_linear_error")),
+                "linear_sd_error": _format_model_metric(values.get("linear_sd_error")),
+                "missing": "--" if missing is None else f"{int(missing):,}",
+            }
+        ],
+        "raw": {
+            "mean_linear_error": _finite_number(values.get("mean_linear_error")),
+            "linear_sd_error": _finite_number(values.get("linear_sd_error")),
+            "missing_tabulated_prediction_rows": missing,
+        },
+    }
+
+
 def _weighted_auc(y: Any, prediction: Any, weights: Any) -> float | None:
     import numpy as np
 
@@ -1244,6 +1281,16 @@ def _format_compact(value: Any) -> str:
     return f"{number:,.{decimals}f}".rstrip("0").rstrip(".")
 
 
+def _format_model_metric(value: Any) -> str:
+    """Match the four-decimal metric formatting used by model tables."""
+
+    number = _finite_number(value)
+    if number is None:
+        return "--"
+    formatted = f"{number:,.4f}".rstrip("0").rstrip(".")
+    return "0" if formatted in {"", "-0"} else formatted
+
+
 def _format_percent(value: Any) -> str:
     number = _finite_number(value)
     return "—" if number is None else f"{number * 100:.1f}%"
@@ -1322,6 +1369,12 @@ def _glm_summary_document(
         list(tabulations.get("columns") or []),
         list(tabulations.get("rows") or []),
     )
+    tabulation_diagnostics = tabulations.get("diagnostics") or {}
+    tabulation_diagnostics_table = _summary_table_html(
+        list(tabulation_diagnostics.get("columns") or []),
+        list(tabulation_diagnostics.get("rows") or []),
+        table_class="tabulation-diagnostics-table",
+    )
     workbook_path = str(tabulations.get("path") or "")
     workbook_href = str(tabulations.get("href") or "")
     return f"""<!doctype html>
@@ -1356,6 +1409,8 @@ def _glm_summary_document(
     .summary-table th:first-child, .summary-table td:first-child {{ text-align: left; }}
     .coefficient-table th:nth-child(2), .coefficient-table td:nth-child(2), .tabulation-table th:nth-child(2), .tabulation-table td:nth-child(2) {{ text-align: left; }}
     .coefficient-table td:nth-child(2) {{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }}
+    .table-caption {{ margin: 0 0 8px; color: var(--muted); font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }}
+    .tabulation-diagnostics-table {{ margin-bottom: 20px; }}
     .coefficient-table tr.significance-low {{ background: #ecfdf3; }}
     .coefficient-table tr.significance-medium {{ background: #fffbeb; }}
     .coefficient-table tr.significance-high {{ background: #fff1f2; }}
@@ -1382,7 +1437,12 @@ def _glm_summary_document(
     <section class="summary-card" data-summary-section="tabulations">
       <h2>Tabulation summary</h2>
       <p class="section-detail">Workbook: <a href="{html.escape(workbook_href, quote=True)}">{html.escape(workbook_path)}</a></p>
-      <div class="table-wrap">{tabulation_table}</div>
+      <div class="table-wrap">
+        <p class="table-caption">Tabulated model diagnostics</p>
+        {tabulation_diagnostics_table}
+        <p class="table-caption">Rating table index</p>
+        {tabulation_table}
+      </div>
     </section>
   </main>
   <script id="lucidum-report-data" type="application/json">{_json_for_script(payload)}</script>

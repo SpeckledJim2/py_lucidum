@@ -1421,6 +1421,26 @@ FROM read_parquet({sql_literal(str(glm_dir / 'coefficients.parquet'))})
                     f"{glm_diagnostics['gini_vl']:.4f}",
                 ],
             )
+            glm_tabulation_manifest = json.loads(
+                (glm_dir / "tabulations" / "tabulation_manifest.json").read_text(encoding="utf-8")
+            )
+            glm_tabulation_diagnostics = glm_tabulation_manifest["diagnostics"]
+            summary_diagnostics = glm_summary_report["tabulations"]["diagnostics"]
+            self.assertEqual(
+                [column["label"] for column in summary_diagnostics["columns"]],
+                ["Model", "Mean error", "linear SD error", "Number missing"],
+            )
+            self.assertEqual(
+                summary_diagnostics["raw"],
+                {
+                    "mean_linear_error": glm_tabulation_diagnostics["mean_linear_error"],
+                    "linear_sd_error": glm_tabulation_diagnostics["linear_sd_error"],
+                    "missing_tabulated_prediction_rows": float(
+                        glm_tabulation_diagnostics["missing_tabulated_prediction_rows"]
+                    ),
+                },
+            )
+            self.assertEqual(summary_diagnostics["rows"][0]["missing"], "0")
             self.assertTrue(glm_summary_report["coefficients"]["rows"])
             self.assertEqual(
                 [column["label"] for column in glm_summary_report["coefficients"]["columns"]],

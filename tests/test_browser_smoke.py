@@ -831,6 +831,15 @@ output:
                         )
                         self.assertGreater(page.locator(".coefficient-table tbody tr").count(), 1)
                         self.assertGreater(page.locator(".tabulation-table tbody tr").count(), 1)
+                        self.assertEqual(
+                            page.locator(".tabulation-diagnostics-table th").all_inner_texts(),
+                            ["MODEL", "MEAN ERROR", "LINEAR SD ERROR", "NUMBER MISSING"],
+                        )
+                        tabulation_diagnostic_values = page.locator(
+                            ".tabulation-diagnostics-table tbody tr td"
+                        ).all_inner_texts()
+                        self.assertIn("External browser GLM", tabulation_diagnostic_values)
+                        self.assertEqual(tabulation_diagnostic_values[-1], "0")
                         tabulation_values = page.locator(
                             ".tabulation-table tbody tr td:nth-child(5), "
                             ".tabulation-table tbody tr td:nth-child(6), "
