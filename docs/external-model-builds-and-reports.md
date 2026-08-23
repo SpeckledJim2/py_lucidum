@@ -35,9 +35,11 @@ application can display it without retraining it.
    whole-model feature importance in chart titles, and the fitted GLM
    partial-dependence line.
 3. `03_external_glm_summary_report_demo.py` builds and scores GLM tabulations,
-   exports them to XLSX, and creates a model summary containing Training, Test,
-   and Validation performance, coefficients and p-values, and a tabulation
-   summary with a link to the workbook.
+   exports them to XLSX, and creates a model summary containing configured
+   Training, Test, and Validation performance rows, coefficients and p-values,
+   and a tabulation summary with a link to the workbook. A configured population
+   without eligible fitted predictions remains visible with zero rows and
+   unavailable metrics rather than preventing the report.
 
 ### GBM workflow: three scripts
 
@@ -492,9 +494,12 @@ The HTML contains:
 
 - Source, model, and tabulated-score paths plus other run information.
 - The fitted family and link; Tweedie models also show their variance power.
-- Model performance for Training, Test, and Validation. Every family shows
-  deviance, deviance explained, and normalized Gini. Binomial models also show
-  weighted AUC and log loss; other models show weighted RMSE and MAE.
+- Model performance rows for the configured Training, Test, and Validation
+  values. Every available population shows deviance, deviance explained, and
+  normalized Gini. Binomial models also show weighted AUC and log loss; other
+  models show weighted RMSE and MAE. A population with no eligible fitted
+  predictions shows zero rows and unavailable metrics; at least one configured
+  population must be available.
 - The fitted coefficient table, including p-value styling when inference is
   available.
 - The tabulated model's Mean error, linear SD error, and number of missing
@@ -503,9 +508,11 @@ The HTML contains:
 - The tabulation index with table name, dimensions, cell counts, and Min, Max,
   and Span shown to four decimal places. It links to the full XLSX path.
 
-The performance table uses fitted `glm_prediction`. The separately tabulated
-score is saved so that it can be compared with the fitted model or used by
-Lucidum.
+The performance table uses fitted `glm_prediction`. Gini values are matched to
+the explicit Training, Test, or Validation role rather than the table-row
+position, so a missing population cannot shift another population's Gini. The
+separately tabulated score is saved so that it can be compared with the fitted
+model or used by Lucidum.
 
 ### GBM summary
 

@@ -348,7 +348,11 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
   `estimator.pkl`, and writes the current compact manifest, formula,
   coefficient, importance, prediction, and diagnostic artifacts. A denominator
   means rate target plus denominator weight, with response- and rate-scale
-  predictions both persisted.
+  predictions both persisted. The external GLM summary keeps stable Training,
+  Test, and Validation performance rows but permits missing populations, showing
+  zero rows and unavailable metrics when no eligible fitted prediction exists.
+  At least one configured role must be available, and persisted split Ginis must
+  be joined by the explicit role rather than performance-row position.
 - The external GBM contract fits LightGBM directly and writes the current
   parameters/features/feature-config/model/prediction/evaluation/tree/SHAP
   artifacts. Preserve deterministic category ordering and SHAP sampling,

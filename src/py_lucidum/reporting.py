@@ -14,6 +14,7 @@ from uuid import uuid4
 from py_lucidum._version import __version__
 from py_lucidum.core import Dataset, is_numeric_kind, load_features, load_kpis, quote_ident, sql_literal
 from py_lucidum.core.chart_controls import normalise_chart_controls as _normalise_chart_controls
+from py_lucidum.model_metrics import GINI_SPLITS
 
 
 REPORT_CONTENT_VALUES = {"actual_expected", "shap_only"}
@@ -1321,14 +1322,42 @@ WHERE isfinite(TRY_CAST(source.{actual} AS DOUBLE))
 
     is_binomial = "binomial" in type(estimator.family_instance).__name__.casefold()
     rows = []
+    available_roles = 0
     for label, role in (("Training", "training"), ("Test", "test"), ("Validation", "validation")):
         sample_value = str(selected_samples[role]).strip().lower()
         values = grouped.get(sample_value)
         if not values:
-            raise ValueError(
-                f"The {label} {sample_column} value has no eligible fitted predictions: "
-                f"{selected_samples[role]}"
-            )
+            raw = {
+                "row_count": 0,
+                "weight": None,
+                "actual": None,
+                "prediction": None,
+                "deviance": None,
+                "deviance_explained": None,
+            }
+            if is_binomial:
+                raw.update({"auc": None, "gini": None, "log_loss": None})
+            else:
+                raw.update({"rmse": None, "mae": None})
+            row = {
+                "role": role,
+                "available": False,
+                "sample": label,
+                "rows": "0",
+                "weight": "—" if denominator else None,
+                "actual": "—",
+                "prediction": "—",
+                "deviance": "—",
+                "deviance_explained": "—",
+                "raw": raw,
+            }
+            if is_binomial:
+                row.update({"auc": "—", "gini": "—", "log_loss": "—"})
+            else:
+                row.update({"rmse": "—", "mae": "—"})
+            rows.append(row)
+            continue
+        available_roles += 1
         array = np.asarray(values, dtype=float)
         y = array[:, 0]
         prediction = array[:, 1]
@@ -1365,6 +1394,8 @@ WHERE isfinite(TRY_CAST(source.{actual} AS DOUBLE))
                 }
             )
         row = {
+            "role": role,
+            "available": True,
             "sample": label,
             "rows": f"{len(values):,}",
             "weight": _format_weight(raw["weight"]) if denominator else None,
@@ -1385,6 +1416,13 @@ WHERE isfinite(TRY_CAST(source.{actual} AS DOUBLE))
         else:
             row.update({"rmse": _format_kpi(raw["rmse"], kpi), "mae": _format_kpi(raw["mae"], kpi)})
         rows.append(row)
+
+    if available_roles == 0:
+        configured = ", ".join(str(selected_samples[role]) for role, _, _ in GINI_SPLITS)
+        raise ValueError(
+            "None of the configured Training, Test, or Validation SAMPLE values has "
+            f"eligible fitted predictions: {configured}"
+        )
 
     columns = [
         {"key": "sample", "label": "Sample"},
@@ -1432,10 +1470,15 @@ def _add_split_gini_to_glm_performance(
 ) -> None:
     """Add persisted SAMPLE-partition Ginis to a GLM report performance table."""
 
-    fields = ("gini_tr", "gini_te", "gini_vl")
+    fields_by_role = {role: field for role, field, _ in GINI_SPLITS}
     rows = list(performance.get("rows") or [])
-    for row, field in zip(rows, fields, strict=False):
-        value = _finite_number(diagnostics.get(field))
+    for row in rows:
+        field = fields_by_role.get(str(row.get("role") or ""))
+        value = (
+            _finite_number(diagnostics.get(field))
+            if field is not None and row.get("available") is not False
+            else None
+        )
         row["gini"] = "—" if value is None else f"{value:.4f}"
         raw = row.get("raw")
         if isinstance(raw, dict):
@@ -1752,7 +1795,7 @@ def _glm_summary_document(
     </header>
     <section class="summary-card" data-summary-section="performance">
       <h2>Model performance</h2>
-      <p class="section-detail">Performance uses fitted <code>glm_prediction</code> values. Normalized Gini reports <code>gini_tr</code>, <code>gini_te</code>, and <code>gini_vl</code> for the Training, Test, and Validation SAMPLE rows.</p>
+      <p class="section-detail">Performance uses fitted <code>glm_prediction</code> values. Normalized Gini reports <code>gini_tr</code>, <code>gini_te</code>, and <code>gini_vl</code> for the Training, Test, and Validation SAMPLE rows. Populations without eligible fitted predictions remain visible with zero rows and unavailable metrics.</p>
       <div class="table-wrap">{performance_table}</div>
     </section>
     <section class="summary-card" data-summary-section="coefficients">

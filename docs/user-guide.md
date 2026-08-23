@@ -1260,7 +1260,10 @@ The repository contains parallel YAML-controlled GLM and GBM workflows for build
 and scoring a model outside the app, producing interactive HTML charts, and creating
 model summaries. GLM summaries can also produce rating tables and XLSX output.
 Their model-result writers calculate the same [split normalized Gini](#normalized-gini)
-as in-app builds.
+as in-app builds. A GLM summary retains configured Training, Test, and Validation
+performance rows but does not require all three populations in the dataset. A
+population without eligible fitted predictions shows zero rows and unavailable
+metrics, and each Gini remains tied to its named sample role.
 
 Reports read the named results folder directly and do not require a `.lucidum`
 workspace. The optional installation step copies and activates the completed model

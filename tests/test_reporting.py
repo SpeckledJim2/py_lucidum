@@ -774,6 +774,138 @@ TO {sql_literal(str(store.artifact_path(model_id, 'coefficients')))} (FORMAT PAR
             for section in ("performance", "coefficients", "tabulations"):
                 self.assertIn(f'data-summary-section="{section}"', document)
 
+    def test_glm_performance_allows_missing_sample_roles_and_maps_gini_by_role(self) -> None:
+        cases = (
+            ("training only", ("training",)),
+            ("training and test", ("training", "test")),
+            ("training and validation", ("training", "validation")),
+        )
+        gini_by_role = {
+            "training": ("gini_tr", 0.812345),
+            "test": ("gini_te", -0.234567),
+            "validation": ("gini_vl", 0.456789),
+        }
+        diagnostics = {field: value for field, value in gini_by_role.values()}
+
+        for case_name, present_roles in cases:
+            with self.subTest(case=case_name), TemporaryDirectory() as tmp_dir:
+                root = Path(tmp_dir)
+                dataset_path = root / "data.csv"
+                source_rows = [
+                    (actual, role)
+                    for role in present_roles
+                    for actual in (10.0, 20.0)
+                ]
+                dataset_path.write_text(
+                    "Y,SAMPLE\n"
+                    + "".join(f"{actual},{role}\n" for actual, role in source_rows),
+                    encoding="utf-8",
+                )
+                prediction_path = root / "predictions.parquet"
+                con = duckdb.connect(database=":memory:")
+                try:
+                    con.execute(
+                        "CREATE TABLE predictions "
+                        "(__lucidum_row_id BIGINT, glm_prediction DOUBLE)"
+                    )
+                    con.executemany(
+                        "INSERT INTO predictions VALUES (?, ?)",
+                        [
+                            (row_id, actual * 1.1)
+                            for row_id, (actual, _) in enumerate(source_rows, start=1)
+                        ],
+                    )
+                    con.execute(
+                        f"COPY predictions TO {sql_literal(str(prediction_path))} "
+                        "(FORMAT PARQUET)"
+                    )
+                finally:
+                    con.close()
+
+                dataset = Dataset(dataset_path)
+                try:
+                    performance = reporting_module._glm_performance(
+                        dataset,
+                        prediction_path,
+                        response="Y",
+                        denominator="",
+                        estimator=SimpleNamespace(family_instance=NormalDistribution()),
+                        kpi={"format": "number", "decimals": 2},
+                    )
+                finally:
+                    dataset.con.close()
+
+                self.assertEqual(
+                    [row["role"] for row in performance["rows"]],
+                    ["training", "test", "validation"],
+                )
+                self.assertEqual(
+                    [row["available"] for row in performance["rows"]],
+                    [role in present_roles for role in ("training", "test", "validation")],
+                )
+                for row in performance["rows"]:
+                    if row["available"]:
+                        self.assertEqual(row["rows"], "2")
+                    else:
+                        self.assertEqual(row["rows"], "0")
+                        self.assertEqual(row["actual"], "—")
+                        self.assertEqual(row["prediction"], "—")
+                        self.assertEqual(row["raw"]["row_count"], 0)
+
+                # Deliberately change the presentation order: Gini must follow
+                # the explicit role rather than the row position.
+                performance["rows"].reverse()
+                reporting_module._add_split_gini_to_glm_performance(
+                    performance,
+                    diagnostics,
+                )
+                rows_by_role = {row["role"]: row for row in performance["rows"]}
+                for role, (_, value) in gini_by_role.items():
+                    expected = f"{value:.4f}" if role in present_roles else "—"
+                    self.assertEqual(rows_by_role[role]["gini"], expected)
+                    self.assertEqual(
+                        rows_by_role[role]["raw"]["gini"],
+                        value if role in present_roles else None,
+                    )
+
+    def test_glm_performance_rejects_when_no_configured_sample_role_is_available(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            dataset_path = root / "data.csv"
+            dataset_path.write_text(
+                "Y,SAMPLE\n10,unassigned\n20,unassigned\n",
+                encoding="utf-8",
+            )
+            prediction_path = root / "predictions.parquet"
+            con = duckdb.connect(database=":memory:")
+            try:
+                con.execute(
+                    f"""
+COPY (SELECT * FROM (VALUES (1, 11.0), (2, 19.0))
+  prediction(__lucidum_row_id, glm_prediction))
+TO {sql_literal(str(prediction_path))} (FORMAT PARQUET)
+"""
+                )
+            finally:
+                con.close()
+
+            dataset = Dataset(dataset_path)
+            try:
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "None of the configured Training, Test, or Validation",
+                ):
+                    reporting_module._glm_performance(
+                        dataset,
+                        prediction_path,
+                        response="Y",
+                        denominator="",
+                        estimator=SimpleNamespace(family_instance=NormalDistribution()),
+                        kpi={"format": "number", "decimals": 2},
+                    )
+            finally:
+                dataset.con.close()
+
     def test_glm_binomial_performance_handles_weighted_ties_and_single_class_auc(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
