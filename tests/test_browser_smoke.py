@@ -19437,6 +19437,14 @@ COPY (
                                 '.saved-favourite-option[data-favourite-id="incompatible-exact-view"]'
                             ).click()
                         incompatible_request = incompatible_response_info.value.request.post_data_json
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector("#status")?.textContent.includes(
+                              "Favourite model selections that do not match the restored Numerator and Denominator were removed."
+                            )
+                            """,
+                            timeout=10_000,
+                        )
                         self.assertEqual(incompatible_request["denominator"], "__none__")
                         self.assertNotEqual(incompatible_request["x"], "prediction_ratio")
                         self.assertEqual(len(incompatible_request["responses"]), 1)
