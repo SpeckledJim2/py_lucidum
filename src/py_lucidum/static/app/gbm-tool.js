@@ -133,7 +133,7 @@ export function createGbmTool({
   reloadSchema,
   invalidateLineBar = () => {},
   getDenominatorSelection = () => ({ value: "__none__", sourceId: "dataset", metricKind: "dataset" }),
-  onExternalModelActivation = async () => false,
+  onExternalModelMutation = async () => false,
 }) {
   const tool = "gbm";
   let featureTable = null;
@@ -3667,6 +3667,7 @@ export function createGbmTool({
         const data = await api("/api/gbm/config", { method: "GET", clientTiming: true });
         if (!modelStateIsCurrent(generation)) return;
         await applyModelMutationResult({ model: job.result, config: data }, {
+          inventoryChanged: true,
           modelStateGeneration: generation,
         });
         if (!modelStateIsCurrent(generation)) return;
@@ -3827,7 +3828,11 @@ export function createGbmTool({
         body: JSON.stringify({ new_model_id: trimmed }),
       });
       if (!modelStateIsCurrent(generation)) return;
-      await applyModelMutationResult(result, { modelStateGeneration: generation });
+      await applyModelMutationResult(result, {
+        renamedFrom: modelId,
+        renamedTo: String(result?.model?.model_id || trimmed),
+        modelStateGeneration: generation,
+      });
     } catch (error) {
       if (modelStateIsCurrent(generation)) setGbmNotice(error.message);
     } finally {
@@ -3855,6 +3860,7 @@ export function createGbmTool({
       }
       if (!modelStateIsCurrent(generation)) return;
       await applyModelMutationResult(result, {
+        deletedModelIds: modelIds,
         syncModelMetrics: modelIds.includes(activeModelIdBeforeDelete),
         modelStateGeneration: generation,
       });
@@ -3863,6 +3869,7 @@ export function createGbmTool({
         const latest = await api("/api/gbm/config", { method: "GET", clientTiming: true });
         if (modelStateIsCurrent(generation)) {
           await applyModelMutationResult({ config: latest }, {
+            deletedModelIds: modelIds.slice(0, deletedCount),
             syncModelMetrics: modelIds.slice(0, deletedCount).includes(activeModelIdBeforeDelete),
             modelStateGeneration: generation,
           });
@@ -3883,6 +3890,9 @@ export function createGbmTool({
     modelDetailRequestSeq += 1;
     invalidateLineBar({ pending: state.tool === "line_bar" });
     const nextConfig = result.config || config || {};
+    const renamedFrom = String(options?.renamedFrom || "");
+    const renamedTo = String(options?.renamedTo || result?.model?.model_id || "");
+    const deletedModelIds = Array.isArray(options?.deletedModelIds) ? options.deletedModelIds : [];
     const activeMetricModel = options?.syncModelMetrics ? activeModelFromData(nextConfig) : null;
     const schemaResult = await reloadSchema(preferredModelSource(result, nextConfig), {
       modelKind: "gbm",
@@ -3892,6 +3902,16 @@ export function createGbmTool({
     if (schemaResult === false || !modelStateIsCurrent(generation)) return false;
     const chartReady = schemaResult?.chartReady !== false;
     const preserveProfile = clearCachesAfterGbmModelSourceChange();
+    const handledExternalMutation = await onExternalModelMutation({
+      modelKind: "gbm",
+      inventoryChanged: Boolean(options?.inventoryChanged),
+      activationOnly: Boolean(options?.activationOnly),
+      activeModelId: String(nextConfig?.active_model_id || activeModelFromData(nextConfig)?.model_id || ""),
+      renamedFrom,
+      renamedTo,
+      deletedModelIds,
+    });
+    if (!modelStateIsCurrent(generation)) return false;
     syncGbmModelCountFromConfig(nextConfig);
     const currentModelId = featureDraftModelId(config);
     const nextModelId = featureDraftModelId(nextConfig);
@@ -3909,8 +3929,7 @@ export function createGbmTool({
     } else {
       config = nextConfig;
       syncSidebarModelChooser(nextConfig?.models || [], nextConfig?.active_model_id);
-      const handledExternalActivation = options?.activationOnly && await onExternalModelActivation("gbm");
-      if (!handledExternalActivation && chartReady) {
+      if (!handledExternalMutation && chartReady) {
         await refreshActiveTool({ force: true });
       }
     }

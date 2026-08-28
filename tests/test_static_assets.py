@@ -3020,19 +3020,28 @@ if (hidden.xAxis.axisLabel.show !== false) throw new Error("density limit failed
         self.assertNotIn("/api/glm/tabulations/recalculate", glm)
 
     def test_glm_tabulation_model_switch_reuses_loaded_config(self) -> None:
-        glm = (
-            Path(__file__).resolve().parents[1]
-            / "src/py_lucidum/static/app/glm-tool.js"
-        ).read_text(encoding="utf-8")
+        static_root = Path(__file__).resolve().parents[1] / "src/py_lucidum/static"
+        glm = (static_root / "app/glm-tool.js").read_text(encoding="utf-8")
+        gbm = (static_root / "app/gbm-tool.js").read_text(encoding="utf-8")
+        main = (static_root / "app/main.js").read_text(encoding="utf-8")
 
         for contract in (
             "function tabulationSelectionConfigFromCache(",
+            "function registerTabulationModelMutation(",
+            "function reconcileTabulationModelRefs(",
+            "active: modelRef === activatedRef",
             "async function refreshTabulationSelectionFromCache()",
             "await renderTabulationSelectorTables();",
             "if (changed) refreshTabulationSelectionFromCache();",
             "const changed = previousKey !== tabulationSelectionKey();",
+            "if (refreshSeq !== tabulationSelectionRefreshSeq) return;",
+            "const modelRefs = reconcileTabulationModelRefs(response, requestedRefs);",
         ):
             self.assertIn(contract, glm)
+        self.assertIn("onExternalModelMutation = async () => false", gbm)
+        self.assertIn("await onExternalModelMutation({", gbm)
+        self.assertIn("glmTool.handleExternalModelMutation(mutation)", main)
+        self.assertNotIn("handleExternalModelActivation", glm + main)
         self.assertNotIn(
             "if (selectTabulationModel(modelId, event)) refreshTabulationConfig({ force: true });",
             glm,

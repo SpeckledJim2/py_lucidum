@@ -173,6 +173,8 @@ export function createGlmTool({
   let tabulationPayload = null;
   let tabulationRenderSeq = 0;
   let tabulationSelectionRefreshSeq = 0;
+  let tabulationInventoryDirty = false;
+  let tabulationFallbackModelKind = "";
   let tabulationSelectorRenderSeq = 0;
   let tabulationModelSelectorSignature = "";
   let tabulationTableSelectorSignature = "";
@@ -306,10 +308,15 @@ export function createGlmTool({
     if (!activeModelId) builderDraftSourceModelId = "";
     const availableModelIds = new Set(modelRows.map((model) => model.model_id));
     selectedModelIds = new Set(Array.from(selectedModelIds).filter((modelId) => availableModelIds.has(modelId)));
-    const availableTabulationRefs = new Set(tabulationAvailableModels().map((model) => tabulationModelRef(model)).filter(Boolean));
-    selectedTabulationModelIds = new Set(Array.from(selectedTabulationModelIds).map(normaliseTabulationRef).filter((modelRef) => availableTabulationRefs.has(modelRef)));
-    if (tabulationSelectionAnchorModelId && !availableTabulationRefs.has(normaliseTabulationRef(tabulationSelectionAnchorModelId))) tabulationSelectionAnchorModelId = "";
-    if (!selectedTabulationModelIds.size && data.active_model_id) selectedTabulationModelIds.add(`glm:${data.active_model_id}`);
+    const selectedTabulationRefs = Array.from(selectedTabulationModelIds).map(normaliseTabulationRef).filter(Boolean);
+    if (tabulationInventoryDirty) {
+      selectedTabulationModelIds = new Set(selectedTabulationRefs);
+    } else {
+      const availableTabulationRefs = new Set(tabulationAvailableModels().map((model) => tabulationModelRef(model)).filter(Boolean));
+      selectedTabulationModelIds = new Set(selectedTabulationRefs.filter((modelRef) => availableTabulationRefs.has(modelRef)));
+      if (tabulationSelectionAnchorModelId && !availableTabulationRefs.has(normaliseTabulationRef(tabulationSelectionAnchorModelId))) tabulationSelectionAnchorModelId = "";
+      if (!selectedTabulationModelIds.size && data.active_model_id) selectedTabulationModelIds.add(`glm:${data.active_model_id}`);
+    }
     const groupMeta = "";
     setGroupMeta(tool, groupMeta);
     setStatus("");
@@ -559,9 +566,11 @@ export function createGlmTool({
   }
 
   function tabulationSelectedModelIds() {
+    const explicitIds = tabulationExplicitModelIds();
+    if (tabulationInventoryDirty) return [...new Set(explicitIds)];
     const availableModels = tabulationAvailableModels();
     const availableModelIds = new Set(availableModels.map((model) => tabulationModelRef(model)).filter(Boolean));
-    const ids = Array.from(selectedTabulationModelIds).map(normaliseTabulationRef).filter((modelId) => availableModelIds.has(modelId));
+    const ids = explicitIds.filter((modelId) => availableModelIds.has(modelId));
     if (ids.length) return [...new Set(ids)];
     const active = availableModels.find((model) => model.active) || (config?.active_model_id ? { model_kind: "glm", model_id: config.active_model_id } : null) || availableModels[0] || null;
     const activeRef = active ? tabulationModelRef(active) : "";
@@ -574,6 +583,72 @@ export function createGlmTool({
 
   function tabulationModelRef(model = {}) {
     return tabulations.modelRef(model);
+  }
+
+  function tabulationExplicitModelIds() {
+    return [...new Set(Array.from(selectedTabulationModelIds).map(normaliseTabulationRef).filter(Boolean))];
+  }
+
+  function tabulationModelKindFromRef(modelRef) {
+    const kind = normaliseTabulationRef(modelRef).split(":", 1)[0];
+    return kind === "gbm" ? "gbm" : (kind === "glm" ? "glm" : "");
+  }
+
+  function tabulationRefForModel(modelKind, modelId) {
+    const kind = String(modelKind || "").toLowerCase() === "gbm" ? "gbm" : "glm";
+    const id = String(modelId || "").trim();
+    return id ? `${kind}:${id}` : "";
+  }
+
+  function registerTabulationModelMutation(mutation = {}) {
+    const modelKind = String(mutation.modelKind || "").toLowerCase() === "gbm" ? "gbm" : "glm";
+    const renamedFrom = tabulationRefForModel(modelKind, mutation.renamedFrom);
+    const renamedTo = tabulationRefForModel(modelKind, mutation.renamedTo);
+    const deletedRefs = new Set((mutation.deletedModelIds || []).map((modelId) => tabulationRefForModel(modelKind, modelId)).filter(Boolean));
+    const activatedRef = mutation.activationOnly
+      ? tabulationRefForModel(modelKind, mutation.activeModelId)
+      : "";
+    let selectionChanged = false;
+    if (renamedFrom && renamedTo) {
+      selectedTabulationModelIds = new Set(tabulationExplicitModelIds().map((modelRef) => {
+        if (modelRef !== renamedFrom) return modelRef;
+        selectionChanged = true;
+        return renamedTo;
+      }));
+      if (normaliseTabulationRef(tabulationSelectionAnchorModelId) === renamedFrom) {
+        tabulationSelectionAnchorModelId = renamedTo;
+      }
+      tabulationFallbackModelKind = modelKind;
+    }
+    if (deletedRefs.size) {
+      selectedTabulationModelIds = new Set(tabulationExplicitModelIds().filter((modelRef) => {
+        if (!deletedRefs.has(modelRef)) return true;
+        selectionChanged = true;
+        return false;
+      }));
+      if (deletedRefs.has(normaliseTabulationRef(tabulationSelectionAnchorModelId))) {
+        tabulationSelectionAnchorModelId = "";
+      }
+      tabulationFallbackModelKind = modelKind;
+    }
+    const inventoryChanged = Boolean(mutation.inventoryChanged || renamedFrom || deletedRefs.size);
+    if (inventoryChanged) {
+      tabulationInventoryDirty = true;
+      tabulationSelectionRefreshSeq += 1;
+    } else if (activatedRef && tabulationConfig) {
+      const updateActiveModels = (models = []) => (Array.isArray(models) ? models : []).map((model) => {
+        const modelRef = tabulationModelRef(model);
+        if (tabulationModelKindFromRef(modelRef) !== modelKind) return model;
+        return { ...model, active: modelRef === activatedRef };
+      });
+      tabulationConfig = {
+        ...tabulationConfig,
+        all_models: updateActiveModels(tabulationConfig.all_models),
+        models: updateActiveModels(tabulationConfig.models),
+      };
+      tabulationSelectionRefreshSeq += 1;
+    }
+    if (selectionChanged) resetTabulationCrosstabDefault();
   }
 
   function tabulationAvailableModels() {
@@ -605,8 +680,8 @@ export function createGlmTool({
     return models.find((model) => tabulationModelRef(model) === ref || String(model.model_id || "") === String(modelId || "")) || null;
   }
 
-  function tabulationSelectionConfigFromCache(modelRefs = tabulationSelectedModelIds()) {
-    const allModels = Array.isArray(tabulationConfig?.all_models) ? tabulationConfig.all_models : [];
+  function tabulationSelectionConfigFromCache(modelRefs = tabulationSelectedModelIds(), sourceConfig = tabulationConfig) {
+    const allModels = Array.isArray(sourceConfig?.all_models) ? sourceConfig.all_models : [];
     if (!allModels.length || !modelRefs.length) return null;
     const byRef = new Map(allModels.map((model) => [tabulationModelRef(model), model]));
     const models = modelRefs.map((modelRef) => byRef.get(normaliseTabulationRef(modelRef))).filter(Boolean);
@@ -626,7 +701,26 @@ export function createGlmTool({
       (tabulationTableIndex(left) - tabulationTableIndex(right))
       || String(left.table_id || "").localeCompare(String(right.table_id || ""))
     ));
-    return { ...tabulationConfig, models, tables, warnings };
+    return { ...sourceConfig, models, tables, warnings };
+  }
+
+  function reconcileTabulationModelRefs(sourceConfig = {}, requestedRefs = []) {
+    const allModels = Array.isArray(sourceConfig?.all_models) && sourceConfig.all_models.length
+      ? sourceConfig.all_models
+      : (Array.isArray(sourceConfig?.models) ? sourceConfig.models : []);
+    const refs = [...new Set(requestedRefs.map(normaliseTabulationRef).filter(Boolean))];
+    const availableByRef = new Map(allModels.map((model) => [tabulationModelRef(model), model]).filter(([modelRef]) => modelRef));
+    const availableRefs = refs.filter((modelRef) => availableByRef.has(modelRef));
+    if (availableRefs.length) return availableRefs;
+    if (!allModels.length) return [];
+    const preferredKind = refs.map(tabulationModelKindFromRef).find(Boolean) || tabulationFallbackModelKind;
+    const sameKind = (model) => !preferredKind || tabulationModelKindFromRef(tabulationModelRef(model)) === preferredKind;
+    const fallbackModel = allModels.find((model) => model.active && sameKind(model))
+      || allModels.find((model) => model.active)
+      || allModels.find(sameKind)
+      || allModels[0];
+    const fallbackRef = tabulationModelRef(fallbackModel);
+    return fallbackRef ? [fallbackRef] : [];
   }
 
   function selectedTabulationModel() {
@@ -1728,30 +1822,25 @@ export function createGlmTool({
   }
 
   async function refreshTabulationConfig(options = {}) {
-    tabulationSelectionRefreshSeq += 1;
-    let model_ids = tabulationSelectedModelIds();
-    const previousKey = tabulationSelectionKey(model_ids, selectedTabulationTableId);
-    selectedTabulationModelIds = new Set(model_ids);
+    const refreshSeq = tabulationSelectionRefreshSeq + 1;
+    tabulationSelectionRefreshSeq = refreshSeq;
+    const requestedRefs = tabulationInventoryDirty ? tabulationExplicitModelIds() : tabulationSelectedModelIds();
+    const previousKey = tabulationSelectionKey(requestedRefs, selectedTabulationTableId);
     tabulationPayload = null;
     try {
-      if (!model_ids.length) {
-        tabulationConfig = await api("/api/glm/tabulations/config", { method: "POST", body: JSON.stringify({ model_refs: [] }) });
-        const discoveredModels = Array.isArray(tabulationConfig?.all_models) ? tabulationConfig.all_models : [];
-        const defaultModel = discoveredModels.find((model) => model.active) || discoveredModels[0] || null;
-        const defaultModelRef = defaultModel ? tabulationModelRef(defaultModel) : "";
-        if (!defaultModelRef) {
-          resetTabulationCrosstabDefault();
-          const shellRebuilt = ensureTabulationShell();
-          if (!shellRebuilt) {
-            await renderTabulationSelectorTables({ force: Boolean(options.force) });
-            syncTabulationControls();
-          }
-          return;
-        }
-        model_ids = [defaultModelRef];
-        selectedTabulationModelIds = new Set(model_ids);
-      }
-      tabulationConfig = await api("/api/glm/tabulations/config", { method: "POST", body: JSON.stringify({ model_refs: model_ids }) });
+      const response = await api("/api/glm/tabulations/config", {
+        method: "POST",
+        body: JSON.stringify({ model_refs: requestedRefs }),
+      });
+      if (refreshSeq !== tabulationSelectionRefreshSeq) return;
+      const modelRefs = reconcileTabulationModelRefs(response, requestedRefs);
+      const reconciledConfig = modelRefs.length
+        ? tabulationSelectionConfigFromCache(modelRefs, response)
+        : null;
+      tabulationConfig = reconciledConfig || response;
+      selectedTabulationModelIds = new Set(modelRefs);
+      tabulationInventoryDirty = false;
+      tabulationFallbackModelKind = "";
       tabulationCrosstabDefaultCache.clear();
       const tables = Array.isArray(tabulationConfig?.tables) ? tabulationConfig.tables : [];
       if (tables.length && !tables.some((table) => String(table.table_id || "") === selectedTabulationTableId)) {
@@ -1766,11 +1855,13 @@ export function createGlmTool({
           forceModel: Boolean(options.forceModel),
           forceTables: Boolean(options.forceTables),
         });
+        if (refreshSeq !== tabulationSelectionRefreshSeq) return;
         syncTabulationControls();
       }
+      if (refreshSeq !== tabulationSelectionRefreshSeq) return;
       await loadTabulationView();
     } catch (error) {
-      setGlmNotice(error.message);
+      if (refreshSeq === tabulationSelectionRefreshSeq) setGlmNotice(error.message);
     }
   }
 
@@ -2496,6 +2587,7 @@ export function createGlmTool({
           if (!modelStateIsCurrent(generation)) return;
           liveProgress = null;
           await applyModelMutationResult({ model: job.result, config: latest }, {
+            inventoryChanged: true,
             modelStateGeneration: generation,
           });
           if (!modelStateIsCurrent(generation)) return;
@@ -3224,6 +3316,7 @@ export function createGlmTool({
       if (!modelStateIsCurrent(generation)) return;
       await applyModelMutationResult(result, {
         renamedFrom: modelId,
+        renamedTo: String(result?.model?.model_id || trimmed),
         modelStateGeneration: generation,
       });
     } catch (error) {
@@ -3253,6 +3346,7 @@ export function createGlmTool({
       }
       if (!modelStateIsCurrent(generation)) return;
       await applyModelMutationResult(result, {
+        deletedModelIds: modelIds,
         syncModelMetrics: modelIds.includes(activeModelIdBeforeDelete),
         modelStateGeneration: generation,
       });
@@ -3261,6 +3355,7 @@ export function createGlmTool({
         const latest = await api("/api/glm/config", { method: "GET", clientTiming: true });
         if (modelStateIsCurrent(generation)) {
           await applyModelMutationResult({ config: latest }, {
+            deletedModelIds: modelIds.slice(0, deletedCount),
             syncModelMetrics: modelIds.slice(0, deletedCount).includes(activeModelIdBeforeDelete),
             modelStateGeneration: generation,
           });
@@ -3300,9 +3395,10 @@ export function createGlmTool({
     return true;
   }
 
-  async function handleExternalModelActivation() {
+  async function handleExternalModelMutation(mutation = {}) {
+    registerTabulationModelMutation(mutation);
     if (state.tool !== tool || activeTab !== "tabulations" || !el("glmTabulationsPanel")) return false;
-    if (!tabulationConfig || tabulationActivationNeedsConfigRefresh()) {
+    if (tabulationInventoryDirty || !tabulationConfig || tabulationActivationNeedsConfigRefresh()) {
       await refreshTabulationConfig({ force: false });
       return true;
     }
@@ -3322,7 +3418,19 @@ export function createGlmTool({
     formulaBuilder.captureDraft();
     const nextConfig = result.config || config || {};
     const renamedFrom = String(options?.renamedFrom || "");
-    const renamedTo = String(result?.model?.model_id || "");
+    const renamedTo = String(options?.renamedTo || result?.model?.model_id || "");
+    const deletedModelIds = Array.isArray(options?.deletedModelIds) ? options.deletedModelIds : [];
+    if (options?.inventoryChanged || options?.activationOnly || renamedFrom || deletedModelIds.length) {
+      registerTabulationModelMutation({
+        modelKind: "glm",
+        inventoryChanged: Boolean(options?.inventoryChanged),
+        activationOnly: Boolean(options?.activationOnly),
+        activeModelId: currentActiveModelId(nextConfig),
+        renamedFrom,
+        renamedTo,
+        deletedModelIds,
+      });
+    }
     if (renamedFrom && renamedTo && builderDraftSourceModelId === renamedFrom) {
       builderDraftSourceModelId = renamedTo;
     }
@@ -3553,7 +3661,7 @@ export function createGlmTool({
   return {
     buildRequest,
     fetchData,
-    handleExternalModelActivation,
+    handleExternalModelMutation,
     openModelNavigator,
     render,
     refreshTheme,

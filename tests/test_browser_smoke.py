@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import csv
 import json
 import importlib.util
@@ -16824,6 +16825,292 @@ COPY (
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_glm_tabulations_reconcile_glm_and_simple_gbm_model_mutations(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "tabulation_model_mutations.csv"
+            data_path.write_text(
+                "actualNumerator,denominator,Age,Segment,SAMPLE\n"
+                "10,1,30,A,training\n"
+                "20,1,40,B,test\n"
+                "30,1,50,A,training\n",
+                encoding="utf-8",
+            )
+            glm_store = GlmModelStore(data_path)
+            self.write_glm_prediction_model(glm_store, "glm-current", "Current GLM", "2026-08-28T12:00:00Z", [10.0, 20.0, 30.0])
+            self.write_glm_prediction_model(glm_store, "glm-fallback", "Fallback GLM", "2026-08-28T11:00:00Z", [11.0, 21.0, 31.0])
+            self.write_glm_tabulation_artifacts(glm_store, "glm-current", offset=0.1)
+            self.write_glm_tabulation_artifacts(glm_store, "glm-fallback", offset=0.2)
+            glm_store.activate_model("glm-current")
+            gbm_store = GbmModelStore(data_path)
+            self.write_gbm_prediction_model(gbm_store, "gbm-simple", "Simple 1D GBM", "2026-08-28T12:00:00Z", [10.0, 20.0, 30.0])
+            self.write_gbm_tabulation_artifacts(gbm_store, "gbm-simple", offset=0.3)
+            gbm_store.activate_model("gbm-simple")
+            base_url, server, thread = self.start_app(
+                data_path,
+                tools=["line_bar", "glm", "gbm"],
+                defaults={"x": "Age", "actual": "actualNumerator", "denominator": "denominator"},
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    config_requests: list[dict[str, Any]] = []
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.on(
+                        "request",
+                        lambda request: config_requests.append(json.loads(request.post_data or "{}"))
+                        if request.url.endswith("/api/glm/tabulations/config")
+                        else None,
+                    )
+                    try:
+                        page.goto(base_url, wait_until="networkidle")
+                        page.locator("#glmTool").click()
+                        page.locator(".glm-tool").wait_for(timeout=10_000)
+                        page.get_by_role("tab", name="Tabulations").click()
+                        page.locator("#glmTabulationTableGrid .tabulator-row", has_text="Age").wait_for(timeout=10_000)
+                        page.locator("#glmTabulationTableGrid .tabulator-row", has_text="Age").click()
+                        page.locator("#glmTabulationTable .tabulator-row", has_text="30").wait_for(timeout=10_000)
+
+                        page.get_by_role("tab", name="Model navigator").click()
+                        page.locator("#glmModelGrid .tabulator-row", has_text="Current GLM").click()
+                        page.wait_for_function("() => !document.querySelector('#glmRenameModelBtn')?.disabled")
+                        page.once("dialog", lambda dialog: dialog.accept("glm-current-renamed"))
+                        with page.expect_response("**/api/glm/models/glm-current/rename", timeout=10_000):
+                            page.locator("#glmRenameModelBtn").click()
+                        page.wait_for_function(
+                            """
+                            () => window.Tabulator?.findTable?.("#glmModelGrid")?.[0]?.getRows?.()
+                              .some((row) => row.getData()?.model_id === "glm-current-renamed")
+                            """,
+                            timeout=10_000,
+                        )
+                        page.get_by_role("tab", name="Tabulations").click()
+                        page.locator("#glmTabulationTableGrid .tabulator-row", has_text="Age").wait_for(timeout=10_000)
+                        page.locator("#glmTabulationTable .tabulator-row", has_text="30").wait_for(timeout=10_000)
+                        self.assertEqual(config_requests[-1]["model_refs"], ["glm:glm-current-renamed"])
+                        self.assertEqual(page.locator("#glmTabulationTableGrid .tabulator-placeholder").count(), 0)
+
+                        row_selection_modifier = "Meta" if sys.platform == "darwin" else "Control"
+                        page.locator("#glmTabulationModelGrid .tabulator-row", has_text="Simple 1D GBM").click(
+                            modifiers=[row_selection_modifier]
+                        )
+                        page.wait_for_function(
+                            "() => document.querySelectorAll('#glmTabulationModelGrid .tabulator-row.tabulator-selected').length === 2"
+                        )
+                        config_count_before_gbm_switch = len(config_requests)
+
+                        page.locator("#gbmTool").click()
+                        page.locator(".gbm-tool").wait_for(timeout=10_000)
+                        page.locator("#gbm-screen-tab-models").click()
+                        self.select_gbm_navigator_model(page, "gbm-simple", "Simple 1D GBM")
+                        page.once("dialog", lambda dialog: dialog.accept("gbm-simple-renamed"))
+                        with page.expect_response("**/api/gbm/models/gbm-simple/rename", timeout=10_000):
+                            page.locator("#gbmRenameModelBtn").click()
+                        page.wait_for_function(
+                            """
+                            () => window.Tabulator?.findTable?.("#gbmModelGrid")?.[0]?.getRows?.()
+                              .some((row) => row.getData()?.model_id === "gbm-simple-renamed")
+                            """,
+                            timeout=10_000,
+                        )
+
+                        page.locator("#glmTool").click()
+                        page.locator("#glmTabulationCommonTableGrid .tabulator-row", has_text="Age").wait_for(timeout=10_000)
+                        page.locator("#glmTabulationTable .tabulator-row", has_text="30").wait_for(timeout=10_000)
+                        self.assertEqual(len(config_requests), config_count_before_gbm_switch + 1)
+                        self.assertEqual(
+                            config_requests[-1]["model_refs"],
+                            ["glm:glm-current-renamed", "gbm:gbm-simple-renamed"],
+                        )
+                        self.assertEqual(
+                            page.locator("#glmTabulationModelGrid .tabulator-row.tabulator-selected").count(),
+                            2,
+                        )
+
+                        page.locator("#gbmTool").click()
+                        page.locator(".gbm-tool").wait_for(timeout=10_000)
+                        page.locator("#gbm-screen-tab-models").click()
+                        self.select_gbm_navigator_model(
+                            page,
+                            "gbm-simple-renamed",
+                            "gbm-simple-renamed",
+                            timeout=10_000,
+                        )
+                        page.once("dialog", lambda dialog: dialog.accept())
+                        with page.expect_response("**/api/gbm/models/gbm-simple-renamed", timeout=10_000):
+                            page.locator("#gbmDeleteModelBtn").click()
+                        page.wait_for_function(
+                            """
+                            () => !(window.Tabulator?.findTable?.("#gbmModelGrid")?.[0]?.getRows?.() || [])
+                              .some((row) => row.getData()?.model_id === "gbm-simple-renamed")
+                            """,
+                            timeout=10_000,
+                        )
+
+                        page.locator("#glmTool").click()
+                        page.locator("#glmTabulationTableGrid .tabulator-row", has_text="Age").wait_for(timeout=10_000)
+                        page.locator("#glmTabulationTable .tabulator-row", has_text="30").wait_for(timeout=10_000)
+                        self.assertEqual(config_requests[-1]["model_refs"], ["glm:glm-current-renamed"])
+                        self.assertEqual(
+                            page.locator("#glmTabulationModelGrid .tabulator-row.tabulator-selected").count(),
+                            1,
+                        )
+
+                        page.get_by_role("tab", name="Model navigator").click()
+                        page.evaluate(
+                            """
+                            () => window.Tabulator?.findTable?.("#glmModelGrid")?.[0]?.getRows?.()
+                              .find((row) => row.getData()?.model_id === "glm-current-renamed")?.select()
+                            """
+                        )
+                        page.wait_for_function("() => !document.querySelector('#glmDeleteModelBtn')?.disabled")
+                        page.once("dialog", lambda dialog: dialog.accept())
+                        with page.expect_response("**/api/glm/models/glm-current-renamed", timeout=10_000):
+                            page.locator("#glmDeleteModelBtn").click()
+                        page.wait_for_function(
+                            """
+                            () => window.Tabulator?.findTable?.("#glmModelGrid")?.[0]?.getRows?.()
+                              .some((row) => row.getData()?.model_id === "glm-fallback")
+                            """,
+                            timeout=10_000,
+                        )
+                        page.get_by_role("tab", name="Tabulations").click()
+                        page.locator("#glmTabulationTableGrid .tabulator-row", has_text="Age").wait_for(timeout=10_000)
+                        page.locator("#glmTabulationTable .tabulator-row", has_text="30").wait_for(timeout=10_000)
+                        self.assertEqual(config_requests[-1]["model_refs"], [])
+                        self.assertTrue(
+                            page.locator("#glmTabulationModelGrid .tabulator-row.tabulator-selected")
+                            .text_content()
+                            .startswith("Fallback GLM")
+                        )
+                        self.assertEqual(page.locator("#glmTabulationTableGrid .tabulator-placeholder").count(), 0)
+                        self.assertEqual(page_errors, [])
+                    finally:
+                        browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_glm_tabulations_latest_config_response_wins(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "tabulation_latest_response.csv"
+            data_path.write_text(
+                "actualNumerator,denominator,Age,SAMPLE\n"
+                "10,1,30,training\n"
+                "20,1,40,test\n"
+                "30,1,50,training\n",
+                encoding="utf-8",
+            )
+            glm_store = GlmModelStore(data_path)
+            self.write_glm_prediction_model(
+                glm_store,
+                "delayed-model",
+                "Delayed model",
+                "2026-08-28T12:00:00Z",
+                [10.0, 20.0, 30.0],
+                formula="actualNumerator ~ 1 + Age",
+            )
+            self.write_glm_tabulation_artifacts(glm_store, "delayed-model", offset=0.1)
+            glm_store.activate_model("delayed-model")
+
+            delay_next_config = {"enabled": False}
+            delayed_response_ready = threading.Event()
+            release_delayed_response = threading.Event()
+            delayed_response_returned = threading.Event()
+
+            def configure_app(app: Any) -> None:
+                @app.middleware("http")
+                async def delay_tabulation_config(request: Any, call_next: Any) -> Any:
+                    should_delay = (
+                        request.url.path == "/api/glm/tabulations/config"
+                        and delay_next_config["enabled"]
+                    )
+                    if should_delay:
+                        delay_next_config["enabled"] = False
+                    response = await call_next(request)
+                    if should_delay:
+                        delayed_response_ready.set()
+                        while not release_delayed_response.is_set():
+                            await asyncio.sleep(0.01)
+                        delayed_response_returned.set()
+                    return response
+
+            base_url, server, thread = self.start_app(
+                data_path,
+                tools=["line_bar", "glm"],
+                defaults={"x": "Age", "actual": "actualNumerator", "denominator": "denominator"},
+                configure_app=configure_app,
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    config_requests: list[dict[str, Any]] = []
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    page.on(
+                        "request",
+                        lambda request: config_requests.append(json.loads(request.post_data or "{}"))
+                        if request.url.endswith("/api/glm/tabulations/config")
+                        else None,
+                    )
+                    try:
+                        page.goto(base_url, wait_until="networkidle")
+                        page.locator("#glmTool").click()
+                        page.locator(".glm-tool").wait_for(timeout=10_000)
+                        page.get_by_role("tab", name="Tabulations").click()
+                        page.locator("#glmTabulationTableGrid .tabulator-row", has_text="Age").wait_for(timeout=10_000)
+                        page.locator("#glmTabulationTableGrid .tabulator-row", has_text="Age").click()
+                        page.locator("#glmTabulationTable .tabulator-row", has_text="30").wait_for(timeout=10_000)
+                        page.get_by_role("tab", name="Model navigator").click()
+
+                        delay_next_config["enabled"] = True
+                        page.get_by_role("tab", name="Tabulations").click()
+                        self.assertTrue(delayed_response_ready.wait(timeout=10))
+
+                        rename_response = page.request.post(
+                            f"{base_url}/api/glm/models/delayed-model/rename",
+                            data={"new_model_id": "renamed-model"},
+                        )
+                        self.assertEqual(rename_response.status, 200)
+
+                        page.get_by_role("tab", name="Model navigator").click()
+                        page.get_by_role("tab", name="Tabulations").click()
+                        page.locator("#glmTabulationModelGrid .tabulator-row.tabulator-selected", has_text="renamed-model").wait_for(
+                            timeout=10_000
+                        )
+                        page.locator("#glmTabulationTable .tabulator-row", has_text="30").wait_for(timeout=10_000)
+
+                        release_delayed_response.set()
+                        self.assertTrue(delayed_response_returned.wait(timeout=10))
+                        page.wait_for_timeout(250)
+
+                        selected_model_text = page.locator(
+                            "#glmTabulationModelGrid .tabulator-row.tabulator-selected"
+                        ).inner_text()
+                        self.assertIn("renamed-model", selected_model_text)
+                        self.assertNotIn("Delayed model", selected_model_text)
+                        self.assertEqual(config_requests[-2:], [
+                            {"model_refs": ["glm:delayed-model"]},
+                            {"model_refs": ["glm:delayed-model"]},
+                        ])
+                        self.assertEqual(page.locator("#glmTabulationTableGrid .tabulator-placeholder").count(), 0)
+                        self.assertEqual(page_errors, [])
+                    finally:
+                        release_delayed_response.set()
+                        browser.close()
+            finally:
+                release_delayed_response.set()
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     @unittest.skipUnless(importlib.util.find_spec("glum") is not None, "glum is not installed")
     def test_glm_tabulation_rebase_smoke(self) -> None:
         with TemporaryDirectory() as tmp_dir:
@@ -17312,7 +17599,7 @@ COPY (
 
                     self.assertEqual(
                         [request["model_refs"] for request in tabulation_config_requests],
-                        [[], ["gbm:first-ebm"]],
+                        [[]],
                     )
                     self.assertEqual(page.locator("#glmTabulationModelGrid .tabulator-row").count(), 1)
                     self.assertEqual(page.locator("#glmTabulationModelGrid .tabulator-row.tabulator-selected").count(), 1)

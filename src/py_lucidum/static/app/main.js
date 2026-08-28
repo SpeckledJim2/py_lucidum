@@ -557,7 +557,7 @@
         reloadSchema: reloadSchemaAfterModelMutation,
         invalidateLineBar: (options = {}) => lineBarTool.invalidate(options),
         getDenominatorSelection: denominatorSelection,
-        onExternalModelActivation: (modelKind) => glmTool.handleExternalModelActivation(modelKind),
+        onExternalModelMutation: (mutation) => glmTool.handleExternalModelMutation(mutation),
       });
       const specificationsTool = createSpecificationsTool({
         api,
