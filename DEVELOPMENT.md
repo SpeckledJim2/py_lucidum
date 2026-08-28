@@ -88,7 +88,8 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
     `python examples/postcode_sector_smoothing_demo.py`.
   - The two executable builders are linear `# %%` scripts with six numbered
     sections: load settings/data, prepare inputs, train, predict/evaluate,
-    calculate/save normal results, and optionally install in Lucidum.
+    calculate/save normal results, and optionally copy the saved folder into
+    Lucidum's dataset workspace and activate it.
   - All seven numbered workflows support Positron code-cell execution, where
     `__file__` is absent. Interactive runs use the matching YAML beside the
     example helpers; whole-script runs retain their optional YAML argument.
@@ -335,11 +336,11 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
   unknown Python files; `--dry-run` performs no writes.
 - External builders must remain independent of `py_lucidum`. The neutral
   writer assigns one-based `__lucidum_row_id` before any filtering and writes
-  only below `model_results_root/<type>/<model-id>`. The optional installer
-  reproduces workspace-signature version 1 from file size, nanosecond mtime,
-  row count, and ordered DuckDB schema, and installs only to
+  only below `model_results_root/<type>/<model-id>`. The optional workspace-copy
+  helper reproduces workspace-signature version 1 from file size, nanosecond mtime,
+  row count, and ordered DuckDB schema, and copies only to
   `.lucidum/datasets/<slug>/<signature>/models/<type>/<model-id>`.
-- Installation is a staged rename of one validated model folder. Replacement
+- Workspace publishing uses a staged rename of one validated model folder. Replacement
   may move that exact folder through a temporary backup, but must never delete
   a model-type root or wider dataset sidecar. Write `active_model.json` only
   after the model folder is live. The authoritative model-results root has no
@@ -353,6 +354,12 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
   zero rows and unavailable metrics when no eligible fitted prediction exists.
   At least one configured role must be available, and persisted split Ginis must
   be joined by the explicit role rather than performance-row position.
+  Its diagnostics must populate the GLM Model navigator's term, feature,
+  interaction, fitted-row, Deviance, AIC, BIC, and split-Gini fields. Its compact
+  manifest records fit-only and overall elapsed milliseconds. The optional
+  workspace-copy helper validates the complete GLM artifact and metadata contract
+  before replacing a model folder or updating `active_model.json`; statistical
+  metrics are required keys but remain nullable when undefined.
 - The external GBM contract fits LightGBM directly and writes the current
   parameters/features/feature-config/model/prediction/evaluation/tree/SHAP
   artifacts. Preserve deterministic category ordering and SHAP sampling,

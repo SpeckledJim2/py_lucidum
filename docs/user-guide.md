@@ -1104,8 +1104,9 @@ modification time, row count, and schema fingerprint. Models trained for one fil
 one version therefore do not silently appear against another.
 
 Replacing or editing a dataset creates a new signature. Earlier models remain on
-disk but are not shown for the new version; rebuild or deliberately reinstall a
-compatible external model. Folder inputs do not create modelling workspaces.
+disk but are not shown for the new version; rebuild or deliberately copy a
+compatible external model into the new workspace. Folder inputs do not create
+modelling workspaces.
 
 ### Managing saved models
 
@@ -1266,8 +1267,10 @@ population without eligible fitted predictions shows zero rows and unavailable
 metrics, and each Gini remains tied to its named sample role.
 
 Reports read the named results folder directly and do not require a `.lucidum`
-workspace. The optional installation step copies and activates the completed model
-beside its source dataset so it can be reviewed in Lucidum without retraining.
+workspace. The optional workspace-copy step copies and activates the completed model
+beside its source dataset so it can be reviewed in Lucidum without retraining. The
+existing `install_in_lucidum` configuration name is retained for compatibility; it
+does not install a package or register the model with an external service.
 
 Install the example dependencies from a checkout:
 

@@ -2072,7 +2072,7 @@ const glmNavigator = createGlmModelNavigator({{
 }});
 const glmTarget = target();
 glmNavigator.renderFallback(glmTarget, [
-  {{ model_id: "new", label: "New GLM", training_scope: "training_test", n_terms: 3, n_features: 2, n_interactions: 1, tabulated: true, diagnostics: {{ gini_tr: 0.81234, gini_te: -0.25, gini_vl: null }} }},
+  {{ model_id: "new", label: "New GLM", training_scope: "training_test", n_terms: 3, n_features: 2, n_interactions: 1, tabulated: true, timings: {{ fit_ms: 1200, elapsed_ms: 2500 }}, diagnostics: {{ bic: 123.45, gini_tr: 0.81234, gini_te: -0.25, gini_vl: null }} }},
   {{ model_id: "legacy", label: "Legacy GLM", tabulated: false, diagnostics: {{}} }},
 ]);
 if (!glmTarget.innerHTML.includes("<th>Name</th>")) throw new Error("GLM fallback Name heading missing");
@@ -2087,6 +2087,9 @@ if (!glmTarget.innerHTML.includes("<th>Rows</th>\\n            <th>Scope</th>\\n
 if (!glmTarget.innerHTML.includes('<td class="numeric">0.81234</td>')) throw new Error("GLM gini_tr value missing");
 if (!glmTarget.innerHTML.includes('<td class="numeric">-0.25</td>')) throw new Error("GLM gini_te value missing");
 if (!glmTarget.innerHTML.includes('<td class="numeric">--</td>')) throw new Error("GLM null Gini value missing");
+if (!glmTarget.innerHTML.includes('<td class="numeric">123.45</td>')) throw new Error("GLM BIC value missing");
+if (!glmTarget.innerHTML.includes('<td class="numeric">1.2s</td>')) throw new Error("GLM fit time missing");
+if (!glmTarget.innerHTML.includes('<td class="numeric">2.5s</td>')) throw new Error("GLM overall time missing");
 if (!glmTarget.innerHTML.includes('<td class="numeric">3</td>\\n        <td class="numeric">2</td>\\n        <td class="numeric">1</td>\\n        <td>Yes</td>')) throw new Error("GLM captured metadata missing");
 if (!glmTarget.innerHTML.includes('<td class="numeric"></td>\\n        <td class="numeric"></td>\\n        <td class="numeric"></td>\\n        <td>-</td>')) throw new Error("GLM legacy metadata fallback failed");
 if (!glmTarget.innerHTML.includes("<td>Training + Test</td>")) throw new Error("GLM training + test scope missing");

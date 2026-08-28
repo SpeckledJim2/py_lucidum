@@ -7,8 +7,8 @@ module after fitting and prediction.
 
 This module deliberately does not import :mod:`py_lucidum`.  It writes the
 compact model, prediction, diagnostic, evaluation, tree, and SHAP artifacts
-used by the reporting examples. Optional application installation is kept in
-``lucidum_install.py``.
+used by the reporting examples. The optional dataset-workspace copy is kept in
+``lucidum_install.py``; its compatibility name does not imply package installation.
 """
 
 from __future__ import annotations
@@ -52,6 +52,7 @@ def save_glm_model_results(
     model: Any,
     predictions: pd.Series,
     fit_mask: pd.Series,
+    fit_ms: float,
     started: float,
     intercept_only: bool = False,
     internal_intercept_column: str = "",
@@ -63,6 +64,9 @@ def save_glm_model_results(
     output = config["output"]
     regularization = model_config["regularization"]
     model_id = validate_model_id(model_config["id"])
+    fit_milliseconds = float(fit_ms)
+    if not math.isfinite(fit_milliseconds) or fit_milliseconds < 0:
+        raise ValueError("fit_ms must be a finite non-negative number")
 
     response = pd.to_numeric(data[str(dataset["response_numerator"])], errors="coerce")
     denominator_name = str(dataset.get("denominator") or "").strip()
@@ -197,7 +201,7 @@ def save_glm_model_results(
             "intercept_only": bool(intercept_only),
             "internal_intercept_column": str(internal_intercept_column),
         },
-        "timings": {"elapsed_ms": round((time.perf_counter() - started) * 1000, 1)},
+        "timings": {},
     }
 
     prediction_frame = pd.DataFrame(
@@ -231,6 +235,10 @@ def save_glm_model_results(
             pickle.dump(model, handle, protocol=pickle.HIGHEST_PROTOCOL)
         (staging / "formula.txt").write_text(formula_text, encoding="utf-8")
         write_json(staging / "diagnostics.json", diagnostics)
+        manifest["timings"] = {
+            "fit_ms": round(fit_milliseconds, 1),
+            "elapsed_ms": round((time.perf_counter() - started) * 1000, 1),
+        }
         write_json(staging / "manifest.json", manifest)
         replace_directory(staging, model_dir, replace_existing=bool(output["replace_existing"]))
     except Exception:
@@ -627,11 +635,25 @@ def glm_diagnostics(
     family = model.family_instance
     deviance = safe_metric(family.deviance, target, prediction, sample_weight=weights)
     log_likelihood = safe_metric(family.log_likelihood, target, prediction, sample_weight=weights)
-    aic = None if log_likelihood is None else 2 * len(coefficients) - 2 * log_likelihood
+    coefficient_values = np.asarray(getattr(model, "coef_", []), dtype=float)
+    nonzero = int(
+        np.count_nonzero(
+            np.abs(coefficient_values) > np.finfo(coefficient_values.dtype).eps
+        )
+    )
+    effective_parameters = nonzero + int(bool(getattr(model, "fit_intercept", True)))
+    observation_count = int(np.asarray(target).shape[0])
+    if log_likelihood is None:
+        aic = None
+        bic = None
+    else:
+        aic = -2 * log_likelihood + 2 * effective_parameters
+        bic = -2 * log_likelihood + math.log(observation_count) * effective_parameters
     return {
         "deviance": deviance,
         "log_likelihood": log_likelihood,
         "aic": json_number(aic),
+        "bic": json_number(bic),
         "dispersion": safe_metric(
             family.dispersion,
             target,

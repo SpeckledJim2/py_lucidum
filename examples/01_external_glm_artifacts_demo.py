@@ -2,8 +2,8 @@
 
 Normally run this script unchanged.  The YAML and formula file control the
 analysis. Parts 1-4 are ordinary pandas and glum modelling code; Part 5 saves
-the fitted model and predictions for reporting; Part 6 optionally installs
-that saved folder in Lucidum.
+the fitted model and predictions for reporting; Part 6 optionally copies that
+saved folder into Lucidum's dataset workspace and activates it.
 """
 
 # %% Imports
@@ -152,6 +152,7 @@ if intercept_only:
 
 model = GeneralizedLinearRegressor(**estimator_settings)
 
+fit_started = time.perf_counter()
 model.fit(
     training_data,
     training_target,
@@ -159,6 +160,7 @@ model.fit(
     store_covariance_matrix=alpha == 0,
     context=formula_functions,
 )
+fit_ms = round((time.perf_counter() - fit_started) * 1000, 1)
 
 
 # %% 4. Predict and evaluate
@@ -183,6 +185,7 @@ result = save_glm_model_results(
     model=model,
     predictions=predictions,
     fit_mask=fit_mask,
+    fit_ms=fit_ms,
     started=started,
     intercept_only=intercept_only,
     internal_intercept_column=internal_intercept_column,
@@ -192,7 +195,7 @@ print(f"GLM model id: {result['model_id']}")
 print(f"Model folder: {result['model_folder']}")
 
 
-# %% 6. Optionally install the saved model in Lucidum
+# %% 6. Optionally publish the saved model to Lucidum's workspace
 
 if bool(config["output"]["install_in_lucidum"]):
     from lucidum_install import install_model_in_lucidum

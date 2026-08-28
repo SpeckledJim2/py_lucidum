@@ -3,7 +3,8 @@
 Normally run this script unchanged.  The YAML and Feature Specification
 control the analysis. Parts 1-4 are ordinary pandas and LightGBM modelling
 code; Part 5 saves the fitted model and predictions for reporting; Part 6
-optionally installs that saved folder in Lucidum.
+optionally copies that saved folder into Lucidum's dataset workspace and
+activates it.
 """
 
 # %% Imports
@@ -226,7 +227,7 @@ print(f"GBM model id: {result['model_id']}")
 print(f"Model folder: {result['model_folder']}")
 
 
-# %% 6. Optionally install the saved model in Lucidum
+# %% 6. Optionally publish the saved model to Lucidum's workspace
 
 if bool(config["output"]["install_in_lucidum"]):
     from lucidum_install import install_model_in_lucidum

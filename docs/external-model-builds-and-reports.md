@@ -183,12 +183,14 @@ config_path = Path("path/to/my_gbm.yaml").expanduser().resolve()
 
 The remaining lines and cells are unchanged.
 
-## Optionally view the externally trained models in Lucidum
+## Optionally publish externally trained models to Lucidum's workspace
 
 The supplied build YAML files set `output.install_in_lucidum: true`. After the
 normal model results have been saved, this copies and activates the model in a
 hidden folder beside the source dataset. Open Lucidum against that same dataset
-file and it will find the installed model automatically:
+file and it will find the workspace copy automatically. The configuration key
+retains its existing name for compatibility; this is a file-copy operation, not
+package installation or a separate model-registration service:
 
 ```bash
 lucidum datasets/motor_premiums.parquet --tools line-bar,glm,gbm --features specs/feature_spec.csv
@@ -215,13 +217,23 @@ The two `01` scripts follow the same six-part sequence:
 3. Train.
 4. Predict and evaluate.
 5. Calculate and save normal model results.
-6. Optionally install the saved model in Lucidum.
+6. Optionally copy the saved model into Lucidum's dataset workspace and activate it.
 
 Both `01` writers save `gini_tr`, `gini_te`, and `gini_vl` from final predictions.
 They use Lucidum's canonical [Normalized Gini definition](user-guide.md#normalized-gini),
 including exposure/rate treatment, tie handling, undefined cases, and configured
 sample-label mapping. These metrics are diagnostic only and do not affect fitting,
 early stopping, or model selection.
+
+External GLMs also save the Model navigator's term, feature, interaction, fitted-row,
+Deviance, AIC, BIC, fit-time, and overall-time metadata. The workspace-copy helper
+rejects incomplete GLM folders rather than publishing a model with blank required
+metadata. Statistical metrics remain nullable when their documented calculation is
+undefined.
+
+Existing external GLM folders are not modified or backfilled automatically. Rerun
+the `01` workflow and allow it to replace and copy the named model folder when an
+older build lacks the complete Model navigator metadata.
 
 ### GLM settings
 
@@ -354,11 +366,11 @@ create one optional application copy:
    `<glm|gbm>/<model.id>`. The `01` script returns and prints this exact
    `model_folder`. The `02` and `03` scripts read it directly, and GLM `03`
    writes its tabulations and workbook back into it.
-2. **Optional Lucidum installation** — when
+2. **Optional Lucidum workspace copy** — when
    `output.install_in_lucidum: true`, the saved folder is copied into the
    hidden dataset-version workspace and that exact model ID is activated.
 
-The supplied examples enable installation and set `replace_existing: true`,
+The supplied examples enable this copy and set `replace_existing: true`,
 which replaces only a previous GLM or GBM with the same `model.id`. It does not
 delete other models or other dataset information. Set
 `install_in_lucidum: false` to run all three scripts without creating or using
@@ -480,8 +492,8 @@ and one optional synchronization:
 2. Score every source row from those persisted rating tables.
 3. Export the tables to XLSX.
 4. Write a one-page HTML model summary.
-5. When `install_in_lucidum` is true, reinstall the updated model folder so
-   the application also sees the new tabulations.
+5. When `install_in_lucidum` is true, copy the updated model folder to the
+   workspace again so the application also sees the new tabulations.
 
 `config_glm_summary_report.yaml` supplies the `01` build config, Feature
 Specification, KPI Specification, report title/name, and output directory.
@@ -703,4 +715,4 @@ writing a different Python workflow, the same public functions are available:
 Omit `model_folder` to retain the existing dataset-sidecar lookup for backward
 compatibility. `external_model_results.py` is the neutral writer used by the
 `01` scripts; `lucidum_install.py` is used only for the optional application
-installation. Users normally do not call or edit either helper directly.
+workspace copy. Users normally do not call or edit either helper directly.

@@ -742,6 +742,168 @@ class ExternalModelExampleTests(unittest.TestCase):
         )
         self.assertEqual(warnings, [])
 
+    def test_external_gini_helper_keeps_undefined_role_fields(self) -> None:
+        writer = load_model_results_writer()
+        metrics, warnings = writer.split_gini_metrics(
+            actual=[1.0, 1.0, 1.0],
+            prediction=[1.0, 1.0, 1.0],
+            sample_roles=["training", "test", "validation"],
+        )
+
+        self.assertEqual(
+            metrics,
+            {"gini_tr": None, "gini_te": None, "gini_vl": None},
+        )
+        self.assertEqual(len(warnings), 3)
+        self.assertTrue(all("Gini could not be calculated" in warning for warning in warnings))
+
+    def test_external_glm_diagnostics_match_navigator_aic_bic_contract(self) -> None:
+        import numpy as np
+
+        writer = load_model_results_writer()
+
+        class Family:
+            @staticmethod
+            def deviance(*_args: Any, **_kwargs: Any) -> float:
+                return 12.5
+
+            @staticmethod
+            def log_likelihood(*_args: Any, **_kwargs: Any) -> float:
+                return -10.0
+
+            @staticmethod
+            def dispersion(*_args: Any, **_kwargs: Any) -> float:
+                return 1.25
+
+        class PenalizedModel:
+            family_instance = Family()
+            coef_ = np.asarray([0.75, 0.0])
+            fit_intercept = True
+
+        diagnostics = writer.glm_diagnostics(
+            PenalizedModel(),
+            np.asarray([1.0, 2.0, 3.0, 4.0]),
+            np.asarray([1.1, 1.9, 3.1, 3.9]),
+            None,
+            [{}, {}, {}],
+        )
+
+        effective_parameters = 2
+        self.assertEqual(diagnostics["deviance"], 12.5)
+        self.assertAlmostEqual(diagnostics["aic"], 20.0 + 2 * effective_parameters)
+        self.assertAlmostEqual(
+            diagnostics["bic"],
+            20.0 + math.log(4) * effective_parameters,
+        )
+
+        class UnavailableFamily(Family):
+            @staticmethod
+            def log_likelihood(*_args: Any, **_kwargs: Any) -> float:
+                raise ValueError("unavailable")
+
+        class UnavailableModel(PenalizedModel):
+            family_instance = UnavailableFamily()
+
+        unavailable = writer.glm_diagnostics(
+            UnavailableModel(),
+            np.asarray([1.0, 2.0]),
+            np.asarray([1.0, 2.0]),
+            None,
+            [{}, {}, {}],
+        )
+        self.assertIsNone(unavailable["aic"])
+        self.assertIsNone(unavailable["bic"])
+
+    def test_glm_workspace_copy_rejects_incomplete_navigator_metadata(self) -> None:
+        installer = load_lucidum_installer()
+
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            dataset_path = root / "data.csv"
+            dataset_path.write_text("Y\n1\n2\n", encoding="utf-8")
+            metadata = installer.workspace_metadata(dataset_path)
+            parent = (
+                dataset_path.parent
+                / ".lucidum"
+                / "datasets"
+                / metadata["slug"]
+                / metadata["signature"]
+                / "models"
+                / "glm"
+            )
+
+            for case, expected_error in (
+                ("missing diagnostics", "diagnostics.json"),
+                ("missing BIC", "bic"),
+                ("missing fit time", r"timings\.fit_ms"),
+            ):
+                with self.subTest(case=case):
+                    model_id = re.sub(r"[^a-z]+", "-", case).strip("-")
+                    source = root / "results" / model_id
+                    source.mkdir(parents=True)
+                    manifest = {
+                        "model_id": model_id,
+                        "label": case,
+                        "created_at": "2026-08-27T00:00:00Z",
+                        "response_column": "Y",
+                        "denominator_column": "",
+                        "family": "normal",
+                        "training_scope": "all",
+                        "timings": {"fit_ms": 1.0, "elapsed_ms": 2.0},
+                    }
+                    diagnostics = {
+                        "n_terms": 2,
+                        "n_features": 1,
+                        "n_interactions": 0,
+                        "training_rows": 2,
+                        "deviance": 0.1,
+                        "aic": 2.1,
+                        "bic": 2.2,
+                        "gini_tr": None,
+                        "gini_te": None,
+                        "gini_vl": None,
+                    }
+                    for artifact in installer.REQUIRED_GLM_ARTIFACTS:
+                        (source / artifact).write_bytes(b"artifact")
+                    installer.write_json(source / "manifest.json", manifest)
+                    installer.write_json(source / "diagnostics.json", diagnostics)
+                    installer.validate_glm_model_folder(source, model_id)
+                    if case == "missing diagnostics":
+                        (source / "diagnostics.json").unlink()
+                    elif case == "missing BIC":
+                        diagnostics.pop("bic")
+                        installer.write_json(source / "diagnostics.json", diagnostics)
+                    else:
+                        manifest["timings"].pop("fit_ms")
+                        installer.write_json(source / "manifest.json", manifest)
+
+                    target = parent / model_id
+                    target.mkdir(parents=True)
+                    (target / "sentinel.txt").write_text("preserved", encoding="utf-8")
+                    active_path = parent / "active_model.json"
+                    installer.write_json(active_path, {"model_id": "existing-model"})
+
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        rf"GLM model folder is incomplete.*{expected_error}",
+                    ):
+                        installer.install_model_in_lucidum(
+                            dataset_path=dataset_path,
+                            model_folder=source,
+                            model_type="glm",
+                            model_id=model_id,
+                            replace_existing=True,
+                        )
+
+                    self.assertEqual(
+                        (target / "sentinel.txt").read_text(encoding="utf-8"),
+                        "preserved",
+                    )
+                    self.assertEqual(
+                        json.loads(active_path.read_text(encoding="utf-8")),
+                        {"model_id": "existing-model"},
+                    )
+
     def test_external_glm_coefficients_use_stored_glum_inference(self) -> None:
         import numpy as np
         import pandas as pd
@@ -1392,6 +1554,9 @@ FROM read_parquet({sql_literal(str(glm_dir / 'predictions.parquet'))})
             glm_diagnostics = json.loads(
                 (glm_dir / "diagnostics.json").read_text(encoding="utf-8")
             )
+            glm_manifest = json.loads(
+                (glm_dir / "manifest.json").read_text(encoding="utf-8")
+            )
             gbm_manifest = json.loads(
                 (gbm_dir / "manifest.json").read_text(encoding="utf-8")
             )
@@ -1402,6 +1567,26 @@ FROM read_parquet({sql_literal(str(glm_dir / 'predictions.parquet'))})
                         for field in ("gini_tr", "gini_te", "gini_vl")
                     )
                 )
+            self.assertTrue(
+                {
+                    "n_terms",
+                    "n_features",
+                    "n_interactions",
+                    "training_rows",
+                    "deviance",
+                    "aic",
+                    "bic",
+                    "gini_tr",
+                    "gini_te",
+                    "gini_vl",
+                }.issubset(glm_diagnostics)
+            )
+            self.assertIsNotNone(glm_diagnostics["bic"])
+            self.assertGreaterEqual(glm_manifest["timings"]["fit_ms"], 0)
+            self.assertGreaterEqual(
+                glm_manifest["timings"]["elapsed_ms"],
+                glm_manifest["timings"]["fit_ms"],
+            )
 
             con = duckdb.connect(database=":memory:")
             try:
@@ -1842,6 +2027,28 @@ FROM read_parquet({sql_literal(str(glm_dir / 'coefficients.parquet'))})
             self.assertEqual(installed_gbm_store.active_model_id(), GBM_MODEL_ID)
             self.assertTrue((installed_glm_dir / "tabulations" / "tabulation_manifest.json").is_file())
             self.assertTrue((installed_glm_dir / "tabulated_predictions.parquet").is_file())
+            installed_glm = next(
+                model
+                for model in installed_glm_store.list_models()
+                if model["model_id"] == GLM_MODEL_ID
+            )
+            for field in (
+                "n_terms",
+                "n_features",
+                "n_interactions",
+                "training_rows",
+                "gini_tr",
+                "gini_te",
+                "gini_vl",
+            ):
+                self.assertEqual(installed_glm[field], glm_diagnostics[field])
+            for field in ("deviance", "aic", "bic"):
+                self.assertEqual(
+                    installed_glm["diagnostics"][field],
+                    glm_diagnostics[field],
+                )
+            self.assertEqual(installed_glm["training_scope"], "training")
+            self.assertEqual(installed_glm["timings"], glm_manifest["timings"])
 
             # Reinstalling the configured ID must leave neighbouring models alone.
             keep_dirs = [
@@ -1959,6 +2166,30 @@ JOIN (
                 status, detail = asgi_request(app, "GET", f"/api/{family}/models/{model_id}")
                 self.assertEqual(status, 200)
                 self.assertEqual(detail["manifest"]["model_id"], model_id)
+
+            status, glm_config_payload = asgi_request(app, "GET", "/api/glm/config")
+            self.assertEqual(status, 200)
+            configured_glm = next(
+                model
+                for model in glm_config_payload["models"]
+                if model["model_id"] == GLM_MODEL_ID
+            )
+            for field in (
+                "n_terms",
+                "n_features",
+                "n_interactions",
+                "training_rows",
+                "gini_tr",
+                "gini_te",
+                "gini_vl",
+            ):
+                self.assertEqual(configured_glm[field], glm_diagnostics[field])
+            for field in ("deviance", "aic", "bic"):
+                self.assertEqual(
+                    configured_glm["diagnostics"][field],
+                    glm_diagnostics[field],
+                )
+            self.assertEqual(configured_glm["timings"], glm_manifest["timings"])
 
             base_chart = {
                 "x": "DRIVER_AGE",
