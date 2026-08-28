@@ -16959,12 +16959,7 @@ COPY (
                         )
 
                         page.get_by_role("tab", name="Model navigator").click()
-                        page.evaluate(
-                            """
-                            () => window.Tabulator?.findTable?.("#glmModelGrid")?.[0]?.getRows?.()
-                              .find((row) => row.getData()?.model_id === "glm-current-renamed")?.select()
-                            """
-                        )
+                        page.locator("#glmModelGrid .tabulator-row", has_text="glm-current-renamed").click()
                         page.wait_for_function("() => !document.querySelector('#glmDeleteModelBtn')?.disabled")
                         page.once("dialog", lambda dialog: dialog.accept())
                         with page.expect_response("**/api/glm/models/glm-current-renamed", timeout=10_000):
