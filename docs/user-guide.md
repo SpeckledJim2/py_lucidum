@@ -626,7 +626,9 @@ The bottom-left remains reserved for Lucidum's collapsible legend.
   on the island.
 - Area and sector outlines can be Off, Thin, or Bold.
 - Moving the pointer over an area or sector gives the polygon a subtle accent wash
-  and stronger outline without changing its underlying metric colour.
+  and stronger outline without changing its underlying metric colour. The hover
+  card shows the complete postcode, its postcode-area name, the active KPI, and
+  either the valid contributing count (`N`) or the configured Weight total.
 - Area labels can be enabled for an analytical overview and resize with the map.
 - Light and Dark use vector maps that keep roads, Lucidum outlines, and place labels
   legible over the analytical fill.
@@ -665,6 +667,8 @@ Lucidum data source.
 Unit mode is available when postcode-unit and coordinate columns are present. It
 loads the complete eligible point set for the active global filter, then pans and
 zooms locally without repeatedly replacing the points with a viewport sample.
+Unit hover cards use the complete postcode unit while retaining the same postcode-
+area name, KPI, and `N` or Weight detail as area and sector cards.
 
 - **Min** paints the smallest possible settled points for very dense maps.
 - **Adaptive** grows dots with zoom and adjusts their maximum size for the filtered

@@ -1501,12 +1501,15 @@ if (smoothedSector.matchedRowCount !== 1
         script = f"""
 import {{ readFileSync }} from "node:fs";
 import {{
+  UK_MAP_POSTCODE_AREA_NAMES,
   UK_MAP_POSTCODE_REGIONS,
   combineUkMapPostcodeFilter,
   ukMapPopupContentHtml,
+  ukMapPostcodeAreaCode,
   ukMapPostcodeAvailability,
   ukMapPostcodeFilterClause,
   ukMapPostcodeInFilterClause,
+  ukMapTooltipContentHtml,
 }} from "{module}";
 const expectedRegionLabels = [
   "Central London",
@@ -1537,6 +1540,30 @@ if (mappedAreaCodes.length !== 124
 if (!Object.isFrozen(UK_MAP_POSTCODE_REGIONS)
     || UK_MAP_POSTCODE_REGIONS.some((region) => !Object.isFrozen(region) || !Object.isFrozen(region.areas))) {{
   throw new Error("postcode region mapping should be immutable");
+}}
+const namedAreaCodes = Object.keys(UK_MAP_POSTCODE_AREA_NAMES);
+if (!Object.isFrozen(UK_MAP_POSTCODE_AREA_NAMES)
+    || namedAreaCodes.length !== 124
+    || namedAreaCodes.sort().join("|") !== [...geoJsonAreaCodes].sort().join("|")) {{
+  throw new Error("postcode area names should immutably cover every bundled area exactly once");
+}}
+const expectedAreaNames = {{
+  FY: "Blackpool",
+  HS: "Hebrides",
+  SY: "Shrewsbury",
+  TD: "Galashiels",
+  TN: "Tonbridge",
+  TS: "Cleveland",
+  UB: "Southall",
+}};
+for (const [code, name] of Object.entries(expectedAreaNames)) {{
+  if (UK_MAP_POSTCODE_AREA_NAMES[code] !== name) throw new Error(`incorrect area name for ${{code}}`);
+}}
+if (ukMapPostcodeAreaCode("SY") !== "SY"
+    || ukMapPostcodeAreaCode("SY3 9") !== "SY"
+    || ukMapPostcodeAreaCode(" sy3 9aa ") !== "SY"
+    || ukMapPostcodeAreaCode("123") !== "") {{
+  throw new Error("postcode area extraction should support area, sector, and unit keys");
 }}
 const labels = (schema, query = "") => ukMapPostcodeAvailability({{
   schema,
@@ -1606,6 +1633,69 @@ const popupOptions = {{
   formatLineValue: (value) => `£${{Number(value).toLocaleString("en-GB")}}`,
 }};
 const popupText = (html) => html.replace(/<[^>]+>/g, "");
+const averageHover = ukMapTooltipContentHtml({{
+  ...popupOptions,
+  title: "SY",
+  row: {{ value: 484, denominator: 127, row_count: 999 }},
+  data: {{
+    level: "area",
+    response: {{ label: "price" }},
+    denominator: {{ column: null, bar_label: "Row count" }},
+  }},
+}});
+const averageHoverText = popupText(averageHover);
+if (!averageHover.includes('class="map-hover-card"')
+    || !averageHover.includes('class="map-hover-postcode"')
+    || !averageHover.includes('class="map-hover-area-name"')
+    || !averageHover.includes('class="map-hover-metric"')
+    || !averageHover.includes('class="map-hover-quantity"')
+    || !["SY", "Shrewsbury", "price: £484", "N: 127"].every((label) => averageHoverText.includes(label))
+    || averageHoverText.includes("999")) {{
+  throw new Error(`incorrect average hover: ${{averageHover}}`);
+}}
+for (const title of ["SY3 9", "SY3 9AA"]) {{
+  const text = popupText(ukMapTooltipContentHtml({{
+    ...popupOptions,
+    title,
+    row: {{ value: 484, denominator: 127 }},
+    data: {{ response: {{ label: "price" }}, denominator: {{ column: null }} }},
+  }}));
+  if (!text.includes(title) || !text.includes("Shrewsbury")) {{
+    throw new Error(`sector or unit hover lost its postcode-area name: ${{text}}`);
+  }}
+}}
+const weightedHover = ukMapTooltipContentHtml({{
+  ...popupOptions,
+  title: "SY3 9",
+  row: {{ value: 500, denominator: 1200, raw_denominator: 715 }},
+  data: {{
+    level: "sector",
+    response: {{ label: "price" }},
+    denominator: {{ column: "EXPOSURE", bar_label: "Earned exposure" }},
+    smoothing: {{ applied: true, level: 2 }},
+  }},
+}});
+const weightedHoverText = popupText(weightedHover);
+if (!weightedHoverText.includes("price: £500")
+    || !weightedHoverText.includes("Earned exposure: 1,200")
+    || weightedHoverText.includes("N:")
+    || weightedHoverText.includes("715")) {{
+  throw new Error(`weighted hover should use the displayed KPI's pooled denominator: ${{weightedHover}}`);
+}}
+const noDataHover = ukMapTooltipContentHtml({{
+  ...popupOptions,
+  title: "<ZZ1 1AA>",
+  row: null,
+  data: {{ response: {{ label: "<price>" }}, denominator: {{ column: null }} }},
+}});
+const noDataHoverText = popupText(noDataHover);
+if (!noDataHover.includes("&lt;ZZ1 1AA&gt;")
+    || !noDataHover.includes("&lt;price&gt;")
+    || !noDataHoverText.includes("Unknown postcode area")
+    || !noDataHoverText.includes("No data")
+    || !noDataHoverText.includes("N: 0")) {{
+  throw new Error(`incorrect escaped no-data hover: ${{noDataHover}}`);
+}}
 const averagePopup = ukMapPopupContentHtml({{
   ...popupOptions,
   row: {{ value: 505, numerator: 361075, denominator: 715, row_count: 715 }},
@@ -3536,7 +3626,13 @@ if (hidden.xAxis.axisLabel.show !== false) throw new Error("density limit failed
         self.assertNotIn('<h3>Postcode</h3>', index)
         self.assertIn('padding: 0 5px 0 0;', map_styles)
         self.assertIn('.uk-map .maplibregl-popup-tip {\n        background: transparent;', map_styles)
-        self.assertIn('.uk-map .maplibre-tooltip .maplibregl-popup-content {\n        padding: 6px 10px;', map_styles)
+        self.assertIn('.uk-map .maplibre-tooltip .maplibregl-popup-content {\n        padding: 9px 11px;', map_styles)
+        self.assertIn('border-radius: 5px;', map_styles)
+        self.assertIn('box-shadow: 0 3px 9px rgba(0, 0, 0, 0.28);', map_styles)
+        self.assertIn('.map-hover-postcode {\n        font-size: 30px;', map_styles)
+        self.assertIn('.map-hover-area-name {', map_styles)
+        self.assertIn('color: var(--accent);', map_styles)
+        self.assertIn('.map-hover-quantity {', map_styles)
         self.assertIn('.uk-map .maplibre-tooltip .maplibregl-popup-tip {\n        border-width: 7px;', map_styles)
         self.assertIn('border-bottom-color: var(--panel);', map_styles)
         self.assertIn('border-top-color: var(--panel);', map_styles)

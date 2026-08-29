@@ -3114,8 +3114,8 @@ COPY (
                             self.assertEqual(theme_style["tipBorder"], theme_style["contentBackground"])
                             self.assertEqual(theme_style["tipBorderWidth"], "7px")
                             self.assertEqual(theme_style["transparentSideBorder"], "rgba(0, 0, 0, 0)")
-                            self.assertEqual(theme_style["contentPaddingTop"], "6px")
-                            self.assertEqual(theme_style["contentPaddingBottom"], "6px")
+                            self.assertEqual(theme_style["contentPaddingTop"], "9px")
+                            self.assertEqual(theme_style["contentPaddingBottom"], "9px")
                         self.assertNotEqual(
                             tooltip_tail_style["light"]["contentBackground"],
                             tooltip_tail_style["dark"]["contentBackground"],
@@ -17766,10 +17766,14 @@ COPY (
                                     layers: [analysis.fillLayerId],
                                   });
                                   if (!hit && features.length) {
+                                    const properties = features[0].properties || {};
                                     hit = {
                                       x: bounds.left + x,
                                       y: bounds.top + y,
                                       featureId: String(features[0].id),
+                                      postcode: String(
+                                        properties.PostcodeSector || properties.PostcodeArea || "",
+                                      ),
                                     };
                                   }
                                   if (
@@ -17799,11 +17803,15 @@ COPY (
                                       }
                                     }
                                     if (sameFeature) {
+                                      const properties = features[0].properties || {};
                                       travelHit = {
                                         x: bounds.left + x,
                                         y: bounds.top + y,
                                         reverseY: bounds.top + y + 32,
                                         featureId,
+                                        postcode: String(
+                                          properties.PostcodeSector || properties.PostcodeArea || "",
+                                        ),
                                       };
                                     }
                                   }
@@ -17868,6 +17876,67 @@ COPY (
                         self.assertTrue(hover_state["fillLayerPresent"])
                         self.assertTrue(hover_state["lineLayerPresent"])
                         self.assertEqual(hover_state["cursor"], "pointer")
+                        tooltip_state = page.evaluate(
+                            """
+                            (target) => {
+                              const container = document.querySelector("#ukMap");
+                              const content = container?.querySelector(
+                                ".maplibre-tooltip .maplibregl-popup-content",
+                              );
+                              const card = content?.querySelector(".map-hover-card");
+                              const postcode = card?.querySelector(".map-hover-postcode");
+                              const area = card?.querySelector(".map-hover-area-name");
+                              const metric = card?.querySelector(".map-hover-metric");
+                              const quantity = card?.querySelector(".map-hover-quantity");
+                              if (!content || !card) return null;
+                              const bodyWasDark = document.body.classList.contains("dark");
+                              const readTheme = () => ({
+                                background: getComputedStyle(content).backgroundColor,
+                                areaColor: getComputedStyle(area).color,
+                              });
+                              document.body.classList.remove("dark");
+                              const light = readTheme();
+                              document.body.classList.add("dark");
+                              const dark = readTheme();
+                              document.body.classList.toggle("dark", bodyWasDark);
+                              const contentStyle = getComputedStyle(content);
+                              const postcodeStyle = getComputedStyle(postcode);
+                              return {
+                                postcode: postcode?.textContent.trim() || "",
+                                area: area?.textContent.trim() || "",
+                                metric: metric?.textContent.trim() || "",
+                                quantity: quantity?.textContent.trim() || "",
+                                pointerEvents: contentStyle.pointerEvents,
+                                borderRadius: contentStyle.borderRadius,
+                                boxShadow: contentStyle.boxShadow,
+                                transitionDuration: contentStyle.transitionDuration,
+                                postcodeFontSize: postcodeStyle.fontSize,
+                                light,
+                                dark,
+                              };
+                            }
+                            """,
+                            target,
+                        )
+                        self.assertIsNotNone(tooltip_state)
+                        self.assertEqual(tooltip_state["postcode"], target["postcode"])
+                        self.assertNotEqual(tooltip_state["area"], "")
+                        self.assertNotEqual(tooltip_state["area"], "Unknown postcode area")
+                        self.assertIn("price:", tooltip_state["metric"])
+                        self.assertTrue(tooltip_state["quantity"].startswith("N:"))
+                        self.assertEqual(tooltip_state["pointerEvents"], "none")
+                        self.assertEqual(tooltip_state["borderRadius"], "5px")
+                        self.assertNotEqual(tooltip_state["boxShadow"], "none")
+                        self.assertEqual(tooltip_state["transitionDuration"], "0s")
+                        self.assertEqual(tooltip_state["postcodeFontSize"], "30px")
+                        self.assertNotEqual(
+                            tooltip_state["light"]["background"],
+                            tooltip_state["dark"]["background"],
+                        )
+                        self.assertNotEqual(
+                            tooltip_state["light"]["areaColor"],
+                            tooltip_state["dark"]["areaColor"],
+                        )
                         if verify_direction_reversal:
                             pointer_behavior = page.evaluate(
                                 """
@@ -17882,6 +17951,8 @@ COPY (
                                   if (!analysis || !tooltip) return null;
                                   const original = analysis.setHoveredFeature;
                                   analysis.__hoverTransitions = [];
+                                  analysis.__tooltipContentUpdates = 0;
+                                  analysis.__tooltipAdds = 0;
                                   analysis.setHoveredFeature = function (layer) {
                                     const before = this.hoveredFeatureId;
                                     const result = original.call(this, layer);
@@ -17889,6 +17960,16 @@ COPY (
                                       this.__hoverTransitions.push(this.hoveredFeatureId);
                                     }
                                     return result;
+                                  };
+                                  const originalSetContent = analysis.tooltip.setContent;
+                                  analysis.tooltip.setContent = function (...args) {
+                                    analysis.__tooltipContentUpdates += 1;
+                                    return originalSetContent.apply(this, args);
+                                  };
+                                  const originalAddTo = analysis.tooltip.addTo;
+                                  analysis.tooltip.addTo = function (...args) {
+                                    analysis.__tooltipAdds += 1;
+                                    return originalAddTo.apply(this, args);
                                   };
                                   return getComputedStyle(tooltip).pointerEvents;
                                 }
@@ -17904,11 +17985,19 @@ COPY (
                                   const map = document.querySelector("#ukMap")?._lucidumMap;
                                   const analysis = Object.values(map?._layers || {})
                                     .find((layer) => layer?.hoverLineLayerId);
-                                  return analysis?.__hoverTransitions || null;
+                                  return analysis ? {
+                                    transitions: analysis.__hoverTransitions,
+                                    contentUpdates: analysis.__tooltipContentUpdates,
+                                    adds: analysis.__tooltipAdds,
+                                  } : null;
                                 }
                                 """
                             )
-                            self.assertEqual(hover_transitions, [])
+                            self.assertEqual(hover_transitions, {
+                                "transitions": [],
+                                "contentUpdates": 0,
+                                "adds": 0,
+                            })
                         page.mouse.move(target["leaveX"], target["leaveY"])
                         page.wait_for_function(
                             """
@@ -17919,6 +18008,109 @@ COPY (
                             arg=target,
                             timeout=10_000,
                         )
+
+                    def assert_unit_hover() -> None:
+                        target = page.evaluate(
+                            """
+                            () => {
+                              const container = document.querySelector("#ukMap");
+                              const map = container?._lucidumMap;
+                              const layer = Object.values(map?._layers || {})
+                                .find((candidate) => candidate?.data?.level === "unit");
+                              const bounds = container?.getBoundingClientRect();
+                              const size = map?.getSize();
+                              if (!layer || !bounds || !size) return null;
+                              for (let index = 0; index < layer.pointCount; index += 1) {
+                                const point = layer.projectUnitPoint(index, size);
+                                if (
+                                  point.x < 20 || point.y < 20
+                                  || point.x > size.x - 20 || point.y > size.y - 20
+                                ) continue;
+                                const row = layer.findNearest(point);
+                                if (!row) continue;
+                                return {
+                                  x: bounds.left + point.x,
+                                  y: bounds.top + point.y,
+                                  postcode: String(row.key || ""),
+                                };
+                              }
+                              return null;
+                            }
+                            """
+                        )
+                        self.assertIsNotNone(target)
+                        page.mouse.move(target["x"], target["y"])
+                        page.wait_for_function(
+                            """
+                            () => Boolean(document.querySelector(
+                              "#ukMap .maplibre-tooltip .map-hover-card",
+                            ))
+                            """,
+                            timeout=10_000,
+                        )
+                        state = page.evaluate(
+                            """
+                            () => {
+                              const container = document.querySelector("#ukMap");
+                              const map = container?._lucidumMap;
+                              const layer = Object.values(map?._layers || {})
+                                .find((candidate) => candidate?.data?.level === "unit");
+                              const card = container?.querySelector(".maplibre-tooltip .map-hover-card");
+                              if (!layer || !card || !layer.tooltip) return null;
+                              layer.__tooltipContentUpdates = 0;
+                              layer.__tooltipAdds = 0;
+                              layer.__resetsDuringHover = 0;
+                              const originalSetContent = layer.tooltip.setContent;
+                              layer.tooltip.setContent = function (...args) {
+                                layer.__tooltipContentUpdates += 1;
+                                return originalSetContent.apply(this, args);
+                              };
+                              const originalAddTo = layer.tooltip.addTo;
+                              layer.tooltip.addTo = function (...args) {
+                                layer.__tooltipAdds += 1;
+                                return originalAddTo.apply(this, args);
+                              };
+                              const originalReset = layer.reset;
+                              layer.reset = function (...args) {
+                                layer.__resetsDuringHover += 1;
+                                return originalReset.apply(this, args);
+                              };
+                              return {
+                                postcode: card.querySelector(".map-hover-postcode")?.textContent.trim() || "",
+                                area: card.querySelector(".map-hover-area-name")?.textContent.trim() || "",
+                                metric: card.querySelector(".map-hover-metric")?.textContent.trim() || "",
+                                quantity: card.querySelector(".map-hover-quantity")?.textContent.trim() || "",
+                              };
+                            }
+                            """
+                        )
+                        self.assertIsNotNone(state)
+                        self.assertEqual(state["postcode"], target["postcode"])
+                        self.assertIn(state["area"], {"Aberdeen", "St Albans"})
+                        self.assertIn("price:", state["metric"])
+                        self.assertEqual(state["quantity"], "N: 1")
+                        page.mouse.move(target["x"] + 1, target["y"])
+                        page.mouse.move(target["x"], target["y"])
+                        page.wait_for_timeout(100)
+                        performance_state = page.evaluate(
+                            """
+                            () => {
+                              const map = document.querySelector("#ukMap")?._lucidumMap;
+                              const layer = Object.values(map?._layers || {})
+                                .find((candidate) => candidate?.data?.level === "unit");
+                              return layer ? {
+                                contentUpdates: layer.__tooltipContentUpdates,
+                                adds: layer.__tooltipAdds,
+                                resets: layer.__resetsDuringHover,
+                              } : null;
+                            }
+                            """
+                        )
+                        self.assertEqual(performance_state, {
+                            "contentUpdates": 0,
+                            "adds": 0,
+                            "resets": 0,
+                        })
 
                     try:
                         page.goto(base_url, wait_until="domcontentloaded")
@@ -18098,6 +18290,8 @@ COPY (
                             assert_vector_layer_order(level)
                             if level != "unit":
                                 assert_polygon_hover(verify_direction_reversal=level == "area")
+                            else:
+                                assert_unit_hover()
                             camera_after = page.evaluate(
                                 """
                                 () => {

@@ -136,6 +136,133 @@ export const UK_MAP_POSTCODE_REGIONS = Object.freeze([
   Object.freeze({ label: "Yorkshire and The Humber", areas: Object.freeze(["BD", "DN", "HD", "HG", "HU", "HX", "LS", "S", "WF", "YO"]) }),
 ]);
 
+export const UK_MAP_POSTCODE_AREA_NAMES = Object.freeze({
+  AB: "Aberdeen",
+  AL: "St Albans",
+  B: "Birmingham",
+  BA: "Bath",
+  BB: "Blackburn",
+  BD: "Bradford",
+  BH: "Bournemouth",
+  BL: "Bolton",
+  BN: "Brighton",
+  BR: "Bromley",
+  BS: "Bristol",
+  BT: "Belfast",
+  CA: "Carlisle",
+  CB: "Cambridge",
+  CF: "Cardiff",
+  CH: "Chester",
+  CM: "Chelmsford",
+  CO: "Colchester",
+  CR: "Croydon",
+  CT: "Canterbury",
+  CV: "Coventry",
+  CW: "Crewe",
+  DA: "Dartford",
+  DD: "Dundee",
+  DE: "Derby",
+  DG: "Dumfries",
+  DH: "Durham",
+  DL: "Darlington",
+  DN: "Doncaster",
+  DT: "Dorchester",
+  DY: "Dudley",
+  E: "London E",
+  EC: "London EC",
+  EH: "Edinburgh",
+  EN: "Enfield",
+  EX: "Exeter",
+  FK: "Falkirk",
+  FY: "Blackpool",
+  G: "Glasgow",
+  GL: "Gloucester",
+  GU: "Guildford",
+  GY: "Guernsey",
+  HA: "Harrow",
+  HD: "Huddersfield",
+  HG: "Harrogate",
+  HP: "Hemel Hempstead",
+  HR: "Hereford",
+  HS: "Hebrides",
+  HU: "Hull",
+  HX: "Halifax",
+  IG: "Ilford",
+  IM: "Isle of Man",
+  IP: "Ipswich",
+  IV: "Inverness",
+  JE: "Jersey",
+  KA: "Kilmarnock",
+  KT: "Kingston upon Thames",
+  KW: "Kirkwall",
+  KY: "Kirkcaldy",
+  L: "Liverpool",
+  LA: "Lancaster",
+  LD: "Llandrindod Wells",
+  LE: "Leicester",
+  LL: "Llandudno",
+  LN: "Lincoln",
+  LS: "Leeds",
+  LU: "Luton",
+  M: "Manchester",
+  ME: "Medway",
+  MK: "Milton Keynes",
+  ML: "Motherwell",
+  N: "London N",
+  NE: "Newcastle upon Tyne",
+  NG: "Nottingham",
+  NN: "Northampton",
+  NP: "Newport",
+  NR: "Norwich",
+  NW: "London NW",
+  OL: "Oldham",
+  OX: "Oxford",
+  PA: "Paisley",
+  PE: "Peterborough",
+  PH: "Perth",
+  PL: "Plymouth",
+  PO: "Portsmouth",
+  PR: "Preston",
+  RG: "Reading",
+  RH: "Redhill",
+  RM: "Romford",
+  S: "Sheffield",
+  SA: "Swansea",
+  SE: "London SE",
+  SG: "Stevenage",
+  SK: "Stockport",
+  SL: "Slough",
+  SM: "Sutton",
+  SN: "Swindon",
+  SO: "Southampton",
+  SP: "Salisbury",
+  SR: "Sunderland",
+  SS: "Southend-on-Sea",
+  ST: "Stoke-on-Trent",
+  SW: "London SW",
+  SY: "Shrewsbury",
+  TA: "Taunton",
+  TD: "Galashiels",
+  TF: "Telford",
+  TN: "Tonbridge",
+  TQ: "Torquay",
+  TR: "Truro",
+  TS: "Cleveland",
+  TW: "Twickenham",
+  UB: "Southall",
+  W: "London W",
+  WA: "Warrington",
+  WC: "London WC",
+  WD: "Watford",
+  WF: "Wakefield",
+  WN: "Wigan",
+  WR: "Worcester",
+  WS: "Walsall",
+  WV: "Wolverhampton",
+  YO: "York",
+  ZE: "Shetland",
+});
+
 const UK_MAP_POSTCODE_AREA_CODES = Object.freeze(
   UK_MAP_POSTCODE_REGIONS.flatMap((region) => region.areas).sort(),
 );
@@ -246,6 +373,42 @@ export function combineUkMapPostcodeFilter(baseFilter, postcodeClause) {
   if (!base) return clause ? `(${clause})` : "";
   if (!clause) return base;
   return `(${base}) AND (${clause})`;
+}
+
+export function ukMapPostcodeAreaCode(postcode) {
+  const match = String(postcode || "").trim().toUpperCase().match(/^[A-Z]{1,2}/);
+  return match?.[0] || "";
+}
+
+export function ukMapTooltipContentHtml({
+  title,
+  row,
+  data = {},
+  escapeHtml,
+  formatNumber,
+  formatLineValue,
+}) {
+  const postcode = String(title || "").trim() || "Unknown";
+  const areaCode = ukMapPostcodeAreaCode(postcode);
+  const areaName = UK_MAP_POSTCODE_AREA_NAMES[areaCode] || "Unknown postcode area";
+  const rawValue = row?.value;
+  const value = rawValue === null || rawValue === undefined ? Number.NaN : Number(rawValue);
+  const valueText = Number.isFinite(value) ? (formatLineValue(value) || "No data") : "No data";
+  const denominator = Number(row?.denominator);
+  const quantityText = formatNumber(Number.isFinite(denominator) ? denominator : 0) || "0";
+  const responseLabel = data.response?.label || "Actual";
+  const weighted = Boolean(data.denominator?.column);
+  const quantityLabel = weighted
+    ? (data.denominator?.bar_label || data.denominator?.label || "Weight")
+    : "N";
+  return `
+    <div class="map-hover-card">
+      <div class="map-hover-postcode">${escapeHtml(postcode)}</div>
+      <div class="map-hover-area-name">${escapeHtml(areaName)}</div>
+      <div class="map-hover-metric"><span>${escapeHtml(responseLabel)}:</span> <strong>${escapeHtml(valueText)}</strong></div>
+      <div class="map-hover-quantity"><span>${escapeHtml(quantityLabel)}:</span> <strong>${escapeHtml(quantityText)}</strong></div>
+    </div>
+  `;
 }
 
 export function ukMapPopupContentHtml({
@@ -2040,10 +2203,15 @@ export function createUkMapTool({
   }
 
   function mapPolygonTooltipHtml(layer) {
-    const { key, row } = mapPolygonLayerRow(layer);
-    const title = key || "Unknown";
-    const value = finiteNumber(row?.value);
-    return `${title}: ${value === null ? "No data" : formatLineValue(value)}`;
+    const { key, row, data } = mapPolygonLayerRow(layer);
+    return ukMapTooltipContentHtml({
+      title: key || "Unknown",
+      row,
+      data: data || {},
+      escapeHtml,
+      formatNumber,
+      formatLineValue,
+    });
   }
 
   function mapPolygonPopupHtml(layer) {
@@ -2326,6 +2494,7 @@ export function createUkMapTool({
         this.setGeometry(normaliseUnitPointColumns(mapData));
         this.setData(mapData, initialScale, initialHotspotIndexes);
         this.tooltip = null;
+        this.tooltipContent = "";
       },
       setGeometry(points) {
         const keys = points?.key || [];
@@ -2818,12 +2987,22 @@ export function createUkMapTool({
           this.closeTooltip();
           return;
         }
-        const value = finiteNumber(nearest.value);
-        const text = `${nearest.key}: ${value === null ? "No data" : formatLineValue(value)}`;
+        const content = ukMapTooltipContentHtml({
+          title: nearest.key || "Unknown",
+          row: nearest,
+          data: this.data || {},
+          escapeHtml,
+          formatNumber,
+          formatLineValue,
+        });
         if (!this.tooltip) {
           this.tooltip = L.tooltip({ sticky: true, direction: "top", opacity: 0.9 });
         }
-        this.tooltip.setLatLng(event.latlng).setContent(text);
+        this.tooltip.setLatLng(event.latlng);
+        if (content !== this.tooltipContent) {
+          this.tooltip.setContent(content);
+          this.tooltipContent = content;
+        }
         if (!this.map.hasLayer(this.tooltip)) {
           this.tooltip.addTo(this.map);
         }

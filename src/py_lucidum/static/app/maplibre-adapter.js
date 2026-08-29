@@ -927,6 +927,7 @@ export function createMapLibreAdapter(maplibregl) {
         features: this.features.map((layer) => layer.feature),
       };
       this.tooltip = new PopupLayer({ closeButton: false, closeOnClick: false }, true);
+      this.tooltipContent = "";
       this._eventHandlers = [];
       this.hoveredFeatureId = null;
     }
@@ -1044,10 +1045,14 @@ export function createMapLibreAdapter(maplibregl) {
           this.tooltip.remove();
           return;
         }
-        this.tooltip
-          .setLatLng({ lat: event.lngLat.lat, lng: event.lngLat.lng })
-          .setContent(resolveContent(layer._tooltipContent, layer))
-          .addTo(map);
+        const content = resolveContent(layer._tooltipContent, layer);
+        const tooltipOpen = this.tooltip.map === map;
+        this.tooltip.setLatLng({ lat: event.lngLat.lat, lng: event.lngLat.lng });
+        if (content !== this.tooltipContent) {
+          this.tooltip.setContent(content);
+          this.tooltipContent = content;
+        }
+        if (!tooltipOpen) this.tooltip.addTo(map);
       };
       const mouseLeave = () => {
         this.setHoveredFeature(null);

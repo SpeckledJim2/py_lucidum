@@ -263,7 +263,8 @@ responsive as you pan, zoom, and explore results.
 Use UK Mapping to find geographic patterns in metrics, model predictions, or SHAP
 outputs.
 
-- Map postcode areas and sectors with bundled geometry and pointer highlighting.
+- Map postcode areas and sectors with bundled geometry, pointer highlighting, and
+  named postcode hover cards.
 - Plot postcode units when unit, latitude, and longitude columns are available.
 - Choose blank, aerial, light, or dark backgrounds and several analytical
   palettes.

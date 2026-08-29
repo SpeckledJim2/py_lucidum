@@ -942,6 +942,8 @@ class UkMapToolTests(unittest.TestCase):
         self.assertEqual(result["unit_points"]["key"], ["AB10 1AA"])
         self.assertEqual(result["unit_points"]["latitude"], [57.3])
         self.assertEqual(result["unit_points"]["longitude"], [-2.3])
+        self.assertEqual(result["unit_points"]["denominator"], [1])
+        self.assertNotIn("numerator", result["unit_points"])
         self.assertEqual(result["unit_points"]["value"], [200])
 
     def test_unit_summary_applies_filter_and_weight(self) -> None:

@@ -640,7 +640,8 @@ def unit_rows(
             raw_rows,
             column_indexes,
             include_geometry=include_geometry,
-            include_metric_components=not minimal_metrics or bool(denominator.get("column")),
+            include_numerator=not minimal_metrics or bool(denominator.get("column")),
+            include_denominator=True,
             include_volume=not minimal_metrics,
         )
 
@@ -683,12 +684,15 @@ def compact_unit_points(
     column_indexes: dict[str, int],
     *,
     include_geometry: bool = True,
-    include_metric_components: bool = True,
+    include_numerator: bool = True,
+    include_denominator: bool = True,
     include_volume: bool = False,
 ) -> tuple[dict[str, list[Any]], dict[str, int]]:
     fields = ["value"]
-    if include_metric_components:
-        fields[0:0] = ["numerator", "denominator"]
+    if include_denominator:
+        fields.insert(0, "denominator")
+    if include_numerator:
+        fields.insert(0, "numerator")
     if include_volume:
         fields.insert(-1, "volume")
     if include_geometry:
@@ -721,8 +725,9 @@ def compact_unit_points(
             points["row_count"].append(json_number(row[row_count_index]))
             points["latitude"].append(latitude)
             points["longitude"].append(longitude)
-        if include_metric_components:
+        if include_numerator:
             points["numerator"].append(json_number(row[numerator_index]))
+        if include_denominator:
             points["denominator"].append(json_number(row[denominator_index]))
         if include_volume:
             points["volume"].append(json_number(row[denominator_index]))
