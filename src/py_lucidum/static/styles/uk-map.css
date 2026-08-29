@@ -44,7 +44,7 @@
 
       .map-viewport-control {
         display: grid;
-        grid-template-rows: repeat(6, 34px);
+        grid-template-rows: repeat(7, 34px);
         overflow: hidden;
         background: var(--panel);
         border: 1px solid var(--line);
@@ -74,11 +74,13 @@
         font-weight: 600;
       }
 
-      .map-native-navigation {
+      .map-native-navigation,
+      .map-native-fullscreen {
         display: contents;
       }
 
-      .map-viewport-control .map-native-navigation button {
+      .map-viewport-control .map-native-navigation button,
+      .map-viewport-control .map-native-fullscreen button {
         background-color: var(--panel);
         border: 0;
         border-bottom: 1px solid var(--line);
@@ -91,7 +93,8 @@
         border-top: 0;
       }
 
-      .map-viewport-control .map-native-navigation button:hover {
+      .map-viewport-control .map-native-navigation button:hover,
+      .map-viewport-control .map-native-fullscreen button:hover {
         background-color: var(--panel-2);
       }
 
@@ -103,6 +106,60 @@
 
       body.dark .map-native-navigation .maplibregl-ctrl-icon {
         filter: invert(1) grayscale(1) brightness(1.7) contrast(1.08);
+      }
+
+      .map-viewport-control .map-native-fullscreen button {
+        border-bottom: 0;
+        color: var(--text);
+      }
+
+      .map-viewport-control .map-native-fullscreen button:focus {
+        box-shadow: none;
+        outline: none;
+      }
+
+      .map-viewport-control .map-native-fullscreen button:focus-visible {
+        outline: 1px solid color-mix(in srgb, var(--text) 65%, transparent);
+        outline-offset: -3px;
+      }
+
+      #mapFullscreen .maplibregl-ctrl-icon {
+        background-color: currentColor;
+        background-image: none;
+        opacity: 0.78;
+        -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M8 8 4 4m0 0v3m0-3h3M12 8l4-4m0 0v3m0-3h-3M8 12l-4 4m0 0v-3m0 3h3M12 12l4 4m0 0v-3m0 3h-3' fill='none' stroke='%23000' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.4'/%3E%3C/svg%3E") center / 18px 18px no-repeat;
+        mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M8 8 4 4m0 0v3m0-3h3M12 8l4-4m0 0v3m0-3h-3M8 12l-4 4m0 0v-3m0 3h3M12 12l4 4m0 0v-3m0 3h-3' fill='none' stroke='%23000' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.4'/%3E%3C/svg%3E") center / 18px 18px no-repeat;
+      }
+
+      #mapFullscreen.maplibregl-ctrl-shrink .maplibregl-ctrl-icon {
+        -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M4 4l4 4m0 0V5m0 3H5M16 4l-4 4m0 0V5m0 3h3M4 16l4-4m0 0v3m0-3H5M16 16l-4-4m0 0v3m0-3h3' fill='none' stroke='%23000' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.4'/%3E%3C/svg%3E");
+        mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M4 4l4 4m0 0V5m0 3H5M16 4l-4 4m0 0V5m0 3h3M4 16l4-4m0 0v3m0-3H5M16 16l-4-4m0 0v3m0-3h3' fill='none' stroke='%23000' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.4'/%3E%3C/svg%3E");
+      }
+
+      main.maplibregl-pseudo-fullscreen {
+        background: var(--panel);
+        box-sizing: border-box;
+        height: 100dvh !important;
+      }
+
+      main:fullscreen .maplibregl-ctrl-top-left,
+      main:-webkit-full-screen .maplibregl-ctrl-top-left,
+      main.maplibregl-pseudo-fullscreen .maplibregl-ctrl-top-left {
+        padding-left: env(safe-area-inset-left);
+      }
+
+      main:fullscreen .maplibregl-ctrl-bottom-right,
+      main:-webkit-full-screen .maplibregl-ctrl-bottom-right,
+      main.maplibregl-pseudo-fullscreen .maplibregl-ctrl-bottom-right {
+        padding-bottom: env(safe-area-inset-bottom);
+        padding-right: env(safe-area-inset-right);
+      }
+
+      main:fullscreen .map-legend,
+      main:-webkit-full-screen .map-legend,
+      main.maplibregl-pseudo-fullscreen .map-legend {
+        bottom: max(12px, env(safe-area-inset-bottom));
+        left: max(12px, env(safe-area-inset-left));
       }
 
       .map-toolbar-toggle svg {

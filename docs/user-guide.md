@@ -687,6 +687,13 @@ The compass below Zoom out rotates with the map. Drag around it to rotate the ma
 desktop, or click it to return to north. Touch rotation remains available on supported
 devices.
 
+The fullscreen button below the London shortcut expands the complete mapping
+workspace, including its controls, information strip, legend, and provider credits.
+It uses the browser's native fullscreen view on desktop. Apple touch devices use
+MapLibre's in-page fullscreen mode so an ordinary downward map gesture cannot trigger
+iPadOS's native fullscreen exit. Use the same button again, the browser's fullscreen
+exit gesture where applicable, or `Esc` on a keyboard to leave fullscreen.
+
 A Map view favourite stores the level, base, palette, presentation controls, metric,
 filter, camera position, zoom, and orientation where possible. Older favourites
 without an orientation open pointing north; removed Esri or OSM bases open as Blank.

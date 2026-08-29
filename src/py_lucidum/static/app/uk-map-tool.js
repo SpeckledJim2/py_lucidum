@@ -487,6 +487,7 @@ export function createUkMapTool({
   let baseMapChangePending = false;
   let mapViewportControl = null;
   let mapNavigationControl = null;
+  let mapFullscreenControl = null;
   let mapCompassControlButton = null;
   let finishMapCompassUnitRotation = null;
   let mapCompassGestureCleanup = null;
@@ -1749,6 +1750,17 @@ export function createUkMapTool({
     mapCompassSuppressClickTimer = null;
   }
 
+  function handleMapFullscreenChange() {
+    scheduleMapViewportSync({ mode: "preserve" });
+  }
+
+  function usePseudoMapFullscreen() {
+    const userAgent = String(window.navigator.userAgent || "");
+    const platform = String(window.navigator.platform || "");
+    return /iPad|iPhone|iPod/.test(userAgent)
+      || (platform === "MacIntel" && window.navigator.maxTouchPoints > 1);
+  }
+
   function addMapViewportControl() {
     if (!ukMap || mapViewportControl) return;
     const ViewportControl = L.Control.extend({
@@ -1786,6 +1798,16 @@ export function createUkMapTool({
             <img class="map-viewport-icon-london" src="/tools/uk-map/static/icons/London.png" alt="">
           </button>
         `);
+        mapFullscreenControl = new L.maplibregl.FullscreenControl({
+          container: document.querySelector("main"),
+          pseudo: usePseudoMapFullscreen(),
+        });
+        const fullscreenContainer = mapFullscreenControl.onAdd(ukMap.raw);
+        fullscreenContainer.classList.add("map-native-fullscreen");
+        fullscreenContainer.querySelector("button").id = "mapFullscreen";
+        mapFullscreenControl.on("fullscreenstart", handleMapFullscreenChange);
+        mapFullscreenControl.on("fullscreenend", handleMapFullscreenChange);
+        container.append(fullscreenContainer);
         L.DomEvent.disableClickPropagation(container);
         L.DomEvent.disableScrollPropagation(container);
         container.querySelector("#mapControlReset").addEventListener("click", toggleMapToolbarCollapsed);
@@ -1805,6 +1827,10 @@ export function createUkMapTool({
         mapCompassControlButton = null;
         mapNavigationControl?.onRemove();
         mapNavigationControl = null;
+        mapFullscreenControl?.off("fullscreenstart", handleMapFullscreenChange);
+        mapFullscreenControl?.off("fullscreenend", handleMapFullscreenChange);
+        mapFullscreenControl?.onRemove();
+        mapFullscreenControl = null;
       },
     });
     mapViewportControl = new ViewportControl();

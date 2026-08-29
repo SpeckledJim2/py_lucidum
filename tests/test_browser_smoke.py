@@ -3208,15 +3208,173 @@ COPY (
                                 " && node.parentElement.classList.contains('map-native-navigation')"
                             )
                         )
+                        self.assertTrue(
+                            page.locator("#mapFullscreen").evaluate(
+                                "node => node.classList.contains('maplibregl-ctrl-fullscreen')"
+                                " && node.parentElement.classList.contains('map-native-fullscreen')"
+                            )
+                        )
                         zoom_out_box = page.locator("#mapZoomOut").bounding_box()
                         compass_box = page.locator("#mapCompass").bounding_box()
                         fit_uk_box = page.locator("#mapFitUk").bounding_box()
+                        london_box = page.locator("#mapZoomLondon").bounding_box()
+                        fullscreen_box = page.locator("#mapFullscreen").bounding_box()
                         self.assertIsNotNone(zoom_out_box)
                         self.assertIsNotNone(compass_box)
                         self.assertIsNotNone(fit_uk_box)
-                        assert zoom_out_box is not None and compass_box is not None and fit_uk_box is not None
+                        self.assertIsNotNone(london_box)
+                        self.assertIsNotNone(fullscreen_box)
+                        assert (
+                            zoom_out_box is not None
+                            and compass_box is not None
+                            and fit_uk_box is not None
+                            and london_box is not None
+                            and fullscreen_box is not None
+                        )
                         self.assertLess(zoom_out_box["y"], compass_box["y"])
                         self.assertLess(compass_box["y"], fit_uk_box["y"])
+                        self.assertLess(fit_uk_box["y"], london_box["y"])
+                        self.assertAlmostEqual(london_box["y"] + london_box["height"], fullscreen_box["y"])
+                        self.assertEqual(page.locator("#mapFullscreen").get_attribute("aria-label"), "Enter fullscreen")
+                        fullscreen_icon = page.locator("#mapFullscreen .maplibregl-ctrl-icon")
+                        enter_fullscreen_icon = fullscreen_icon.evaluate(
+                            """
+                            (node) => {
+                              const style = getComputedStyle(node);
+                              return {
+                                backgroundImage: style.backgroundImage,
+                                maskImage: style.webkitMaskImage || style.maskImage,
+                                opacity: style.opacity,
+                              };
+                            }
+                            """
+                        )
+                        self.assertEqual(enter_fullscreen_icon["backgroundImage"], "none")
+                        self.assertIn("data:image/svg+xml", enter_fullscreen_icon["maskImage"])
+                        self.assertEqual(enter_fullscreen_icon["opacity"], "0.78")
+                        fullscreen_requests = page.evaluate("() => window.__ukMapSummaryRequests")
+                        fullscreen_view = page.evaluate(
+                            """
+                            () => {
+                              const map = document.querySelector("#ukMap")._lucidumMap;
+                              const center = map.getCenter();
+                              return { lat: center.lat, lng: center.lng, zoom: map.getZoom(), bearing: map.getBearing() };
+                            }
+                            """
+                        )
+                        page.evaluate(
+                            """
+                            () => {
+                              const main = document.querySelector("main");
+                              main.requestFullscreen = function () {
+                                window.__ukMapFullscreenTarget = this.tagName;
+                                return Promise.resolve();
+                              };
+                            }
+                            """
+                        )
+                        page.locator("#mapFullscreen").click()
+                        self.assertEqual(page.evaluate("() => window.__ukMapFullscreenTarget"), "MAIN")
+                        page.evaluate(
+                            """
+                            () => {
+                              const main = document.querySelector("main");
+                              Object.defineProperty(main, "requestFullscreen", {
+                                configurable: true,
+                                value: undefined,
+                              });
+                              Object.defineProperty(main, "webkitRequestFullscreen", {
+                                configurable: true,
+                                value: undefined,
+                              });
+                              Object.defineProperty(document, "exitFullscreen", {
+                                configurable: true,
+                                value: undefined,
+                              });
+                              Object.defineProperty(document, "webkitCancelFullScreen", {
+                                configurable: true,
+                                value: undefined,
+                              });
+                            }
+                            """
+                        )
+                        page.locator("#mapFullscreen").click()
+                        page.wait_for_function(
+                            "() => document.querySelector('main').classList.contains('maplibregl-pseudo-fullscreen')"
+                        )
+                        fullscreen_layout = page.evaluate(
+                            """
+                            () => {
+                              const main = document.querySelector("main");
+                              const mainRect = main.getBoundingClientRect();
+                              const withinMain = (selector) => {
+                                const rect = document.querySelector(selector).getBoundingClientRect();
+                                return rect.left >= mainRect.left
+                                  && rect.right <= mainRect.right
+                                  && rect.top >= mainRect.top
+                                  && rect.bottom <= mainRect.bottom;
+                              };
+                              const style = getComputedStyle(main);
+                              const fullscreenButtonStyle = getComputedStyle(
+                                document.querySelector("#mapFullscreen")
+                              );
+                              return {
+                                position: style.position,
+                                width: mainRect.width,
+                                height: mainRect.height,
+                                viewportWidth: window.innerWidth,
+                                viewportHeight: window.innerHeight,
+                                toolbarWithinMain: withinMain("#mapToolbar"),
+                                infoWithinMain: withinMain("#mapInfoStrip"),
+                                mapWithinMain: withinMain("#ukMap"),
+                                legendWithinMain: withinMain("#mapLegend"),
+                                excludesHeader: !main.contains(document.querySelector("header")),
+                                excludesSidebar: !main.contains(document.querySelector("#appSidebar")),
+                                excludesFooter: !main.contains(document.querySelector("footer")),
+                                fullscreenButtonBoxShadow: fullscreenButtonStyle.boxShadow,
+                                fullscreenButtonOutlineStyle: fullscreenButtonStyle.outlineStyle,
+                              };
+                            }
+                            """
+                        )
+                        self.assertEqual(fullscreen_layout["position"], "fixed")
+                        self.assertAlmostEqual(fullscreen_layout["width"], fullscreen_layout["viewportWidth"], delta=1)
+                        self.assertAlmostEqual(fullscreen_layout["height"], fullscreen_layout["viewportHeight"], delta=1)
+                        self.assertTrue(fullscreen_layout["toolbarWithinMain"])
+                        self.assertTrue(fullscreen_layout["infoWithinMain"])
+                        self.assertTrue(fullscreen_layout["mapWithinMain"])
+                        self.assertTrue(fullscreen_layout["legendWithinMain"])
+                        self.assertTrue(fullscreen_layout["excludesHeader"])
+                        self.assertTrue(fullscreen_layout["excludesSidebar"])
+                        self.assertTrue(fullscreen_layout["excludesFooter"])
+                        self.assertEqual(fullscreen_layout["fullscreenButtonBoxShadow"], "none")
+                        self.assertEqual(fullscreen_layout["fullscreenButtonOutlineStyle"], "none")
+                        self.assertEqual(page.locator("#mapFullscreen").get_attribute("aria-label"), "Exit fullscreen")
+                        exit_fullscreen_mask = fullscreen_icon.evaluate(
+                            "node => getComputedStyle(node).webkitMaskImage || getComputedStyle(node).maskImage"
+                        )
+                        self.assertIn("data:image/svg+xml", exit_fullscreen_mask)
+                        self.assertNotEqual(exit_fullscreen_mask, enter_fullscreen_icon["maskImage"])
+                        page.locator("#mapFullscreen").click()
+                        page.wait_for_function(
+                            "() => !document.querySelector('main').classList.contains('maplibregl-pseudo-fullscreen')"
+                        )
+                        page.wait_for_timeout(50)
+                        self.assertEqual(page.locator("#mapFullscreen").get_attribute("aria-label"), "Enter fullscreen")
+                        restored_fullscreen_view = page.evaluate(
+                            """
+                            () => {
+                              const map = document.querySelector("#ukMap")._lucidumMap;
+                              const center = map.getCenter();
+                              return { lat: center.lat, lng: center.lng, zoom: map.getZoom(), bearing: map.getBearing() };
+                            }
+                            """
+                        )
+                        self.assertAlmostEqual(restored_fullscreen_view["lat"], fullscreen_view["lat"], places=5)
+                        self.assertAlmostEqual(restored_fullscreen_view["lng"], fullscreen_view["lng"], places=5)
+                        self.assertAlmostEqual(restored_fullscreen_view["zoom"], fullscreen_view["zoom"], places=5)
+                        self.assertAlmostEqual(restored_fullscreen_view["bearing"], fullscreen_view["bearing"], places=5)
+                        self.assertEqual(page.evaluate("() => window.__ukMapSummaryRequests"), fullscreen_requests)
                         compass_center_x = compass_box["x"] + (compass_box["width"] / 2)
                         compass_center_y = compass_box["y"] + (compass_box["height"] / 2)
                         compass_radius = min(compass_box["width"], compass_box["height"]) * 0.34
@@ -3367,6 +3525,87 @@ COPY (
                             """
                         )
                         self.assertEqual(legend_toggle.get_attribute("aria-expanded"), "false")
+
+                        ipad_page = browser.new_page(
+                            viewport={"width": 1024, "height": 768},
+                            has_touch=True,
+                            user_agent=(
+                                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15) "
+                                "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
+                            ),
+                        )
+                        ipad_errors: list[str] = []
+                        ipad_page.on("pageerror", lambda error: ipad_errors.append(str(error)))
+                        ipad_page.add_init_script(
+                            """
+                            Object.defineProperty(window.navigator, "platform", {
+                              configurable: true,
+                              get: () => "MacIntel",
+                            });
+                            Object.defineProperty(window.navigator, "maxTouchPoints", {
+                              configurable: true,
+                              get: () => 5,
+                            });
+                            """
+                        )
+                        try:
+                            ipad_page.goto(f"{base_url}/?tool=uk_map", wait_until="domcontentloaded")
+                            ipad_page.locator("#mapFullscreen").wait_for(timeout=10_000)
+                            ipad_page.wait_for_function(
+                                '() => document.querySelector("#mapGroupMeta")?.textContent.includes("areas matched")',
+                                timeout=20_000,
+                            )
+                            ipad_page.evaluate(
+                                """
+                                () => {
+                                  document.querySelector("main").requestFullscreen = function () {
+                                    window.__ipadNativeFullscreenRequested = true;
+                                    return Promise.resolve();
+                                  };
+                                }
+                                """
+                            )
+                            ipad_page.locator("#mapFullscreen").click()
+                            ipad_page.wait_for_function(
+                                "() => document.querySelector('main')"
+                                ".classList.contains('maplibregl-pseudo-fullscreen')"
+                            )
+                            ipad_fullscreen = ipad_page.evaluate(
+                                """
+                                () => ({
+                                  nativeRequested: Boolean(window.__ipadNativeFullscreenRequested),
+                                  buttonLabel: document.querySelector("#mapFullscreen").getAttribute("aria-label"),
+                                  htmlOverflow: getComputedStyle(document.documentElement).overflow,
+                                  bodyOverflow: getComputedStyle(document.body).overflow,
+                                  bodyOverscroll: getComputedStyle(document.body).overscrollBehavior,
+                                  buttonBoxShadow: getComputedStyle(
+                                    document.querySelector("#mapFullscreen")
+                                  ).boxShadow,
+                                  buttonOutlineStyle: getComputedStyle(
+                                    document.querySelector("#mapFullscreen")
+                                  ).outlineStyle,
+                                })
+                                """
+                            )
+                            self.assertFalse(ipad_fullscreen["nativeRequested"])
+                            self.assertEqual(ipad_fullscreen["buttonLabel"], "Exit fullscreen")
+                            self.assertEqual(ipad_fullscreen["htmlOverflow"], "hidden")
+                            self.assertEqual(ipad_fullscreen["bodyOverflow"], "hidden")
+                            self.assertEqual(ipad_fullscreen["bodyOverscroll"], "none")
+                            self.assertEqual(ipad_fullscreen["buttonBoxShadow"], "none")
+                            self.assertEqual(ipad_fullscreen["buttonOutlineStyle"], "none")
+                            ipad_page.locator("#mapFullscreen").click()
+                            ipad_page.wait_for_function(
+                                "() => !document.querySelector('main')"
+                                ".classList.contains('maplibregl-pseudo-fullscreen')"
+                            )
+                            self.assertEqual(
+                                ipad_page.locator("#mapFullscreen").get_attribute("aria-label"),
+                                "Enter fullscreen",
+                            )
+                            self.assertEqual(ipad_errors, [])
+                        finally:
+                            ipad_page.close()
                         self.assertEqual(page_errors, [])
                     finally:
                         page.close()
