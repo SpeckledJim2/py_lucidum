@@ -17284,6 +17284,13 @@ COPY (
                                         "ofm-mock": {
                                             "type": "geojson",
                                             "data": {"type": "FeatureCollection", "features": []},
+                                            "attribution": (
+                                                '<a href="https://openfreemap.org" target="_blank">OpenFreeMap</a> '
+                                                '<a href="https://www.openmaptiles.org/" target="_blank">'
+                                                '&copy; OpenMapTiles</a> Data from '
+                                                '<a href="https://www.openstreetmap.org/copyright" '
+                                                'target="_blank">OpenStreetMap</a>'
+                                            ),
                                         }
                                     },
                                     "layers": [
@@ -17316,6 +17323,18 @@ COPY (
                         )
 
                     page.route("https://tiles.openfreemap.org/styles/**", mock_openfreemap_style)
+                    page.route(
+                        "https://server.arcgisonline.com/**",
+                        lambda route: route.fulfill(
+                            status=200,
+                            content_type="image/png",
+                            body=bytes.fromhex(
+                                "89504e470d0a1a0a0000000d4948445200000001000000010804000000"
+                                "b51c0c020000000b4944415478da6364f80f00010501012718e3660000"
+                                "000049454e44ae426082"
+                            ),
+                        ),
+                    )
 
                     def select_base(base_map: str) -> None:
                         page.locator(
@@ -17332,6 +17351,52 @@ COPY (
                             """,
                             arg=base_map,
                             timeout=10_000,
+                        )
+
+                    def attribution_state() -> dict[str, Any]:
+                        return page.evaluate(
+                            """
+                            () => {
+                              const container = document.querySelector("#ukMap");
+                              const control = container?.querySelector(".maplibregl-ctrl-attrib");
+                              const inner = control?.querySelector(".maplibregl-ctrl-attrib-inner");
+                              const button = control?.querySelector(".maplibregl-ctrl-attrib-button");
+                              const legend = document.querySelector("#mapLegend");
+                              const legendRect = legend?.getBoundingClientRect();
+                              const bottomLeftControls = [...(container?.querySelectorAll(
+                                ".maplibregl-ctrl-bottom-left .maplibregl-ctrl",
+                              ) || [])];
+                              const overlapsLegend = bottomLeftControls.some((element) => {
+                                const rect = element.getBoundingClientRect();
+                                return legendRect
+                                  && rect.right > legendRect.left
+                                  && rect.left < legendRect.right
+                                  && rect.bottom > legendRect.top
+                                  && rect.top < legendRect.bottom;
+                              });
+                              const controlStyle = control ? getComputedStyle(control) : null;
+                              return {
+                                logoCount: container?.querySelectorAll(".maplibregl-ctrl-logo").length || 0,
+                                empty: control?.classList.contains("maplibregl-attrib-empty") || false,
+                                compact: control?.classList.contains("maplibregl-compact") || false,
+                                compactShow: control?.classList.contains("maplibregl-compact-show") || false,
+                                display: controlStyle?.display || "",
+                                background: controlStyle?.backgroundColor || "",
+                                text: inner?.innerText.trim() || "",
+                                innerDisplay: inner ? getComputedStyle(inner).display : "",
+                                buttonDisplay: button ? getComputedStyle(button).display : "",
+                                buttonLabel: button?.getAttribute("aria-label") || "",
+                                mapWidth: container?._lucidumMapLibre?.getCanvasContainer().offsetWidth || 0,
+                                overlapsLegend,
+                                bottomLeftControlCount: bottomLeftControls.length,
+                                links: [...(inner?.querySelectorAll("a") || [])].map((link) => ({
+                                  href: link.href,
+                                  target: link.target,
+                                  rel: link.rel,
+                                })),
+                              };
+                            }
+                            """
                         )
 
                     def assert_vector_layer_order(level: str) -> None:
@@ -17632,6 +17697,127 @@ COPY (
                         if page.locator("body").get_attribute("class") and "dark" in (page.locator("body").get_attribute("class") or "").split():
                             page.locator("#themeBtn").click()
                             page.wait_for_function('() => !document.body.classList.contains("dark")')
+
+                        blank_attribution = attribution_state()
+                        self.assertEqual(blank_attribution["logoCount"], 0)
+                        self.assertTrue(blank_attribution["empty"])
+                        self.assertEqual(blank_attribution["display"], "none")
+                        self.assertEqual(blank_attribution["text"], "")
+                        self.assertEqual(blank_attribution["bottomLeftControlCount"], 0)
+                        self.assertFalse(blank_attribution["overlapsLegend"])
+
+                        select_base("satellite")
+                        page.wait_for_function(
+                            """
+                            () => (document.querySelector(
+                              "#ukMap .maplibregl-ctrl-attrib-inner",
+                            )?.innerText || "").includes("Powered by Esri")
+                            """,
+                            timeout=10_000,
+                        )
+                        aerial_attribution = attribution_state()
+                        self.assertGreater(aerial_attribution["mapWidth"], 640)
+                        self.assertFalse(aerial_attribution["empty"])
+                        self.assertFalse(aerial_attribution["compact"])
+                        self.assertEqual(aerial_attribution["buttonDisplay"], "none")
+                        self.assertIn("Powered by Esri", aerial_attribution["text"])
+                        self.assertIn(
+                            "Source: Esri, Vantor, Earthstar Geographics, and the GIS User Community",
+                            aerial_attribution["text"],
+                        )
+                        self.assertNotIn("MapLibre", aerial_attribution["text"])
+                        self.assertNotEqual(aerial_attribution["background"], "rgba(0, 0, 0, 0)")
+                        self.assertEqual(len(aerial_attribution["links"]), 1)
+                        self.assertEqual(aerial_attribution["links"][0]["target"], "_blank")
+                        self.assertIn("noopener", aerial_attribution["links"][0]["rel"].split())
+
+                        page.locator("#themeBtn").click()
+                        page.wait_for_function('() => document.body.classList.contains("dark")')
+                        dark_attribution = attribution_state()
+                        self.assertNotEqual(
+                            dark_attribution["background"],
+                            aerial_attribution["background"],
+                        )
+                        page.locator("#themeBtn").click()
+                        page.wait_for_function('() => !document.body.classList.contains("dark")')
+
+                        select_base("openFreeMapPositron")
+                        page.wait_for_function(
+                            """
+                            () => (document.querySelector(
+                              "#ukMap .maplibregl-ctrl-attrib-inner",
+                            )?.innerText || "").includes("OpenStreetMap")
+                            """,
+                            timeout=10_000,
+                        )
+                        openfreemap_attribution = attribution_state()
+                        self.assertFalse(openfreemap_attribution["compact"])
+                        self.assertIn("OpenFreeMap", openfreemap_attribution["text"])
+                        self.assertIn("OpenMapTiles", openfreemap_attribution["text"])
+                        self.assertIn("OpenStreetMap", openfreemap_attribution["text"])
+                        self.assertNotIn("MapLibre", openfreemap_attribution["text"])
+                        self.assertTrue(
+                            all(
+                                link["target"] == "_blank" and "noopener" in link["rel"].split()
+                                for link in openfreemap_attribution["links"]
+                            )
+                        )
+
+                        page.set_viewport_size({"width": 720, "height": 800})
+                        page.wait_for_function(
+                            """
+                            () => {
+                              const container = document.querySelector("#ukMap");
+                              const attribution = container?.querySelector(".maplibregl-ctrl-attrib");
+                              return container?._lucidumMapLibre?.getCanvasContainer().offsetWidth <= 640
+                                && attribution?.classList.contains("maplibregl-compact")
+                                && !attribution.classList.contains("maplibregl-compact-show");
+                            }
+                            """,
+                            timeout=10_000,
+                        )
+                        compact_attribution = attribution_state()
+                        self.assertLessEqual(compact_attribution["mapWidth"], 640)
+                        self.assertTrue(compact_attribution["compact"])
+                        self.assertFalse(compact_attribution["compactShow"])
+                        self.assertEqual(compact_attribution["innerDisplay"], "none")
+                        self.assertEqual(compact_attribution["buttonDisplay"], "block")
+                        self.assertEqual(compact_attribution["buttonLabel"], "Toggle attribution")
+                        page.locator("#ukMap .maplibregl-ctrl-attrib-button").click()
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector("#ukMap .maplibregl-ctrl-attrib")
+                              ?.classList.contains("maplibregl-compact-show")
+                            """
+                        )
+                        self.assertIn("OpenStreetMap", attribution_state()["text"])
+
+                        page.set_viewport_size({"width": 1280, "height": 800})
+                        page.wait_for_function(
+                            """
+                            () => {
+                              const container = document.querySelector("#ukMap");
+                              const attribution = container?.querySelector(".maplibregl-ctrl-attrib");
+                              return container?._lucidumMapLibre?.getCanvasContainer().offsetWidth > 640
+                                && !attribution?.classList.contains("maplibregl-compact");
+                            }
+                            """,
+                            timeout=10_000,
+                        )
+                        self.assertEqual(attribution_state()["buttonDisplay"], "none")
+
+                        select_base("blank")
+                        page.wait_for_function(
+                            """
+                            () => document.querySelector("#ukMap .maplibregl-ctrl-attrib")
+                              ?.classList.contains("maplibregl-attrib-empty")
+                            """,
+                            timeout=10_000,
+                        )
+                        restored_blank_attribution = attribution_state()
+                        self.assertEqual(restored_blank_attribution["display"], "none")
+                        self.assertEqual(restored_blank_attribution["logoCount"], 0)
+                        self.assertFalse(restored_blank_attribution["overlapsLegend"])
 
                         for level in ("area", "sector", "unit"):
                             if level != "area":

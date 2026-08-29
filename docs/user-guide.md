@@ -613,6 +613,12 @@ lucidum path/to/my_data.parquet \
 Area and sector geometry is bundled with Lucidum. Choose among Blank, Aerial, Light,
 and Dark bases and the available analytical palettes.
 
+Blank shows only Lucidum's analytical geometry and has no map-provider credit in the
+corners. Aerial, Light, and Dark show their required provider credits at the bottom
+right. The credits appear as a quiet text line when the map is wide enough and as an
+information button on narrow screens; activate the button to read the full credits.
+The bottom-left remains reserved for Lucidum's collapsible legend.
+
 - Sector smoothing combines each sector with neighbours reachable in **N1** to
   **N5** steps, where each step crosses a shared polygon boundary.
   Geographically separate islands therefore do not smooth with the mainland;

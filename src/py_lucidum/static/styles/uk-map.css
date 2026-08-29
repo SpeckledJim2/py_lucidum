@@ -22,7 +22,17 @@
       .uk-map .maplibregl-ctrl-attrib {
         font-size: 10px;
         line-height: 1.2;
-        padding: 0 4px;
+      }
+
+      .uk-map .maplibregl-ctrl-attrib:not(.maplibregl-compact) {
+        background: color-mix(in srgb, var(--panel) 92%, transparent);
+        border-radius: 4px;
+        color: var(--muted);
+        padding: 3px 6px;
+      }
+
+      .uk-map .maplibregl-ctrl-attrib:not(.maplibregl-compact) a {
+        color: inherit;
       }
 
       .uk-map .maplibre-unit-point-layer {

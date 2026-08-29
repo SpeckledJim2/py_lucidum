@@ -300,17 +300,38 @@ export function createMapLibreAdapter(maplibregl) {
       this._styleGeneration = 0;
       this._styleForegroundLayerIds = [];
       this._usesExternalStyle = false;
+      this._syncAttributionPresentation = () => {
+        window.requestAnimationFrame(() => {
+          const attribution = this._container.querySelector(".maplibregl-ctrl-attrib");
+          if (!attribution) return;
+          attribution.querySelectorAll('a[target="_blank"]').forEach((link) => {
+            const rel = new Set(String(link.rel || "").split(/\s+/).filter(Boolean));
+            rel.add("noopener");
+            link.rel = [...rel].join(" ");
+          });
+          if (
+            attribution.hasAttribute("open")
+            && attribution.classList.contains("maplibregl-compact")
+            && attribution.classList.contains("maplibregl-compact-show")
+          ) {
+            attribution.classList.remove("maplibregl-compact-show");
+          }
+        });
+      };
       this.raw = new maplibregl.Map({
         container: this._container,
         style: emptyMapStyle(),
-        attributionControl: true,
+        attributionControl: {},
         center: [-3.2, 54.5],
         zoom: 5,
         dragRotate: false,
         pitchWithRotate: false,
         touchPitch: false,
-        maplibreLogo: true,
+        maplibreLogo: false,
       });
+      this.raw.on("styledata", this._syncAttributionPresentation);
+      this.raw.on("sourcedata", this._syncAttributionPresentation);
+      this.raw.on("resize", this._syncAttributionPresentation);
       this._readyPromise = new Promise((resolve, reject) => {
         this.raw.once("load", () => resolve(this));
         this.raw.once("error", (event) => {

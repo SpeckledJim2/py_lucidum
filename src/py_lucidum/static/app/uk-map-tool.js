@@ -453,7 +453,10 @@ export function createUkMapTool({
     satellite: {
       label: "Aerial",
       url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-      attribution: "Tiles &copy; Esri",
+      attribution: [
+        'Powered by <a href="https://www.esri.com/" target="_blank" rel="noopener">Esri</a>',
+        "Source: Esri, Vantor, Earthstar Geographics, and the GIS User Community",
+      ].join(" | "),
     },
     openFreeMapPositron: {
       label: "Light",
