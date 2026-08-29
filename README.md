@@ -272,7 +272,7 @@ outputs.
 - Save the active sector metric and filter as a Parquet containing raw values and
   all five smoothing levels.
 - Search for postcodes and turn a selected map region into a global filter.
-- Save the map presentation, metric, filter, and camera as a Map view favourite.
+- Save the map presentation, metric, filter, camera position, and orientation as a Map view favourite.
 
 Lucidum reports blank and unmatched postcode rows separately so the map does not
 hide missing geometry behind apparently complete results.

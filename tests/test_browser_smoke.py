@@ -3202,6 +3202,64 @@ COPY (
                             page.locator("#mapZoomOut").evaluate("node => getComputedStyle(node).fontWeight"),
                             "600",
                         )
+                        self.assertTrue(
+                            page.locator("#mapCompass").evaluate(
+                                "node => node.classList.contains('maplibregl-ctrl-compass')"
+                                " && node.parentElement.classList.contains('map-native-navigation')"
+                            )
+                        )
+                        zoom_out_box = page.locator("#mapZoomOut").bounding_box()
+                        compass_box = page.locator("#mapCompass").bounding_box()
+                        fit_uk_box = page.locator("#mapFitUk").bounding_box()
+                        self.assertIsNotNone(zoom_out_box)
+                        self.assertIsNotNone(compass_box)
+                        self.assertIsNotNone(fit_uk_box)
+                        assert zoom_out_box is not None and compass_box is not None and fit_uk_box is not None
+                        self.assertLess(zoom_out_box["y"], compass_box["y"])
+                        self.assertLess(compass_box["y"], fit_uk_box["y"])
+                        compass_center_x = compass_box["x"] + (compass_box["width"] / 2)
+                        compass_center_y = compass_box["y"] + (compass_box["height"] / 2)
+                        compass_radius = min(compass_box["width"], compass_box["height"]) * 0.34
+                        quadrant_bearings = []
+                        for start_degrees in (-90, 0, 90, 180):
+                            page.evaluate(
+                                "() => document.querySelector('#ukMap')._lucidumMap.setBearing(0)"
+                            )
+                            start_angle = math.radians(start_degrees)
+                            end_angle = math.radians(start_degrees + 45)
+                            page.mouse.move(
+                                compass_center_x + (compass_radius * math.cos(start_angle)),
+                                compass_center_y + (compass_radius * math.sin(start_angle)),
+                            )
+                            page.mouse.down()
+                            page.mouse.move(
+                                compass_center_x + (compass_radius * math.cos(end_angle)),
+                                compass_center_y + (compass_radius * math.sin(end_angle)),
+                                steps=4,
+                            )
+                            page.mouse.up()
+                            quadrant_bearings.append(page.evaluate(
+                                "() => document.querySelector('#ukMap')._lucidumMap.getBearing()"
+                            ))
+                        self.assertTrue(all(40 < abs(bearing) < 50 for bearing in quadrant_bearings))
+                        self.assertLess(
+                            max(abs(bearing) for bearing in quadrant_bearings)
+                            - min(abs(bearing) for bearing in quadrant_bearings),
+                            10,
+                        )
+                        page.wait_for_function(
+                            "() => Math.abs(document.querySelector('#ukMap')?._lucidumMap?.getBearing() || 0) > 1",
+                            timeout=10_000,
+                        )
+                        self.assertNotEqual(
+                            page.locator("#mapCompass .maplibregl-ctrl-icon").evaluate("node => node.style.transform"),
+                            "rotate(0deg)",
+                        )
+                        page.locator("#mapCompass").click()
+                        page.wait_for_function(
+                            "() => Math.abs(document.querySelector('#ukMap')?._lucidumMap?.getBearing() || 0) < 0.01",
+                            timeout=10_000,
+                        )
                         page.wait_for_function(
                             """
                             () => {
@@ -18650,6 +18708,13 @@ COPY (
                     self.assertEqual(page.locator("#mapDotSizeMin").get_attribute("aria-pressed"), "false")
                     self.assertEqual(page.locator("#mapAreaLabelsOff").get_attribute("aria-pressed"), "false")
                     self.assertEqual(page.locator("#mapAreaLabelsOn").get_attribute("aria-pressed"), "true")
+                    self.assertAlmostEqual(
+                        page.evaluate(
+                            "() => document.querySelector('#ukMap')?._lucidumMap?.getBearing()"
+                        ),
+                        0,
+                        delta=0.01,
+                    )
 
                     self.assertEqual(page_errors, [])
                     browser.close()
@@ -18798,6 +18863,7 @@ COPY (
                             () => {
                               const map = document.querySelector("#ukMap")?._lucidumMap;
                               map.setView([51.5, -0.12], 9, { animate: false });
+                              map.setBearing(37.5);
                             }
                             """
                         )
@@ -18842,6 +18908,7 @@ COPY (
                         self.assertAlmostEqual(saved_map["center"]["lat"], 51.5, delta=0.01)
                         self.assertAlmostEqual(saved_map["center"]["lng"], -0.12, delta=0.01)
                         self.assertAlmostEqual(saved_map["zoom"], 9, delta=0.01)
+                        self.assertAlmostEqual(saved_map["bearing"], 37.5, delta=0.01)
                         self.assertEqual(saved_map["dotSizeMode"], "adaptive")
                         self.assertEqual(saved_map["areaLabels"], "off")
                         self.assertEqual(saved_map["baseMap"], "openFreeMapPositron")
@@ -18954,6 +19021,7 @@ COPY (
                             () => {
                               const map = document.querySelector("#ukMap")?._lucidumMap;
                               map.setView([54.5, -3.2], 6, { animate: false });
+                              map.setBearing(-22);
                             }
                             """
                         )
@@ -18963,13 +19031,14 @@ COPY (
                             () => {
                               const map = document.querySelector("#ukMap")?._lucidumMap;
                               const center = map.getCenter();
-                              return { lat: center.lat, lng: center.lng, zoom: map.getZoom() };
+                              return { lat: center.lat, lng: center.lng, zoom: map.getZoom(), bearing: map.getBearing() };
                             }
                             """
                         )
                         self.assertAlmostEqual(current_camera["lat"], 54.5, delta=0.25)
                         self.assertAlmostEqual(current_camera["lng"], -3.2, delta=0.25)
                         self.assertAlmostEqual(current_camera["zoom"], 6, delta=0.5)
+                        self.assertAlmostEqual(current_camera["bearing"], -22, delta=0.5)
 
                         page.locator("#lineBarTool").click()
                         page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
@@ -19007,13 +19076,14 @@ COPY (
                             () => {
                               const map = document.querySelector("#ukMap")?._lucidumMap;
                               const center = map.getCenter();
-                              return { lat: center.lat, lng: center.lng, zoom: map.getZoom() };
+                              return { lat: center.lat, lng: center.lng, zoom: map.getZoom(), bearing: map.getBearing() };
                             }
                             """
                         )
                         self.assertAlmostEqual(restored_camera["lat"], 51.5, delta=0.25)
                         self.assertAlmostEqual(restored_camera["lng"], -0.12, delta=0.25)
                         self.assertAlmostEqual(restored_camera["zoom"], 9, delta=0.5)
+                        self.assertAlmostEqual(restored_camera["bearing"], 37.5, delta=0.5)
 
                         page.locator('.map-palette-button[data-palette="spectral"]').click()
                         page.wait_for_function(
@@ -20573,6 +20643,128 @@ COPY (
                         self.assertEqual(canvas_source_state["sourceCanvasOpacity"], "0")
                         self.assertEqual(len(canvas_source_state["coordinates"]), 4)
                         summary_request_count_before_camera_moves = len(summary_requests)
+                        page.evaluate(
+                            """
+                            () => {
+                              const map = document.querySelector("#ukMap")?._lucidumMap;
+                              const layer = Object.values(map?._layers || {})
+                                .find((candidate) => candidate?.data?.level === "unit");
+                              window.__unitRotationResetCount = 0;
+                              window.__unitRotationOriginalReset = layer.reset;
+                              layer.reset = function (...args) {
+                                window.__unitRotationResetCount += 1;
+                                return window.__unitRotationOriginalReset.apply(this, args);
+                              };
+                            }
+                            """
+                        )
+                        unit_compass_box = page.locator("#mapCompass").bounding_box()
+                        self.assertIsNotNone(unit_compass_box)
+                        assert unit_compass_box is not None
+                        unit_compass_center_x = unit_compass_box["x"] + (unit_compass_box["width"] / 2)
+                        unit_compass_center_y = unit_compass_box["y"] + (unit_compass_box["height"] / 2)
+                        page.mouse.move(unit_compass_center_x, unit_compass_box["y"] + 5)
+                        page.mouse.down()
+                        page.mouse.move(
+                            unit_compass_box["x"] + unit_compass_box["width"] - 5,
+                            unit_compass_center_y,
+                            steps=4,
+                        )
+                        page.wait_for_function(
+                            """
+                            () => {
+                              const map = document.querySelector("#ukMap")?._lucidumMap;
+                              const layer = Object.values(map?._layers || {})
+                                .find((candidate) => candidate?.data?.level === "unit");
+                              return Math.abs(map?.getBearing() || 0) > 1
+                                && layer?.rotating
+                                && layer?.hitGrid?.size === 0
+                                && window.__unitRotationResetCount === 0;
+                            }
+                            """,
+                            timeout=10_000,
+                        )
+                        page.mouse.up()
+                        page.wait_for_function(
+                            """
+                            () => {
+                              const map = document.querySelector("#ukMap")?._lucidumMap;
+                              const layer = Object.values(map?._layers || {})
+                                .find((candidate) => candidate?.data?.level === "unit");
+                              return !layer?.rotating && window.__unitRotationResetCount === 1;
+                            }
+                            """,
+                            timeout=10_000,
+                        )
+                        page.evaluate(
+                            """
+                            () => {
+                              const map = document.querySelector("#ukMap")?._lucidumMap;
+                              const layer = Object.values(map?._layers || {})
+                                .find((candidate) => candidate?.data?.level === "unit");
+                              layer.reset = window.__unitRotationOriginalReset;
+                              delete window.__unitRotationOriginalReset;
+                            }
+                            """
+                        )
+                        self.assertEqual(len(summary_requests), summary_request_count_before_camera_moves)
+                        page.evaluate(
+                            "() => document.querySelector('#ukMap')?._lucidumMap?.setBearing(45)"
+                        )
+                        page.wait_for_function(
+                            """
+                            () => {
+                              const container = document.querySelector("#ukMap");
+                              const map = container?._lucidumMap;
+                              const raw = container?._lucidumMapLibre;
+                              const layer = Object.values(map?._layers || {})
+                                .find((candidate) => candidate?.data?.level === "unit");
+                              return Math.abs((map?.getBearing() || 0) - 45) < 0.01
+                                && !raw?.isMoving()
+                                && Math.abs((layer?.projectionBearingCos || 0) - Math.SQRT1_2) < 0.01;
+                            }
+                            """,
+                            timeout=10_000,
+                        )
+                        rotated_unit_state = page.evaluate(
+                            """
+                            () => {
+                              const container = document.querySelector("#ukMap");
+                              const map = container?._lucidumMap;
+                              const layer = Object.values(map?._layers || {})
+                                .find((candidate) => candidate?.data?.level === "unit");
+                              const size = map.getSize();
+                              const errors = [];
+                              for (let index = 0; index < layer.pointCount; index += 1) {
+                                const expected = map.latLngToContainerPoint([
+                                  layer.geometryPoints.latitude[index],
+                                  layer.geometryPoints.longitude[index],
+                                ]);
+                                const actual = layer.projectUnitPoint(index, size);
+                                errors.push(Math.hypot(expected.x - actual.x, expected.y - actual.y));
+                              }
+                              const firstPoint = map.latLngToContainerPoint([
+                                layer.geometryPoints.latitude[0],
+                                layer.geometryPoints.longitude[0],
+                              ]);
+                              return {
+                                maximumProjectionError: Math.max(...errors),
+                                hitKey: layer.findNearest(firstPoint)?.key || "",
+                                firstKey: String(layer.geometryPoints.key[0] || ""),
+                              };
+                            }
+                            """
+                        )
+                        self.assertLess(rotated_unit_state["maximumProjectionError"], 0.1)
+                        self.assertEqual(rotated_unit_state["hitKey"], rotated_unit_state["firstKey"])
+                        self.assertEqual(len(summary_requests), summary_request_count_before_camera_moves)
+                        page.evaluate(
+                            "() => document.querySelector('#ukMap')?._lucidumMap?.setBearing(0)"
+                        )
+                        page.wait_for_function(
+                            "() => Math.abs(document.querySelector('#ukMap')?._lucidumMap?.getBearing() || 0) < 0.01",
+                            timeout=10_000,
+                        )
                         self.assertEqual(page.locator("#mapDotSizeAdaptive").get_attribute("aria-pressed"), "true")
                         self.assertEqual(page.locator("#mapDotSizeMin").get_attribute("aria-pressed"), "false")
                         fitted_zoom = float(page.evaluate(

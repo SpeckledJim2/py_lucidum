@@ -485,8 +485,11 @@ export function createMapLibreAdapter(maplibregl) {
       await new Promise((resolve) => requestAnimationFrame(() => resolve()));
     }
 
-    setView(center, zoom) {
-      this.raw.jumpTo({ center: lngLatLike(center), zoom: Number(zoom) - 1 });
+    setView(center, zoom, options = {}) {
+      const camera = { center: lngLatLike(center), zoom: Number(zoom) - 1 };
+      const bearing = Number(options.bearing);
+      if (Number.isFinite(bearing)) camera.bearing = bearing;
+      this.raw.jumpTo(camera);
       return this;
     }
 
@@ -502,6 +505,16 @@ export function createMapLibreAdapter(maplibregl) {
 
     getZoom() {
       return this.raw.getZoom() + 1;
+    }
+
+    getBearing() {
+      return this.raw.getBearing();
+    }
+
+    setBearing(bearing) {
+      const nextBearing = Number(bearing);
+      if (Number.isFinite(nextBearing)) this.raw.setBearing(nextBearing);
+      return this;
     }
 
     isZooming() {

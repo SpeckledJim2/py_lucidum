@@ -932,6 +932,7 @@ COPY (
                     "smoothingLevel": 2,
                     "center": {"lat": 51.5, "lng": -0.1},
                     "zoom": 8,
+                    "bearing": 37.5,
                 },
             ),
         )
@@ -942,6 +943,7 @@ COPY (
         self.assertEqual(map_view["view"]["map"]["areaLabels"], "on")
         self.assertEqual(map_view["view"]["map"]["center"], {"lat": 51.5, "lng": -0.1})
         self.assertEqual(map_view["view"]["map"]["zoom"], 8)
+        self.assertEqual(map_view["view"]["map"]["bearing"], 37.5)
 
         with self.assertRaises(ValueError) as context:
             store.create_favourite(

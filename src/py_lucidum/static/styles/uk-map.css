@@ -34,7 +34,7 @@
 
       .map-viewport-control {
         display: grid;
-        grid-template-rows: repeat(5, 34px);
+        grid-template-rows: repeat(6, 34px);
         overflow: hidden;
         background: var(--panel);
         border: 1px solid var(--line);
@@ -62,6 +62,37 @@
       #mapZoomIn,
       #mapZoomOut {
         font-weight: 600;
+      }
+
+      .map-native-navigation {
+        display: contents;
+      }
+
+      .map-viewport-control .map-native-navigation button {
+        background-color: var(--panel);
+        border: 0;
+        border-bottom: 1px solid var(--line);
+        border-radius: 0;
+        height: 34px;
+        width: 34px;
+      }
+
+      .map-viewport-control .map-native-navigation button + button {
+        border-top: 0;
+      }
+
+      .map-viewport-control .map-native-navigation button:hover {
+        background-color: var(--panel-2);
+      }
+
+      .map-viewport-control .map-native-navigation button:focus-visible {
+        box-shadow: none;
+        outline: 2px solid color-mix(in srgb, var(--accent) 80%, white);
+        outline-offset: -3px;
+      }
+
+      body.dark .map-native-navigation .maplibregl-ctrl-icon {
+        filter: invert(1) grayscale(1) brightness(1.7) contrast(1.08);
       }
 
       .map-toolbar-toggle svg {

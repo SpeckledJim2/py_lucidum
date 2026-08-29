@@ -225,6 +225,7 @@
         mapStartupFitDone: false,
         renderedMapLevel: null,
         mapView: null,
+        mapBearing: 0,
         mapViewRestorePending: null,
         mapFavouriteRestoreInProgress: false,
         mapViewportSyncFrame: null,

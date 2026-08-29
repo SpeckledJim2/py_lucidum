@@ -675,9 +675,14 @@ The control and information strips can be collapsed for the browser session with
 changing the map camera or requesting a new summary. The information strip reports
 the active calculation, plotted and missing rows, row count, and filter state.
 
+The compass below Zoom out rotates with the map. Drag it horizontally to rotate the
+map on desktop, or click it to return to north. Touch rotation remains available on
+supported devices.
+
 A Map view favourite stores the level, base, palette, presentation controls, metric,
-filter, and camera where possible. The control-strip collapsed state remains a
-session preference rather than part of the favourite.
+filter, camera position, zoom, and orientation where possible. Older favourites
+without an orientation open pointing north. The control-strip collapsed state
+remains a session preference rather than part of the favourite.
 
 [Back to contents ↑](#contents)
 

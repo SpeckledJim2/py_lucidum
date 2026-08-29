@@ -491,6 +491,12 @@ export function createUkMapTool({
   let baseMapChangeGeneration = 0;
   let baseMapChangePending = false;
   let mapViewportControl = null;
+  let mapNavigationControl = null;
+  let mapCompassControlButton = null;
+  let finishMapCompassUnitRotation = null;
+  let mapCompassGestureCleanup = null;
+  let mapCompassSuppressClick = false;
+  let mapCompassSuppressClickTimer = null;
   let mapResizeObserver = null;
   let activeMapPopupSelection = null;
   let mapRegionFilterPanel = null;
@@ -894,7 +900,8 @@ export function createUkMapTool({
       }).setView([MAP_DEFAULT_VIEW.center.lat, MAP_DEFAULT_VIEW.center.lng], MAP_DEFAULT_VIEW.zoom);
       ukMap.getContainer()._lucidumMap = ukMap;
       await ukMap.whenReady?.();
-      ukMap.on("moveend zoomend", () => {
+      ukMap.setBearing(state.mapBearing);
+      ukMap.on("moveend zoomend rotateend", () => {
         captureMapView("maplibre");
       });
       ukMap.on("zoomend", () => {
@@ -1146,13 +1153,13 @@ export function createUkMapTool({
     const lng = Number(Array.isArray(center) ? center[1] : center.lng);
     const zoom = Number(view?.zoom);
     if (!Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(zoom)) return null;
-    return { center: { lat, lng }, zoom };
+    return { center: { lat, lng }, zoom, bearing: normaliseMapBearing(view?.bearing) };
   }
 
   function currentMapView() {
     if (!ukMap || !mapContainerVisible()) return null;
     const center = ukMap.getCenter();
-    return normaliseMapView({ center, zoom: ukMap.getZoom() });
+    return normaliseMapView({ center, zoom: ukMap.getZoom(), bearing: ukMap.getBearing() });
   }
 
   function captureMapView(reason = "") {
@@ -1163,6 +1170,7 @@ export function createUkMapTool({
       return null;
     }
     state.mapView = view;
+    state.mapBearing = view.bearing;
     if (reason === "maplibre" && state.tool === "uk_map") clearActiveMapFavourite();
     return view;
   }
@@ -1172,8 +1180,12 @@ export function createUkMapTool({
     if (!ukMap || !nextView || !mapContainerVisible()) return false;
     state.restoringMapView = true;
     state.mapView = nextView;
+    state.mapBearing = nextView.bearing;
     try {
-      ukMap.setView([nextView.center.lat, nextView.center.lng], nextView.zoom, { animate: false });
+      ukMap.setView([nextView.center.lat, nextView.center.lng], nextView.zoom, {
+        animate: false,
+        bearing: nextView.bearing,
+      });
       return true;
     } finally {
       requestAnimationFrame(() => {
@@ -1489,6 +1501,13 @@ export function createUkMapTool({
     return options.integer ? Math.round(clamped) : clamped;
   }
 
+  function normaliseMapBearing(value) {
+    const bearing = Number(value);
+    if (!Number.isFinite(bearing)) return 0;
+    const wrapped = ((bearing + 180) % 360 + 360) % 360 - 180;
+    return Object.is(wrapped, -0) ? 0 : wrapped;
+  }
+
   function normaliseFavouriteMapLevel(level) {
     const requested = String(level || "");
     if (Object.prototype.hasOwnProperty.call(MAP_LEVELS, requested) && mapLevelSelectable(requested)) return requested;
@@ -1527,6 +1546,7 @@ export function createUkMapTool({
     const requestedBaseMap = MAP_LEGACY_BASE_LAYERS[payload.baseMap] || String(payload.baseMap || "");
     const baseMap = MAP_BASE_LAYERS[requestedBaseMap] ? requestedBaseMap : "blank";
     const palette = MAP_PALETTES[payload.palette] ? String(payload.palette) : "divergent";
+    const bearing = normaliseMapBearing(payload.bearing);
     return {
       level,
       baseMap,
@@ -1537,7 +1557,8 @@ export function createUkMapTool({
       hotspots: clampMapNumber(payload.hotspots, 0, -9, 9, { integer: true }),
       areaLabels: normaliseMapAreaLabels(payload.areaLabels, payload.labelSize),
       smoothingLevel: clampMapNumber(payload.smoothingLevel, 0, 0, 5, { integer: true }),
-      view: normaliseMapView({ center: payload.center, zoom: payload.zoom }),
+      bearing,
+      view: normaliseMapView({ center: payload.center, zoom: payload.zoom, bearing }),
     };
   }
 
@@ -1556,6 +1577,7 @@ export function createUkMapTool({
       smoothingLevel: Number(state.mapSmoothingLevel),
       center: view?.center || null,
       zoom: view?.zoom ?? null,
+      bearing: view?.bearing ?? normaliseMapBearing(state.mapBearing),
     };
   }
 
@@ -1569,10 +1591,12 @@ export function createUkMapTool({
     state.mapHotspots = next.hotspots;
     state.mapAreaLabels = next.areaLabels;
     state.mapSmoothingLevel = next.smoothingLevel;
+    state.mapBearing = next.bearing;
     state.mapView = next.view;
     state.mapViewRestorePending = next.view;
     state.pendingMapZoom = null;
     state.mapStartupFitDone = Boolean(next.view);
+    if (ukMap && !next.view) ukMap.setBearing(next.bearing);
     const baseMapPromise = setBaseMap(next.baseMap);
     syncMapControls();
     syncFloatingMapControl();
@@ -1589,18 +1613,137 @@ export function createUkMapTool({
     });
   }
 
-  function zoomMapBy(delta) {
-    if (!ukMap) return;
-    ukMap.setZoom(ukMap.getZoom() + delta, { animate: false });
-    state.mapStartupFitDone = true;
-    captureMapView("explicit");
-  }
-
   function zoomMapToLondon() {
     if (!ukMap) return;
     ukMap.setView([51.5074, -0.1278], 10, { animate: false });
     state.mapStartupFitDone = true;
     captureMapView("explicit");
+  }
+
+  function endMapCompassUnitRotation() {
+    if (!finishMapCompassUnitRotation) return;
+    const finish = finishMapCompassUnitRotation;
+    finishMapCompassUnitRotation = null;
+    finish();
+  }
+
+  function beginMapCompassUnitRotation() {
+    if (finishMapCompassUnitRotation) return;
+    const unitLayer = ukMapPointLayer;
+    if (!unitLayer?.beginRotation?.()) return;
+    finishMapCompassUnitRotation = () => unitLayer.endRotation?.();
+  }
+
+  function mapCompassPointerAngle(clientX, clientY) {
+    const bounds = mapCompassControlButton?.getBoundingClientRect?.();
+    if (!bounds) return null;
+    const offsetX = Number(clientX) - (bounds.left + (bounds.width / 2));
+    const offsetY = Number(clientY) - (bounds.top + (bounds.height / 2));
+    if (!Number.isFinite(offsetX) || !Number.isFinite(offsetY) || Math.hypot(offsetX, offsetY) < 2) {
+      return null;
+    }
+    return Math.atan2(offsetY, offsetX);
+  }
+
+  function finishMapCompassGesture({ moved = false } = {}) {
+    const cleanup = mapCompassGestureCleanup;
+    mapCompassGestureCleanup = null;
+    cleanup?.();
+    endMapCompassUnitRotation();
+    if (!moved) return;
+    mapCompassSuppressClick = true;
+    window.clearTimeout(mapCompassSuppressClickTimer);
+    mapCompassSuppressClickTimer = window.setTimeout(() => {
+      mapCompassSuppressClick = false;
+      mapCompassSuppressClickTimer = null;
+    }, 500);
+    state.mapStartupFitDone = true;
+    captureMapView("explicit");
+  }
+
+  function beginMapCompassGesture(clientX, clientY) {
+    if (!ukMap) return null;
+    if (mapCompassGestureCleanup) finishMapCompassGesture();
+    beginMapCompassUnitRotation();
+    let lastAngle = mapCompassPointerAngle(clientX, clientY);
+    let totalRotation = 0;
+    return {
+      move(nextClientX, nextClientY) {
+        const nextAngle = mapCompassPointerAngle(nextClientX, nextClientY);
+        if (nextAngle === null) {
+          lastAngle = null;
+          return;
+        }
+        if (lastAngle === null) {
+          lastAngle = nextAngle;
+          return;
+        }
+        const angleDelta = Math.atan2(
+          Math.sin(nextAngle - lastAngle),
+          Math.cos(nextAngle - lastAngle),
+        );
+        lastAngle = nextAngle;
+        const bearingDelta = (angleDelta * 180) / Math.PI;
+        if (Math.abs(bearingDelta) < 0.01) return;
+        totalRotation += Math.abs(bearingDelta);
+        ukMap.setBearing(ukMap.getBearing() - bearingDelta);
+      },
+      finish() {
+        finishMapCompassGesture({ moved: totalRotation >= 0.5 });
+      },
+    };
+  }
+
+  function handleMapCompassMouseDown(event) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    const gesture = beginMapCompassGesture(event.clientX, event.clientY);
+    if (!gesture) return;
+    const handleMove = (moveEvent) => {
+      moveEvent.preventDefault();
+      gesture.move(moveEvent.clientX, moveEvent.clientY);
+    };
+    const handleEnd = () => gesture.finish();
+    mapCompassGestureCleanup = () => {
+      window.removeEventListener("mousemove", handleMove);
+      window.removeEventListener("mouseup", handleEnd);
+    };
+    window.addEventListener("mousemove", handleMove, { passive: false });
+    window.addEventListener("mouseup", handleEnd, { once: true });
+  }
+
+  function handleMapCompassTouchStart(event) {
+    if (event.touches.length !== 1) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    const touch = event.touches[0];
+    const gesture = beginMapCompassGesture(touch.clientX, touch.clientY);
+    if (!gesture) return;
+    const handleMove = (moveEvent) => {
+      if (moveEvent.touches.length !== 1) return;
+      moveEvent.preventDefault();
+      const nextTouch = moveEvent.touches[0];
+      gesture.move(nextTouch.clientX, nextTouch.clientY);
+    };
+    const handleEnd = () => gesture.finish();
+    mapCompassGestureCleanup = () => {
+      window.removeEventListener("touchmove", handleMove);
+      window.removeEventListener("touchend", handleEnd);
+      window.removeEventListener("touchcancel", handleEnd);
+    };
+    window.addEventListener("touchmove", handleMove, { passive: false });
+    window.addEventListener("touchend", handleEnd, { once: true });
+    window.addEventListener("touchcancel", handleEnd, { once: true });
+  }
+
+  function handleMapCompassClick(event) {
+    if (!mapCompassSuppressClick || event.detail === 0) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    mapCompassSuppressClick = false;
+    window.clearTimeout(mapCompassSuppressClickTimer);
+    mapCompassSuppressClickTimer = null;
   }
 
   function addMapViewportControl() {
@@ -1613,24 +1756,52 @@ export function createUkMapTool({
           <button id="mapControlReset" class="map-viewport-button map-toolbar-toggle" type="button" title="Collapse map controls" aria-label="Collapse map controls" aria-controls="mapToolbar mapInfoStrip" aria-expanded="true">
             <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">${MAP_TOOLBAR_CHEVRON_ICON}</svg>
           </button>
-          <button id="mapZoomIn" class="map-viewport-button" type="button" title="Zoom in" aria-label="Zoom in">+</button>
-          <button id="mapZoomOut" class="map-viewport-button" type="button" title="Zoom out" aria-label="Zoom out">&minus;</button>
+        `;
+        mapNavigationControl = new L.maplibregl.NavigationControl({
+          showCompass: true,
+          showZoom: true,
+          visualizePitch: false,
+        });
+        const navigationContainer = mapNavigationControl.onAdd(ukMap.raw);
+        navigationContainer.classList.add("map-native-navigation");
+        navigationContainer.querySelector(".maplibregl-ctrl-zoom-in").id = "mapZoomIn";
+        navigationContainer.querySelector(".maplibregl-ctrl-zoom-out").id = "mapZoomOut";
+        mapCompassControlButton = navigationContainer.querySelector(".maplibregl-ctrl-compass");
+        mapCompassControlButton.id = "mapCompass";
+        mapCompassControlButton.addEventListener("mousedown", handleMapCompassMouseDown, true);
+        mapCompassControlButton.addEventListener("touchstart", handleMapCompassTouchStart, {
+          capture: true,
+          passive: false,
+        });
+        mapCompassControlButton.addEventListener("click", handleMapCompassClick, true);
+        container.append(navigationContainer);
+        container.insertAdjacentHTML("beforeend", `
           <button id="mapFitUk" class="map-viewport-button" type="button" title="Fit UK map layer" aria-label="Fit UK map layer">
             <img src="/tools/uk-map/static/icons/UK.png" alt="">
           </button>
           <button id="mapZoomLondon" class="map-viewport-button" type="button" title="Zoom to London" aria-label="Zoom to London">
             <img class="map-viewport-icon-london" src="/tools/uk-map/static/icons/London.png" alt="">
           </button>
-        `;
+        `);
         L.DomEvent.disableClickPropagation(container);
         L.DomEvent.disableScrollPropagation(container);
         container.querySelector("#mapControlReset").addEventListener("click", toggleMapToolbarCollapsed);
-        container.querySelector("#mapZoomIn").addEventListener("click", () => zoomMapBy(Number(ukMap?.options?.zoomDelta) || 1));
-        container.querySelector("#mapZoomOut").addEventListener("click", () => zoomMapBy(-(Number(ukMap?.options?.zoomDelta) || 1)));
         container.querySelector("#mapFitUk").addEventListener("click", () => fitMapToLayer());
         container.querySelector("#mapZoomLondon").addEventListener("click", () => zoomMapToLondon());
         syncMapToolbarVisibility();
         return container;
+      },
+      onRemove() {
+        finishMapCompassGesture();
+        mapCompassControlButton?.removeEventListener("mousedown", handleMapCompassMouseDown, true);
+        mapCompassControlButton?.removeEventListener("touchstart", handleMapCompassTouchStart, true);
+        mapCompassControlButton?.removeEventListener("click", handleMapCompassClick, true);
+        window.clearTimeout(mapCompassSuppressClickTimer);
+        mapCompassSuppressClickTimer = null;
+        mapCompassSuppressClick = false;
+        mapCompassControlButton = null;
+        mapNavigationControl?.onRemove();
+        mapNavigationControl = null;
       },
     });
     mapViewportControl = new ViewportControl();
@@ -2309,7 +2480,7 @@ export function createUkMapTool({
         });
       },
       handleMoveEnd() {
-        if (!this.map || this.zooming) return;
+        if (!this.map || this.zooming || this.rotating) return;
         if (this.zoomRefreshPending) {
           const generation = this.zoomGeneration;
           this.zoomRefreshPending = false;
@@ -2318,6 +2489,18 @@ export function createUkMapTool({
           this.reset({ zoomGeneration: generation });
           return;
         }
+        this.reset();
+      },
+      beginRotation() {
+        if (!this.map || this.rotating) return false;
+        this.rotating = true;
+        this.hitGrid = new Map();
+        this.closeTooltip();
+        return true;
+      },
+      endRotation() {
+        if (!this.map || !this.rotating) return;
+        this.rotating = false;
         this.reset();
       },
       getBounds() {
@@ -2331,12 +2514,19 @@ export function createUkMapTool({
       },
       visibleCellRange(hitRadius, size) {
         if (!Number.isFinite(this.spatialBounds.minLatitude)) return null;
-        const northWest = this.map.containerPointToLatLng([-hitRadius, -hitRadius]);
-        const southEast = this.map.containerPointToLatLng([size.x + hitRadius, size.y + hitRadius]);
-        const west = Math.max(this.spatialBounds.minLongitude, Math.min(northWest.lng, southEast.lng));
-        const east = Math.min(this.spatialBounds.maxLongitude, Math.max(northWest.lng, southEast.lng));
-        const south = Math.max(this.spatialBounds.minLatitude, Math.min(northWest.lat, southEast.lat));
-        const north = Math.min(this.spatialBounds.maxLatitude, Math.max(northWest.lat, southEast.lat));
+        const corners = [
+          [-hitRadius, -hitRadius],
+          [size.x + hitRadius, -hitRadius],
+          [size.x + hitRadius, size.y + hitRadius],
+          [-hitRadius, size.y + hitRadius],
+        ].map((point) => this.map.containerPointToLatLng(point));
+        const longitudes = corners.map((corner) => corner.lng).filter(Number.isFinite);
+        const latitudes = corners.map((corner) => corner.lat).filter(Number.isFinite);
+        if (longitudes.length !== 4 || latitudes.length !== 4) return null;
+        const west = Math.max(this.spatialBounds.minLongitude, Math.min(...longitudes));
+        const east = Math.min(this.spatialBounds.maxLongitude, Math.max(...longitudes));
+        const south = Math.max(this.spatialBounds.minLatitude, Math.min(...latitudes));
+        const north = Math.min(this.spatialBounds.maxLatitude, Math.max(...latitudes));
         if (west > east || south > north) return null;
         const minimum = this.spatialCell(south, west);
         const maximum = this.spatialCell(north, east);
@@ -2345,6 +2535,18 @@ export function createUkMapTool({
           maxX: Math.max(minimum.x, maximum.x),
           minY: Math.min(minimum.y, maximum.y),
           maxY: Math.max(minimum.y, maximum.y),
+        };
+      },
+      projectUnitPoint(index, size = this.map.getSize()) {
+        const unrotatedX = (this.worldX[index] * this.projectionScale) - this.projectionMinX;
+        const unrotatedY = (this.worldY[index] * this.projectionScale) - this.projectionMinY;
+        const offsetX = unrotatedX - (size.x / 2);
+        const offsetY = unrotatedY - (size.y / 2);
+        const cosine = Number.isFinite(this.projectionBearingCos) ? this.projectionBearingCos : 1;
+        const sine = Number.isFinite(this.projectionBearingSin) ? this.projectionBearingSin : 0;
+        return {
+          x: (size.x / 2) + (offsetX * cosine) + (offsetY * sine),
+          y: (size.y / 2) - (offsetX * sine) + (offsetY * cosine),
         };
       },
       canvasCoordinates() {
@@ -2454,6 +2656,9 @@ export function createUkMapTool({
         this.projectionScale = 2 ** this.map.getZoom();
         this.projectionMinX = pixelBounds.min.x;
         this.projectionMinY = pixelBounds.min.y;
+        const bearingRadians = normaliseMapBearing(this.map.getBearing()) * (Math.PI / 180);
+        this.projectionBearingCos = Math.cos(bearingRadians);
+        this.projectionBearingSin = Math.sin(bearingRadians);
         this.hitGridStride = Math.ceil(size.x / MAP_POINT_GRID_SIZE) + 4;
         const opacityValue = Number(state.mapOpacity);
         const mapOpacity = Number.isFinite(opacityValue) ? Math.max(0, Math.min(1, opacityValue)) : 1;
@@ -2474,8 +2679,9 @@ export function createUkMapTool({
                 this.colorBuckets[index] = bucket;
               }
               if (bucket === 254) continue;
-              const pointX = (this.worldX[index] * this.projectionScale) - this.projectionMinX;
-              const pointY = (this.worldY[index] * this.projectionScale) - this.projectionMinY;
+              const projectedPoint = this.projectUnitPoint(index, size);
+              const pointX = projectedPoint.x;
+              const pointY = projectedPoint.y;
               if (pointX < -hitRadius || pointY < -hitRadius || pointX > size.x + hitRadius || pointY > size.y + hitRadius) {
                 continue;
               }
@@ -2538,6 +2744,7 @@ export function createUkMapTool({
       },
       findNearest(containerPoint) {
         if (!this.map || !this.hitGrid) return null;
+        const size = this.map.getSize();
         const hitRadius = this.hitRadius || 6;
         const radiusSquared = hitRadius * hitRadius;
         let nearest = null;
@@ -2549,8 +2756,9 @@ export function createUkMapTool({
             const key = ((gridY + dyCell + 2) * this.hitGridStride) + gridX + dxCell + 2;
             const indexes = this.hitGrid.get(key) || [];
             for (const index of indexes) {
-              const pointX = (this.worldX[index] * this.projectionScale) - this.projectionMinX;
-              const pointY = (this.worldY[index] * this.projectionScale) - this.projectionMinY;
+              const projectedPoint = this.projectUnitPoint(index, size);
+              const pointX = projectedPoint.x;
+              const pointY = projectedPoint.y;
               const dx = pointX - containerPoint.x;
               const dy = pointY - containerPoint.y;
               const distance = dx * dx + dy * dy;
