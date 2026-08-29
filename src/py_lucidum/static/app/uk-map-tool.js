@@ -450,16 +450,6 @@ export function createUkMapTool({
   const MAP_TOOLBAR_CHEVRON_ICON = '<path d="m18 15-6-6-6 6"></path>';
   const MAP_BASE_LAYERS = {
     blank: { label: "Blank" },
-    esri: {
-      label: "Esri",
-      url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
-      attribution: "Tiles &copy; Esri",
-    },
-    osm: {
-      label: "OSM",
-      url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-      attribution: "&copy; OpenStreetMap contributors",
-    },
     satellite: {
       label: "Aerial",
       url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
@@ -477,6 +467,8 @@ export function createUkMapTool({
     },
   };
   const MAP_LEGACY_BASE_LAYERS = {
+    esri: "blank",
+    osm: "blank",
     grey: "openFreeMapPositron",
     darkGrey: "openFreeMapDark",
   };
@@ -1393,10 +1385,18 @@ export function createUkMapTool({
     const analysisOutlineLayerId = state.renderedMapLevel === "unit"
       ? ukMapPointLayer?.canvasMapLayer?.layerId
       : ukMapLayer?.lineLayerId;
+    const analysisHoverFillLayerId = state.renderedMapLevel === "unit"
+      ? null
+      : ukMapLayer?.hoverFillLayerId;
+    const analysisHoverLayerId = state.renderedMapLevel === "unit"
+      ? null
+      : ukMapLayer?.hoverLineLayerId;
     const desiredLayerIds = [
       analysisFillLayerId,
+      analysisHoverFillLayerId,
       ...lineLayerIds,
       analysisOutlineLayerId,
+      analysisHoverLayerId,
       ...symbolLayerIds,
     ].filter((layerId) => layerId && rawMap?.getLayer?.(layerId));
     const desiredLayerIdSet = new Set(desiredLayerIds);
@@ -2048,6 +2048,17 @@ export function createUkMapTool({
     };
   }
 
+  function mapPolygonHoverStyle(_feature, featureStyle = {}) {
+    const accent = getCss("--accent") || "#2276d2";
+    return {
+      fillColor: accent,
+      fillOpacity: 0.12,
+      color: accent,
+      opacity: 1,
+      weight: Math.max(2, (Number(featureStyle.weight) || 0) + 1),
+    };
+  }
+
   function mapPostcodeSelectionForPolygon(level, layer) {
     const key = mapPolygonLayerKey(layer);
     return {
@@ -2091,6 +2102,7 @@ export function createUkMapTool({
       fillAntialias: false,
       smoothFactor: levelConfig.smoothFactor ?? 1,
       style: mapPolygonFeatureStyle,
+      hoverStyle: mapPolygonHoverStyle,
       onEachFeature: (feature, layer) => {
         layer._lucidumMapKey = mapPolygonFeatureKey(feature, levelConfig.property);
         layer.bindTooltip(() => mapPolygonTooltipHtml(layer), { sticky: true });

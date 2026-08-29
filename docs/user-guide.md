@@ -220,8 +220,8 @@ data: limit who can connect, keep the access token enabled, and follow your
 organisation's security guidance.
 
 The app code, chart libraries, and UK postcode geometry are bundled. UK Mapping's
-**Blank** base makes no external tile requests. Esri, OSM, Aerial, Light, and Dark
-bases fetch map tiles from the listed providers and require network access.
+**Blank** base makes no external tile requests. Aerial, Light, and Dark fetch map
+tiles from the listed providers and require network access.
 
 [Back to contents ↑](#contents)
 
@@ -610,8 +610,8 @@ lucidum path/to/my_data.parquet \
 
 ### Area and sector maps
 
-Area and sector geometry is bundled with Lucidum. Choose among Blank, Esri, OSM,
-Aerial, Light, and Dark bases and the available analytical palettes.
+Area and sector geometry is bundled with Lucidum. Choose among Blank, Aerial, Light,
+and Dark bases and the available analytical palettes.
 
 - Sector smoothing combines each sector with neighbours reachable in **N1** to
   **N5** steps, where each step crosses a shared polygon boundary.
@@ -619,6 +619,8 @@ Aerial, Light, and Dark bases and the available analytical palettes.
   for example, Isle of Wight sectors smooth only with other connected sectors
   on the island.
 - Area and sector outlines can be Off, Thin, or Bold.
+- Moving the pointer over an area or sector gives the polygon a subtle accent wash
+  and stronger outline without changing its underlying metric colour.
 - Area labels can be enabled for an analytical overview and resize with the map.
 - Light and Dark use vector maps that keep roads, Lucidum outlines, and place labels
   legible over the analytical fill.
@@ -675,14 +677,15 @@ The control and information strips can be collapsed for the browser session with
 changing the map camera or requesting a new summary. The information strip reports
 the active calculation, plotted and missing rows, row count, and filter state.
 
-The compass below Zoom out rotates with the map. Drag it horizontally to rotate the
-map on desktop, or click it to return to north. Touch rotation remains available on
-supported devices.
+The compass below Zoom out rotates with the map. Drag around it to rotate the map on
+desktop, or click it to return to north. Touch rotation remains available on supported
+devices.
 
 A Map view favourite stores the level, base, palette, presentation controls, metric,
 filter, camera position, zoom, and orientation where possible. Older favourites
-without an orientation open pointing north. The control-strip collapsed state
-remains a session preference rather than part of the favourite.
+without an orientation open pointing north; removed Esri or OSM bases open as Blank.
+The control-strip collapsed state remains a session preference rather than part of
+the favourite.
 
 [Back to contents ↑](#contents)
 

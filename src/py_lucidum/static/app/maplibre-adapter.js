@@ -886,6 +886,8 @@ export function createMapLibreAdapter(maplibregl) {
       this.sourceId = objectId("lucidum-geojson-source");
       this.fillLayerId = objectId("lucidum-geojson-fill");
       this.lineLayerId = objectId("lucidum-geojson-line");
+      this.hoverFillLayerId = objectId("lucidum-geojson-hover-fill");
+      this.hoverLineLayerId = objectId("lucidum-geojson-hover-line");
       this.bounds = new Bounds();
       this.features = (geoJson?.features || []).map((feature, index) => {
         const id = String(index);
@@ -905,6 +907,7 @@ export function createMapLibreAdapter(maplibregl) {
       };
       this.tooltip = new PopupLayer({ closeButton: false, closeOnClick: false }, true);
       this._eventHandlers = [];
+      this.hoveredFeatureId = null;
     }
 
     eachLayer(callback) {
@@ -919,6 +922,12 @@ export function createMapLibreAdapter(maplibregl) {
       this.features.forEach((layer) => {
         layer.options = typeof style === "function" ? (style(layer.feature) || {}) : { ...(style || {}) };
         if (this.map?.raw.getSource(this.sourceId)) {
+          const hoverStyle = typeof this.options.hoverStyle === "function"
+            ? (this.options.hoverStyle(layer.feature, layer.options) || {})
+            : { ...(this.options.hoverStyle || {}) };
+          const hoverLineWidth = Number(hoverStyle.weight);
+          const hoverLineOpacity = Number(hoverStyle.opacity);
+          const hoverFillOpacity = Number(hoverStyle.fillOpacity);
           this.map.raw.setFeatureState(
             { source: this.sourceId, id: layer.featureId },
             {
@@ -927,6 +936,15 @@ export function createMapLibreAdapter(maplibregl) {
               lineColor: layer.options.color || "#000000",
               lineOpacity: Number(layer.options.opacity) || 0,
               lineWidth: Number(layer.options.weight) || 0,
+              ...(this.options.hoverStyle ? {
+                hoverFillColor: hoverStyle.fillColor || hoverStyle.color || layer.options.fillColor || "#000000",
+                hoverFillOpacity: Number.isFinite(hoverFillOpacity) ? hoverFillOpacity : 0.12,
+                hoverLineColor: hoverStyle.color || layer.options.color || "#000000",
+                hoverLineOpacity: Number.isFinite(hoverLineOpacity) ? hoverLineOpacity : 1,
+                hoverLineWidth: Number.isFinite(hoverLineWidth)
+                  ? hoverLineWidth
+                  : Math.max(2, (Number(layer.options.weight) || 0) + 1),
+              } : {}),
             },
           );
         }
@@ -945,6 +963,27 @@ export function createMapLibreAdapter(maplibregl) {
     featureForEvent(event) {
       const id = String(event?.features?.[0]?.id ?? event?.features?.[0]?.properties?.__lucidum_feature_id ?? "");
       return this.features.find((layer) => layer.featureId === id) || null;
+    }
+
+    setHoveredFeature(layer = null) {
+      if (!this.options.hoverStyle) return;
+      const nextFeatureId = layer?.featureId ?? null;
+      if (nextFeatureId === this.hoveredFeatureId) return;
+      const raw = this.map?.raw;
+      if (raw?.getSource(this.sourceId) && this.hoveredFeatureId !== null) {
+        raw.setFeatureState(
+          { source: this.sourceId, id: this.hoveredFeatureId },
+          { hovered: false },
+        );
+      }
+      this.hoveredFeatureId = nextFeatureId;
+      if (raw?.getSource(this.sourceId) && nextFeatureId !== null) {
+        raw.setFeatureState(
+          { source: this.sourceId, id: nextFeatureId },
+          { hovered: true },
+        );
+      }
+      this.map?._markRenderPending();
     }
 
     openFeaturePopup(layer, lngLat = null) {
@@ -976,14 +1015,21 @@ export function createMapLibreAdapter(maplibregl) {
       if (!raw.getLayer(this.fillLayerId)) return;
       const mouseMove = (event) => {
         const layer = this.featureForEvent(event);
-        if (!layer?._tooltipContent) return;
-        raw.getCanvas().style.cursor = "pointer";
+        this.setHoveredFeature(layer);
+        raw.getCanvas().style.cursor = layer?._tooltipContent || layer?._popupContent || this.options.hoverStyle
+          ? "pointer"
+          : "";
+        if (!layer?._tooltipContent) {
+          this.tooltip.remove();
+          return;
+        }
         this.tooltip
           .setLatLng({ lat: event.lngLat.lat, lng: event.lngLat.lng })
           .setContent(resolveContent(layer._tooltipContent, layer))
           .addTo(map);
       };
       const mouseLeave = () => {
+        this.setHoveredFeature(null);
         raw.getCanvas().style.cursor = "";
         this.tooltip.remove();
       };
@@ -1057,10 +1103,61 @@ export function createMapLibreAdapter(maplibregl) {
           ],
         },
       });
+      if (this.options.hoverStyle) {
+        raw.addLayer({
+          id: this.hoverFillLayerId,
+          type: "fill",
+          source: this.sourceId,
+          paint: {
+            "fill-antialias": false,
+            "fill-color": [
+              "coalesce",
+              ["feature-state", "hoverFillColor"],
+              "#000000",
+            ],
+            "fill-opacity": [
+              "case",
+              ["boolean", ["feature-state", "hovered"], false],
+              ["coalesce", ["feature-state", "hoverFillOpacity"], 0.12],
+              0,
+            ],
+          },
+        }, this.lineLayerId);
+        raw.addLayer({
+          id: this.hoverLineLayerId,
+          type: "line",
+          source: this.sourceId,
+          paint: {
+            "line-color": [
+              "coalesce",
+              ["feature-state", "hoverLineColor"],
+              "#000000",
+            ],
+            "line-opacity": [
+              "case",
+              ["boolean", ["feature-state", "hovered"], false],
+              ["coalesce", ["feature-state", "hoverLineOpacity"], 1],
+              0,
+            ],
+            "line-width": [
+              "coalesce",
+              ["feature-state", "hoverLineWidth"],
+              2,
+            ],
+          },
+        });
+      }
       this.bindStyleEvents(map);
       this.applyFeatureStates();
       map._markSourcePending(this.sourceId);
       return this;
+    }
+
+    beforeStyleReplace(map) {
+      this.setHoveredFeature(null);
+      this.tooltip.remove();
+      this._eventHandlers.forEach(([type, handler]) => map.raw.off(type, this.fillLayerId, handler));
+      this._eventHandlers = [];
     }
 
     onAdd(map) {
@@ -1071,6 +1168,7 @@ export function createMapLibreAdapter(maplibregl) {
     }
 
     onRemove(map) {
+      this.setHoveredFeature(null);
       this.tooltip.remove();
       this.features.forEach((layer) => {
         layer._popup?.remove();
@@ -1078,6 +1176,8 @@ export function createMapLibreAdapter(maplibregl) {
       });
       this._eventHandlers.forEach(([type, handler]) => map.raw.off(type, this.fillLayerId, handler));
       this._eventHandlers = [];
+      if (map.raw.getLayer(this.hoverLineLayerId)) map.raw.removeLayer(this.hoverLineLayerId);
+      if (map.raw.getLayer(this.hoverFillLayerId)) map.raw.removeLayer(this.hoverFillLayerId);
       if (map.raw.getLayer(this.lineLayerId)) map.raw.removeLayer(this.lineLayerId);
       if (map.raw.getLayer(this.fillLayerId)) map.raw.removeLayer(this.fillLayerId);
       if (map.raw.getSource(this.sourceId)) map.raw.removeSource(this.sourceId);

@@ -5362,7 +5362,7 @@ COPY (
                                     """
                                 )
                                 self.assertAlmostEqual(mobile_map_panel["height"], 50, delta=0.5)
-                                self.assertEqual(mobile_map_panel["baseOptions"], 6)
+                                self.assertEqual(mobile_map_panel["baseOptions"], 4)
                                 self.assertEqual(mobile_map_panel["levelOptions"], 3)
                                 self.assertEqual(mobile_map_panel["paletteOptions"], 3)
                                 self.assertTrue(mobile_map_panel["scrollable"], mobile_map_panel)
@@ -17349,7 +17349,9 @@ COPY (
                               return level === "unit"
                                 ? Boolean(raw.getLayer(analysis.layerId))
                                 : Boolean(raw.getLayer(analysis.fillLayerId)
-                                  && raw.getLayer(analysis.lineLayerId));
+                                  && raw.getLayer(analysis.lineLayerId)
+                                  && raw.getLayer(analysis.hoverFillLayerId)
+                                  && raw.getLayer(analysis.hoverLineLayerId));
                             }
                             """,
                             arg=level,
@@ -17375,6 +17377,12 @@ COPY (
                                 analysisOutline: level === "unit"
                                   ? null
                                   : layers.indexOf(analysis?.lineLayerId),
+                                analysisHoverFill: level === "unit"
+                                  ? null
+                                  : layers.indexOf(analysis?.hoverFillLayerId),
+                                analysisHover: level === "unit"
+                                  ? null
+                                  : layers.indexOf(analysis?.hoverLineLayerId),
                                 analysisFillAntialias: level === "unit"
                                   ? null
                                   : raw?.getPaintProperty(analysis?.fillLayerId, "fill-antialias"),
@@ -17402,9 +17410,11 @@ COPY (
                             self.assertGreater(layer_state["label"], layer_state["analysisFill"])
                         else:
                             self.assertGreater(layer_state["analysisFill"], layer_state["base"])
-                            self.assertGreater(layer_state["road"], layer_state["analysisFill"])
+                            self.assertGreater(layer_state["analysisHoverFill"], layer_state["analysisFill"])
+                            self.assertGreater(layer_state["road"], layer_state["analysisHoverFill"])
                             self.assertGreater(layer_state["analysisOutline"], layer_state["road"])
-                            self.assertGreater(layer_state["label"], layer_state["analysisOutline"])
+                            self.assertGreater(layer_state["analysisHover"], layer_state["analysisOutline"])
+                            self.assertGreater(layer_state["label"], layer_state["analysisHover"])
                         self.assertTrue(layer_state["sourcePresent"])
                         self.assertEqual(layer_state["foreground"], ["ofm-road", "ofm-label"])
                         self.assertEqual(layer_state["roadWidth"], ["*", 1, 0.7])
@@ -17422,6 +17432,190 @@ COPY (
                             self.assertFalse(layer_state["analysisFillAntialias"])
                             self.assertEqual(layer_state["eventHandlerCount"], 3)
 
+                    def assert_polygon_hover(*, verify_direction_reversal: bool = False) -> None:
+                        target = page.evaluate(
+                            """
+                            (verifyDirectionReversal) => {
+                              const container = document.querySelector("#ukMap");
+                              const map = container?._lucidumMap;
+                              const raw = container?._lucidumMapLibre;
+                              const analysis = Object.values(map?._layers || {})
+                                .find((layer) => layer?.hoverLineLayerId);
+                              const bounds = container?.getBoundingClientRect();
+                              const canvas = raw?.getCanvas?.();
+                              if (!analysis || !bounds || !canvas) return null;
+                              let hit = null;
+                              let travelHit = null;
+                              let leave = null;
+                              for (
+                                let y = 12;
+                                y < bounds.height - 12 && (!(verifyDirectionReversal ? travelHit : hit) || !leave);
+                                y += 16
+                              ) {
+                                for (
+                                  let x = 12;
+                                  x < bounds.width - 12 && (!(verifyDirectionReversal ? travelHit : hit) || !leave);
+                                  x += 16
+                                ) {
+                                  if (document.elementFromPoint(bounds.left + x, bounds.top + y) !== canvas) continue;
+                                  const features = raw.queryRenderedFeatures([x, y], {
+                                    layers: [analysis.fillLayerId],
+                                  });
+                                  if (!hit && features.length) {
+                                    hit = {
+                                      x: bounds.left + x,
+                                      y: bounds.top + y,
+                                      featureId: String(features[0].id),
+                                    };
+                                  }
+                                  if (
+                                    verifyDirectionReversal
+                                    && !travelHit
+                                    && features.length
+                                    && y + 32 < bounds.height - 12
+                                  ) {
+                                    const featureId = String(features[0].id);
+                                    let sameFeature = true;
+                                    for (let offset = 4; offset <= 32; offset += 4) {
+                                      if (
+                                        document.elementFromPoint(
+                                          bounds.left + x,
+                                          bounds.top + y + offset,
+                                        ) !== canvas
+                                      ) {
+                                        sameFeature = false;
+                                        break;
+                                      }
+                                      const corridorFeatures = raw.queryRenderedFeatures([x, y + offset], {
+                                        layers: [analysis.fillLayerId],
+                                      });
+                                      if (!corridorFeatures.length || String(corridorFeatures[0].id) !== featureId) {
+                                        sameFeature = false;
+                                        break;
+                                      }
+                                    }
+                                    if (sameFeature) {
+                                      travelHit = {
+                                        x: bounds.left + x,
+                                        y: bounds.top + y,
+                                        reverseY: bounds.top + y + 32,
+                                        featureId,
+                                      };
+                                    }
+                                  }
+                                  if (!leave && !features.length) {
+                                    leave = { x: bounds.left + x, y: bounds.top + y };
+                                  }
+                                }
+                              }
+                              const selectedHit = verifyDirectionReversal ? travelHit : hit;
+                              return selectedHit && leave ? {
+                                ...selectedHit,
+                                leaveX: leave.x,
+                                leaveY: leave.y,
+                                sourceId: analysis.sourceId,
+                                hoverFillLayerId: analysis.hoverFillLayerId,
+                                hoverLineLayerId: analysis.hoverLineLayerId,
+                              } : null;
+                            }
+                            """,
+                            verify_direction_reversal,
+                        )
+                        self.assertIsNotNone(target)
+                        page.mouse.move(target["x"], target["y"])
+                        page.wait_for_function(
+                            """
+                            (target) => document.querySelector("#ukMap")?._lucidumMapLibre
+                              ?.getFeatureState({ source: target.sourceId, id: target.featureId })
+                              ?.hovered === true
+                            """,
+                            arg=target,
+                            timeout=10_000,
+                        )
+                        hover_state = page.evaluate(
+                            """
+                            (target) => {
+                              const raw = document.querySelector("#ukMap")?._lucidumMapLibre;
+                              const state = raw?.getFeatureState({
+                                source: target.sourceId,
+                                id: target.featureId,
+                              }) || {};
+                              return {
+                                hovered: state.hovered,
+                                fillColor: state.hoverFillColor,
+                                fillOpacity: state.hoverFillOpacity,
+                                lineColor: state.hoverLineColor,
+                                lineOpacity: state.hoverLineOpacity,
+                                lineWidth: state.hoverLineWidth,
+                                fillLayerPresent: Boolean(raw?.getLayer(target.hoverFillLayerId)),
+                                lineLayerPresent: Boolean(raw?.getLayer(target.hoverLineLayerId)),
+                                cursor: raw?.getCanvas?.().style.cursor,
+                              };
+                            }
+                            """,
+                            target,
+                        )
+                        self.assertTrue(hover_state["hovered"])
+                        self.assertTrue(hover_state["fillColor"])
+                        self.assertAlmostEqual(hover_state["fillOpacity"], 0.12)
+                        self.assertTrue(hover_state["lineColor"])
+                        self.assertEqual(hover_state["lineOpacity"], 1)
+                        self.assertGreaterEqual(hover_state["lineWidth"], 2)
+                        self.assertTrue(hover_state["fillLayerPresent"])
+                        self.assertTrue(hover_state["lineLayerPresent"])
+                        self.assertEqual(hover_state["cursor"], "pointer")
+                        if verify_direction_reversal:
+                            pointer_behavior = page.evaluate(
+                                """
+                                () => {
+                                  const container = document.querySelector("#ukMap");
+                                  const map = container?._lucidumMap;
+                                  const analysis = Object.values(map?._layers || {})
+                                    .find((layer) => layer?.hoverLineLayerId);
+                                  const tooltip = container?.querySelector(
+                                    ".maplibre-tooltip .maplibregl-popup-content",
+                                  );
+                                  if (!analysis || !tooltip) return null;
+                                  const original = analysis.setHoveredFeature;
+                                  analysis.__hoverTransitions = [];
+                                  analysis.setHoveredFeature = function (layer) {
+                                    const before = this.hoveredFeatureId;
+                                    const result = original.call(this, layer);
+                                    if (this.hoveredFeatureId !== before) {
+                                      this.__hoverTransitions.push(this.hoveredFeatureId);
+                                    }
+                                    return result;
+                                  };
+                                  return getComputedStyle(tooltip).pointerEvents;
+                                }
+                                """
+                            )
+                            self.assertEqual(pointer_behavior, "none")
+                            page.mouse.move(target["x"], target["reverseY"], steps=8)
+                            page.mouse.move(target["x"], target["y"], steps=8)
+                            page.wait_for_timeout(100)
+                            hover_transitions = page.evaluate(
+                                """
+                                () => {
+                                  const map = document.querySelector("#ukMap")?._lucidumMap;
+                                  const analysis = Object.values(map?._layers || {})
+                                    .find((layer) => layer?.hoverLineLayerId);
+                                  return analysis?.__hoverTransitions || null;
+                                }
+                                """
+                            )
+                            self.assertEqual(hover_transitions, [])
+                        page.mouse.move(target["leaveX"], target["leaveY"])
+                        page.wait_for_function(
+                            """
+                            (target) => document.querySelector("#ukMap")?._lucidumMapLibre
+                              ?.getFeatureState({ source: target.sourceId, id: target.featureId })
+                              ?.hovered === false
+                            """,
+                            arg=target,
+                            timeout=10_000,
+                        )
+
                     try:
                         page.goto(base_url, wait_until="domcontentloaded")
                         self.wait_for_app_ready(page)
@@ -17432,7 +17626,7 @@ COPY (
                         page.locator("#mapToolbar:not(.hidden)").wait_for(timeout=10_000)
                         self.assertEqual(
                             page.locator('#mapBaseLayerTiles input[name="baseMap"]').count(),
-                            6,
+                            4,
                         )
 
                         if page.locator("body").get_attribute("class") and "dark" in (page.locator("body").get_attribute("class") or "").split():
@@ -17477,6 +17671,8 @@ COPY (
                             request_count = len(summary_requests)
                             select_base("openFreeMapPositron")
                             assert_vector_layer_order(level)
+                            if level != "unit":
+                                assert_polygon_hover(verify_direction_reversal=level == "area")
                             camera_after = page.evaluate(
                                 """
                                 () => {
@@ -18485,7 +18681,7 @@ COPY (
                                     "scope": "map_view",
                                     "map": {
                                         "level": "sector",
-                                        "baseMap": "blank",
+                                        "baseMap": "osm",
                                         "palette": "viridis",
                                         "lineWeight": 1,
                                         "dotSize": 1,
@@ -18708,6 +18904,10 @@ COPY (
                     self.assertEqual(page.locator("#mapDotSizeMin").get_attribute("aria-pressed"), "false")
                     self.assertEqual(page.locator("#mapAreaLabelsOff").get_attribute("aria-pressed"), "false")
                     self.assertEqual(page.locator("#mapAreaLabelsOn").get_attribute("aria-pressed"), "true")
+                    self.assertEqual(
+                        page.locator('#mapBaseLayerTiles input[name="baseMap"]:checked').get_attribute("value"),
+                        "blank",
+                    )
                     self.assertAlmostEqual(
                         page.evaluate(
                             "() => document.querySelector('#ukMap')?._lucidumMap?.getBearing()"
@@ -18992,15 +19192,15 @@ COPY (
                             "openFreeMapPositron",
                         )
 
-                        page.locator('#mapBaseLayerTiles input[name="baseMap"][value="osm"]').check()
-                        page.wait_for_function("""() => document.querySelector('#mapBaseLayerTiles input[name="baseMap"][value="osm"]')?.checked""", timeout=10_000)
+                        page.locator('#mapBaseLayerTiles input[name="baseMap"][value="blank"]').check()
+                        page.wait_for_function("""() => document.querySelector('#mapBaseLayerTiles input[name="baseMap"][value="blank"]')?.checked""", timeout=10_000)
                         self.click_sidebar_favourite_action(page, "#sidebarFavouriteAddBtn")
                         page.locator("#sidebarFavouritePopover:not([hidden])").wait_for(timeout=10_000)
-                        page.locator("#sidebarFavouriteNameInput").fill("Sector map OSM")
+                        page.locator("#sidebarFavouriteNameInput").fill("Sector map Blank")
                         page.locator('[data-favourite-action="save-add"]').click()
                         page.wait_for_function(
                             """() => [...document.querySelectorAll(".saved-favourite-option")]
-                              .some((button) => button.querySelector(".saved-filter-name")?.textContent.trim() === "Sector map OSM"
+                              .some((button) => button.querySelector(".saved-filter-name")?.textContent.trim() === "Sector map Blank"
                                 && button.classList.contains("active")) """,
                             timeout=10_000,
                         )
@@ -28911,7 +29111,7 @@ COPY (
                 self.assertAlmostEqual(map_panel_layout["height"], 50, delta=0.5)
                 self.assertEqual(map_panel_layout["rowMeta"], "3 / 4 rows")
                 self.assertNotIn(map_panel_layout["rowMeta"], map_panel_layout["groupMeta"])
-                self.assertEqual(map_panel_layout["baseOptions"], 6)
+                self.assertEqual(map_panel_layout["baseOptions"], 4)
                 self.assertEqual(map_panel_layout["levelOptions"], 3)
                 self.assertEqual(map_panel_layout["paletteOptions"], 3)
                 self.assertTrue(map_panel_layout["sliderEndpointsVisible"], map_panel_layout)

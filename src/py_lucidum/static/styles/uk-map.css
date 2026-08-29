@@ -1023,6 +1023,11 @@
         padding: 6px 10px;
       }
 
+      .uk-map .maplibre-tooltip,
+      .uk-map .maplibre-tooltip * {
+        pointer-events: none;
+      }
+
       .uk-map .maplibre-tooltip .maplibregl-popup-tip {
         border-width: 7px;
       }
