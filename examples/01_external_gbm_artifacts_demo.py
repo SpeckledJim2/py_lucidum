@@ -18,7 +18,10 @@ import pyarrow as pa
 
 from external_model_helpers import (
     config_path_from_command_line,
+    dataset_column_kinds,
+    effective_gbm_parameters,
     evaluate_validation_metric,
+    gbm_parameter_warnings,
     load_config,
     prepare_feature_data,
     read_table,
@@ -65,6 +68,7 @@ dataset_path = resolve_path(config, dataset_settings["path"])
 feature_spec_path = resolve_path(config, feature_settings["spec_path"])
 
 data = read_table(dataset_path)
+column_kinds = dataset_column_kinds(dataset_path)
 
 response_name = str(dataset_settings["response_numerator"])
 denominator_name = str(dataset_settings.get("denominator") or "").strip()
@@ -95,6 +99,7 @@ feature_data, feature_names, categorical_features = prepare_feature_data(
     feature_spec_path,
     str(feature_settings["scenario_column"]),
     eligible_rows=feature_eligibility,
+    column_kinds=column_kinds,
 )
 if {response_name, denominator_name, sample_name}.intersection(feature_names):
     raise ValueError("Response, denominator, and sample columns cannot also be model features")
@@ -118,7 +123,7 @@ for sample_label, sample_rows in (
     if not sample_rows.any():
         raise ValueError(f"The {sample_label} sample has no eligible rows")
 
-parameters = dict(training_settings["parameters"])
+parameters = effective_gbm_parameters(training_settings)
 objective = str(parameters["objective"]).strip().lower()
 use_log_offset = denominator is not None and objective in LOG_LINK_OBJECTIVES
 initial_score = (
@@ -126,6 +131,20 @@ initial_score = (
     if use_log_offset
     else None
 )
+build_warnings = gbm_parameter_warnings(parameters)
+if denominator is None:
+    build_warnings.append(
+        "No denominator column is selected; GBM offset values will be treated as 1"
+    )
+else:
+    invalid_denominator_rows = int(
+        (~denominator.notna() | ~np.isfinite(denominator) | denominator.le(0)).sum()
+    )
+    if invalid_denominator_rows:
+        build_warnings.append(
+            f"{invalid_denominator_rows:,} rows have non-positive or missing "
+            "denominator and will be excluded"
+        )
 
 
 # %% 3. Train
@@ -216,11 +235,13 @@ result = save_gbm_model_results(
     config=config,
     data=data,
     feature_data=feature_data,
+    feature_kinds=column_kinds,
+    parameters=parameters,
     model=model,
     evaluation=evaluation,
     predictions=predictions,
     started=started,
-    warnings=[validation_warning] if validation_warning else [],
+    warnings=[*build_warnings, *([validation_warning] if validation_warning else [])],
 )
 
 print(f"GBM model id: {result['model_id']}")

@@ -159,6 +159,7 @@ function parameterNumber(model, name) {
 }
 
 function integer(value) {
+  if (value === null || value === undefined || String(value).trim() === "") return "--";
   const number = Number(value);
   return Number.isFinite(number) ? Math.round(number).toLocaleString() : "--";
 }

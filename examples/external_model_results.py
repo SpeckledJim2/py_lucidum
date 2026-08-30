@@ -253,6 +253,8 @@ def save_gbm_model_results(
     config: dict[str, Any],
     data: pd.DataFrame,
     feature_data: pd.DataFrame,
+    feature_kinds: dict[str, str],
+    parameters: dict[str, Any],
     model: Any,
     evaluation: dict[str, dict[str, list[float | None]]],
     predictions: pd.Series,
@@ -266,7 +268,7 @@ def save_gbm_model_results(
     model_config = config["model"]
     training = config["training"]
     output = config["output"]
-    parameters = jsonable(dict(training["parameters"]))
+    parameters = jsonable(dict(parameters))
     model_id = validate_model_id(model_config["id"])
 
     feature_names = [str(name) for name in model.feature_name()]
@@ -278,13 +280,7 @@ def save_gbm_model_results(
     feature_rows = [
         {
             "name": name,
-            "kind": (
-                "categorical"
-                if name in categorical_labels
-                else "integer"
-                if pd.api.types.is_integer_dtype(feature_data[name])
-                else "numeric"
-            ),
+            "kind": str(feature_kinds.get(name) or "categorical"),
         }
         for name in feature_names
     ]
@@ -388,7 +384,7 @@ def save_gbm_model_results(
         "created_at": utc_now(),
         "training_mode": "normal",
         "response_column": str(dataset["response_numerator"]),
-        "offset_column": denominator_name,
+        "offset_column": denominator_name or None,
         "best_iteration": best_iteration,
         "training_rows": int(training_mask.sum()),
         "test_rows": int(test_mask.sum()),

@@ -235,6 +235,13 @@ Existing external GLM folders are not modified or backfilled automatically. Reru
 the `01` workflow and allow it to replace and copy the named model folder when an
 older build lacks the complete Model navigator metadata.
 
+External GBMs save the same complete JSON contract as an equivalent in-app build.
+The workspace-copy helper validates both the authoritative folder and its staged
+copy before replacing a model or changing `active_model.json`. Existing external
+GBM folders are not rewritten or backfilled automatically. After upgrading and
+syncing the maintained scripts, rerun the GBM `01` workflow to rebuild an older
+folder whose JSON predates this contract.
+
 ### GLM settings
 
 The supplied `config_glm.yaml` demonstrates these fields:
@@ -356,6 +363,38 @@ source-row identity.
 
 SHAP values are calculated by the `01` GBM script and saved with the model.
 Later reports read those values; they do not calculate SHAP again.
+
+### GBM JSON contract
+
+The three GBM JSON artifacts are fitted-model provenance, not optional report
+metadata:
+
+- `features.json` is the exact ordered fitted-feature list. Its order must match
+  `manifest.json`'s `feature_scenario.features` snapshot.
+- `parameters.json` contains the complete effective parameter dictionary used for
+  fitting, including Lucidum defaults omitted from the YAML. It must include
+  `objective`, `metric`, `tweedie_variance_power`, `data_sample_strategy`,
+  `num_iterations`, `learning_rate`, `num_leaves`, `max_depth`,
+  `min_data_in_leaf`, `early_stopping_rounds`, `feature_fraction`,
+  `bagging_fraction`, `bagging_freq`, `lambda_l1`, `lambda_l2`,
+  `min_gain_to_split`, `max_bin`, `num_threads`, `verbosity`, and `seed`.
+  Additional valid LightGBM parameters remain permitted.
+- `manifest.json` contains model identity and label, creation time, response and
+  nullable `offset_column`, training mode, best iteration, Training/Test/Validation
+  and scored counts, sample source, SHAP row count, split Ginis, warnings, feature
+  scenario, interaction-group-model metadata, init-score metadata, and timings.
+  No denominator is represented by JSON `null`, not an empty string. Equivalent
+  inputs produce identical stable fields and warnings. `timings.training_seconds`
+  is required, finite, and non-negative but naturally differs by run; the more
+  detailed in-app phase timings are optional for an external build because the two
+  workflows have different execution boundaries.
+
+`shap_values.parquet` and `shap_summary.parquet` are mandatory when
+`manifest.json` reports a positive `shap_rows`; they may be absent when it reports
+zero. The remaining model, prediction, evaluation, tree, and feature-config
+artifacts are always required. The installer activates a GBM only after the full
+folder passes this validation, so a failed replacement leaves the previous folder
+and active pointer unchanged.
 
 ## Where the saved models go
 

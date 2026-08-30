@@ -1753,11 +1753,13 @@ def shap_dataframes(
             [
                 {
                     "feature": feature_name,
-                    "mean_abs_shap": float(shap_frame.get_column(feature_name).abs().mean()),
-                    "mean_shap": float(shap_frame.get_column(feature_name).mean()),
-                    "row_count": int(shap_frame.get_column(feature_name).count()),
+                    "mean_abs_shap": float(
+                        np.mean(np.abs(feature_contribs[:, feature_index]))
+                    ),
+                    "mean_shap": float(np.mean(feature_contribs[:, feature_index])),
+                    "row_count": int(feature_contribs.shape[0]),
                 }
-                for feature_name in feature_names
+                for feature_index, feature_name in enumerate(feature_names)
             ],
             schema=summary_schema,
         )

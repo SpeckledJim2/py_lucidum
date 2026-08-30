@@ -2202,6 +2202,8 @@ const gbmNavigator = createGbmModelNavigator({{
 }});
 const gbmTarget = target();
 gbmNavigator.renderFallback(gbmTarget, [{{ model_id: "gbm", label: "GBM", gini_tr: 0.75, gini_te: null, gini_vl: -0.125 }}]);
+if (gbmNavigator.integer(null) !== "--" || gbmNavigator.integer(undefined) !== "--" || gbmNavigator.integer("") !== "--") throw new Error("GBM missing integer fallback failed");
+if (gbmNavigator.integer(-1) !== "-1") throw new Error("GBM complete depth formatting failed");
 if (!gbmTarget.innerHTML.includes("<th>Name</th>")) throw new Error("GBM fallback Name heading missing");
 if (gbmTarget.innerHTML.includes("<th>Model</th>")) throw new Error("GBM fallback kept Model heading");
 if (!gbmTarget.innerHTML.includes(">gini_tr</th>")) throw new Error("GBM fallback gini_tr heading missing");

@@ -12,12 +12,36 @@ import re
 from pathlib import Path
 from typing import Any
 
+import duckdb
 import numpy as np
 import pandas as pd
 import yaml
 
 
 MODEL_ID_RE = re.compile(r"[A-Za-z0-9_.-]+")
+
+# Keep this import-independent: the external workflow must not need py_lucidum
+# in order to reproduce the effective parameters used by an in-app build.
+GBM_PARAMETER_DEFAULTS = {
+    "objective": "poisson",
+    "metric": "poisson",
+    "tweedie_variance_power": 1.5,
+    "data_sample_strategy": "bagging",
+    "learning_rate": 0.3,
+    "num_leaves": 5,
+    "max_depth": -1,
+    "min_data_in_leaf": 50,
+    "feature_fraction": 1.0,
+    "bagging_fraction": 1.0,
+    "bagging_freq": 0,
+    "lambda_l1": 0.0,
+    "lambda_l2": 0.0,
+    "min_gain_to_split": 0.0,
+    "max_bin": 255,
+    "num_threads": 0,
+    "verbosity": -1,
+    "seed": 42,
+}
 
 CONFIG_KEYS = {
     "glm": {
@@ -175,6 +199,83 @@ def read_table(path: Path) -> pd.DataFrame:
     return data.reset_index(drop=True)
 
 
+def dataset_column_kinds(path: Path) -> dict[str, str]:
+    """Return Lucidum-compatible feature kinds from DuckDB's source schema."""
+
+    if not path.is_file() or path.suffix.lower() not in {".csv", ".parquet"}:
+        raise ValueError(f"Choose one CSV or Parquet dataset: {path}")
+    literal = "'" + str(path).replace("'", "''") + "'"
+    relation = (
+        f"read_parquet({literal})"
+        if path.suffix.lower() == ".parquet"
+        else f"read_csv_auto({literal}, header=true, ignore_errors=true)"
+    )
+    con = duckdb.connect(database=":memory:")
+    try:
+        describe = con.execute(f"DESCRIBE SELECT * FROM {relation}").fetchall()
+    finally:
+        con.close()
+    return {str(row[0]): _infer_source_kind(str(row[1])) for row in describe}
+
+
+def effective_gbm_parameters(training: dict[str, Any]) -> dict[str, Any]:
+    """Mirror Lucidum's complete effective LightGBM parameter dictionary."""
+
+    parameters = dict(GBM_PARAMETER_DEFAULTS)
+    raw = training.get("parameters")
+    if isinstance(raw, dict):
+        for key, value in raw.items():
+            name = str(key).strip()
+            if name and name not in {"init_score", "num_iterations", "early_stopping_rounds"}:
+                parameters[name] = _coerce_gbm_parameter(value)
+    parameters["objective"] = str(parameters.get("objective") or "poisson").strip().lower()
+    parameters["metric"] = str(parameters.get("metric") or "poisson").strip().lower()
+    return parameters
+
+
+def gbm_parameter_warnings(parameters: dict[str, Any]) -> list[str]:
+    """Return the stable parameter warnings emitted by Lucidum for this workflow."""
+
+    warnings: list[str] = []
+    strategy = str(parameters.get("data_sample_strategy") or "bagging").strip().lower()
+    if strategy == "bagging":
+        bagging_freq = int(parameters.get("bagging_freq", 0) or 0)
+        bagging_fraction = float(parameters.get("bagging_fraction", 1.0) or 1.0)
+        if bagging_freq <= 0 or bagging_fraction >= 1.0:
+            warnings.append(
+                "data_sample_strategy=bagging is only effective when "
+                "bagging_freq > 0 and bagging_fraction < 1"
+            )
+    return warnings
+
+
+def _infer_source_kind(duckdb_type: str) -> str:
+    value = duckdb_type.upper()
+    if "INT" in value:
+        return "integer"
+    if any(part in value for part in ("DOUBLE", "FLOAT", "REAL", "DECIMAL")):
+        return "numeric"
+    if "TIMESTAMP" in value:
+        return "datetime"
+    if "DATE" in value or "TIME" in value:
+        return "date"
+    return "categorical"
+
+
+def _coerce_gbm_parameter(value: Any) -> Any:
+    if isinstance(value, bool) or value is None or isinstance(value, (int, float)):
+        return value
+    text = str(value).strip()
+    if not text:
+        return ""
+    if text.lower() in {"true", "false"}:
+        return text.lower() == "true"
+    try:
+        return int(text) if "." not in text and "e" not in text.lower() else float(text)
+    except ValueError:
+        return text
+
+
 def strip_formula_comments(formula: str) -> str:
     """Remove ``#`` comments while retaining hashes inside quoted strings."""
 
@@ -253,6 +354,7 @@ def prepare_feature_data(
     scenario: str,
     *,
     eligible_rows: Any | None = None,
+    column_kinds: dict[str, str] | None = None,
 ) -> tuple[pd.DataFrame, list[str], list[str]]:
     """Select a scenario and encode categories found on denominator-eligible rows."""
 
@@ -280,12 +382,19 @@ def prepare_feature_data(
     )
     categorical_features = []
     for name in feature_names:
-        if pd.api.types.is_numeric_dtype(feature_data[name]):
+        kind = (column_kinds or {}).get(name)
+        if kind in {"date", "datetime"}:
+            raise ValueError(f"{name} cannot be used as a LightGBM feature")
+        if kind in {"integer", "numeric"} or (
+            kind is None and pd.api.types.is_numeric_dtype(feature_data[name])
+        ):
             feature_data[name] = pd.to_numeric(
                 feature_data[name], errors="coerce"
             ).astype("float64")
         else:
             values = feature_data[name].astype("string")
+            if pd.api.types.is_bool_dtype(feature_data[name]):
+                values = values.str.lower()
             categories = sorted(str(value) for value in values.loc[category_rows].dropna().unique())
             feature_data[name] = pd.Categorical(
                 values.where(values.isin(categories)),

@@ -25,6 +25,8 @@ from py_lucidum.core import Dataset, sql_literal
 from py_lucidum.core.features import load_features
 from py_lucidum.tools.gbm.store import GbmModelStore
 from py_lucidum.tools.gbm.tabulation import build_gbm_tabulations
+from py_lucidum.tools.gbm.training import train_model as train_gbm_model
+from py_lucidum.tools.gbm.validation import normalise_parameters
 from py_lucidum.tools.glm.store import GlmModelStore
 from py_lucidum.tools.glm.tabulation import build_tabulations
 from py_lucidum.tools.glm import tabulation as glm_tabulation_module
@@ -343,6 +345,31 @@ def run_builder(script: Path, config: Path) -> subprocess.CompletedProcess[str]:
         text=True,
         timeout=120,
     )
+
+
+def assert_parquet_tables_identical(
+    testcase: unittest.TestCase,
+    left: Path,
+    right: Path,
+) -> None:
+    con = duckdb.connect(database=":memory:")
+    try:
+        left_schema = con.execute(
+            f"DESCRIBE SELECT * FROM read_parquet({sql_literal(str(left))})"
+        ).fetchall()
+        right_schema = con.execute(
+            f"DESCRIBE SELECT * FROM read_parquet({sql_literal(str(right))})"
+        ).fetchall()
+        testcase.assertEqual(left_schema, right_schema, f"schema differs for {left.name}")
+        left_rows = con.execute(
+            f"SELECT * FROM read_parquet({sql_literal(str(left))})"
+        ).fetchall()
+        right_rows = con.execute(
+            f"SELECT * FROM read_parquet({sql_literal(str(right))})"
+        ).fetchall()
+        testcase.assertEqual(left_rows, right_rows, f"rows differ for {left.name}")
+    finally:
+        con.close()
 
 
 def load_report_helpers() -> Any:
@@ -688,6 +715,51 @@ class ExternalModelExampleTests(unittest.TestCase):
             self.assertEqual(list(features.columns), names)
             self.assertEqual(categorical, [])
 
+    def test_external_gbm_parameter_defaults_match_lucidum(self) -> None:
+        helpers = load_model_helpers()
+        external = helpers.effective_gbm_parameters({"parameters": {}})
+        internal = normalise_parameters({})
+        internal.pop("init_score")
+        internal.pop("num_iterations")
+        internal.pop("early_stopping_rounds")
+
+        self.assertEqual(external, internal)
+        self.assertEqual(external["max_depth"], -1)
+        self.assertEqual(
+            helpers.gbm_parameter_warnings(external),
+            [
+                "data_sample_strategy=bagging is only effective when "
+                "bagging_freq > 0 and bagging_fraction < 1"
+            ],
+        )
+
+    def test_external_gbm_feature_kinds_come_from_duckdb_source_schema(self) -> None:
+        helpers = load_model_helpers()
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "kinds.parquet"
+            con = duckdb.connect(database=":memory:")
+            try:
+                con.execute(
+                    f"""
+COPY (
+  SELECT 1::INTEGER AS integer_feature,
+         1.5::DOUBLE AS numeric_feature,
+         'A'::VARCHAR AS category_feature
+) TO {sql_literal(str(path))} (FORMAT PARQUET)
+"""
+                )
+            finally:
+                con.close()
+
+            self.assertEqual(
+                helpers.dataset_column_kinds(path),
+                {
+                    "integer_feature": "integer",
+                    "numeric_feature": "numeric",
+                    "category_feature": "categorical",
+                },
+            )
+
     def test_external_builders_do_not_import_py_lucidum(self) -> None:
         for script in (
             GLM_SCRIPT,
@@ -891,6 +963,118 @@ class ExternalModelExampleTests(unittest.TestCase):
                             dataset_path=dataset_path,
                             model_folder=source,
                             model_type="glm",
+                            model_id=model_id,
+                            replace_existing=True,
+                        )
+
+                    self.assertEqual(
+                        (target / "sentinel.txt").read_text(encoding="utf-8"),
+                        "preserved",
+                    )
+                    self.assertEqual(
+                        json.loads(active_path.read_text(encoding="utf-8")),
+                        {"model_id": "existing-model"},
+                    )
+
+    def test_gbm_workspace_copy_rejects_incomplete_json_contract(self) -> None:
+        installer = load_lucidum_installer()
+        helpers = load_model_helpers()
+
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            dataset_path = root / "data.csv"
+            dataset_path.write_text("Y,X\n1,1\n2,2\n", encoding="utf-8")
+            metadata = installer.workspace_metadata(dataset_path)
+            parent = (
+                dataset_path.parent
+                / ".lucidum"
+                / "datasets"
+                / metadata["slug"]
+                / metadata["signature"]
+                / "models"
+                / "gbm"
+            )
+
+            cases = (
+                ("missing max depth", "max_depth"),
+                ("missing manifest Gini", "gini_vl"),
+                ("missing training timing", r"timings\.training_seconds"),
+                ("missing feature list", "features.json"),
+                ("missing conditional SHAP", "shap_summary.parquet"),
+            )
+            for case, expected_error in cases:
+                with self.subTest(case=case):
+                    model_id = re.sub(r"[^a-z]+", "-", case).strip("-")
+                    source = root / "results" / model_id
+                    source.mkdir(parents=True)
+                    manifest = {
+                        "model_id": model_id,
+                        "label": case,
+                        "created_at": "2026-08-30T00:00:00Z",
+                        "training_mode": "normal",
+                        "response_column": "Y",
+                        "offset_column": None,
+                        "best_iteration": 2,
+                        "training_rows": 2,
+                        "test_rows": 0,
+                        "validation_rows": 0,
+                        "scored_rows": 2,
+                        "sample_column": None,
+                        "sample_source": "none",
+                        "shap_rows": 2,
+                        "gini_tr": None,
+                        "gini_te": None,
+                        "gini_vl": None,
+                        "timings": {"training_seconds": 0.1},
+                        "warnings": [],
+                        "feature_scenario": {"name": "demo", "features": ["X"]},
+                        "feature_interaction_group_models": {
+                            "enabled": False,
+                            "error_metric": "max_absolute_error",
+                            "groups": [],
+                        },
+                        "init_score": {"value": "none", "kind": "none", "transform": None},
+                    }
+                    parameters = helpers.effective_gbm_parameters({"parameters": {}})
+                    parameters.update({"num_iterations": 2, "early_stopping_rounds": 0})
+                    for artifact in (
+                        installer.REQUIRED_GBM_ARTIFACTS
+                        | installer.REQUIRED_GBM_SHAP_ARTIFACTS
+                    ):
+                        (source / artifact).write_bytes(b"artifact")
+                    installer.write_json(source / "manifest.json", manifest)
+                    installer.write_json(source / "parameters.json", parameters)
+                    installer.write_json(source / "features.json", ["X"])
+                    installer.validate_gbm_model_folder(source, model_id)
+
+                    if case == "missing max depth":
+                        parameters.pop("max_depth")
+                        installer.write_json(source / "parameters.json", parameters)
+                    elif case == "missing manifest Gini":
+                        manifest.pop("gini_vl")
+                        installer.write_json(source / "manifest.json", manifest)
+                    elif case == "missing training timing":
+                        manifest["timings"].pop("training_seconds")
+                        installer.write_json(source / "manifest.json", manifest)
+                    elif case == "missing feature list":
+                        installer.write_json(source / "features.json", [])
+                    else:
+                        (source / "shap_summary.parquet").unlink()
+
+                    target = parent / model_id
+                    target.mkdir(parents=True)
+                    (target / "sentinel.txt").write_text("preserved", encoding="utf-8")
+                    active_path = parent / "active_model.json"
+                    installer.write_json(active_path, {"model_id": "existing-model"})
+
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        rf"GBM model folder is incomplete.*{expected_error}",
+                    ):
+                        installer.install_model_in_lucidum(
+                            dataset_path=dataset_path,
+                            model_folder=source,
+                            model_type="gbm",
                             model_id=model_id,
                             replace_existing=True,
                         )
@@ -1510,6 +1694,201 @@ FROM read_parquet({sql_literal(str(glm_dir / 'predictions.parquet'))})
                 [row["term"] for row in summary["coefficients"]["rows"]],
                 ["(Intercept)"],
             )
+
+    @unittest.skipUnless(HAS_EXAMPLE_DEPENDENCIES, "external-model example dependencies are not installed")
+    def test_external_gbm_without_denominator_writes_null_manifest_offset(self) -> None:
+        import yaml
+
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            dataset_path = root / "motor_fixture.parquet"
+            write_reduced_dataset(
+                ROOT / "datasets" / "motor_premiums.parquet",
+                dataset_path,
+            )
+            _, gbm_config_path, _ = write_example_configs(
+                root,
+                dataset_path,
+                install_in_lucidum=False,
+            )
+            config = yaml.safe_load(gbm_config_path.read_text(encoding="utf-8"))
+            config["dataset"]["denominator"] = None
+            config["training"]["num_boost_round"] = 4
+            config["training"]["early_stopping_rounds"] = 2
+            config["training"]["shap_rows"] = 0
+            gbm_config_path.write_text(
+                yaml.safe_dump(config, sort_keys=False),
+                encoding="utf-8",
+            )
+
+            run_builder(GBM_SCRIPT, gbm_config_path)
+            model_dir = root / "model_results" / "gbm" / GBM_MODEL_ID
+            manifest = json.loads(
+                (model_dir / "manifest.json").read_text(encoding="utf-8")
+            )
+            self.assertIsNone(manifest["offset_column"])
+            self.assertIn(
+                "No denominator column is selected; GBM offset values will be treated as 1",
+                manifest["warnings"],
+            )
+            self.assertEqual(manifest["shap_rows"], 0)
+            self.assertFalse((model_dir / "shap_values.parquet").exists())
+            self.assertFalse((model_dir / "shap_summary.parquet").exists())
+            load_lucidum_installer().validate_gbm_model_folder(model_dir, GBM_MODEL_ID)
+
+    @unittest.skipUnless(HAS_EXAMPLE_DEPENDENCIES, "external-model example dependencies are not installed")
+    def test_external_gbm_json_and_deterministic_results_match_in_app_build(self) -> None:
+        import yaml
+
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            dataset_path = root / "motor_fixture.parquet"
+            row_count = write_reduced_dataset(
+                ROOT / "datasets" / "motor_premiums.parquet",
+                dataset_path,
+            )
+            self.assertEqual(row_count, 1050)
+            _, gbm_config_path, _ = write_example_configs(
+                root,
+                dataset_path,
+                install_in_lucidum=False,
+            )
+            config = yaml.safe_load(gbm_config_path.read_text(encoding="utf-8"))
+
+            run_builder(GBM_SCRIPT, gbm_config_path)
+            external_dir = root / "model_results" / "gbm" / GBM_MODEL_ID
+            external_features = json.loads(
+                (external_dir / "features.json").read_text(encoding="utf-8")
+            )
+
+            dataset = Dataset(dataset_path)
+            in_app_store = GbmModelStore(
+                dataset_path,
+                dataset=dataset,
+                model_root=root / "in_app_models",
+            )
+            training = config["training"]
+            in_app_result = train_gbm_model(
+                dataset,
+                in_app_store,
+                {
+                    "label": config["model"]["label"],
+                    "training_mode": "normal",
+                    "response": config["dataset"]["response_numerator"],
+                    "offset": config["dataset"]["denominator"],
+                    "sample_column": config["dataset"]["sample_column"],
+                    "features": [
+                        {"name": name, "include": True, "monotonicity": ""}
+                        for name in external_features
+                    ],
+                    "parameters": {
+                        **training["parameters"],
+                        "num_iterations": training["num_boost_round"],
+                        "early_stopping_rounds": training["early_stopping_rounds"],
+                    },
+                    "shap_rows": training["shap_rows"],
+                    "feature_scenario": {
+                        "name": config["features"]["scenario_column"],
+                        "features": external_features,
+                    },
+                },
+                activate=False,
+            )
+            in_app_id = in_app_result["model_id"]
+            in_app_dir = in_app_store.model_dir(in_app_id)
+
+            external_parameters = json.loads(
+                (external_dir / "parameters.json").read_text(encoding="utf-8")
+            )
+            in_app_parameters = json.loads(
+                (in_app_dir / "parameters.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(external_parameters, in_app_parameters)
+            self.assertEqual(
+                json.loads((external_dir / "features.json").read_text(encoding="utf-8")),
+                json.loads((in_app_dir / "features.json").read_text(encoding="utf-8")),
+            )
+
+            external_manifest = json.loads(
+                (external_dir / "manifest.json").read_text(encoding="utf-8")
+            )
+            in_app_manifest = json.loads(
+                (in_app_dir / "manifest.json").read_text(encoding="utf-8")
+            )
+            for manifest in (external_manifest, in_app_manifest):
+                self.assertRegex(manifest["created_at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+                self.assertTrue(math.isfinite(float(manifest["timings"]["training_seconds"])))
+                self.assertGreaterEqual(float(manifest["timings"]["training_seconds"]), 0)
+            stable_external_manifest = dict(external_manifest)
+            stable_in_app_manifest = dict(in_app_manifest)
+            for manifest in (stable_external_manifest, stable_in_app_manifest):
+                manifest.pop("model_id")
+                manifest.pop("created_at")
+                manifest.pop("timings")
+            self.assertEqual(stable_external_manifest, stable_in_app_manifest)
+
+            self.assertEqual(
+                (external_dir / "model.txt").read_bytes(),
+                (in_app_dir / "model.txt").read_bytes(),
+            )
+            for artifact in (
+                "evaluation.parquet",
+                "feature_config.parquet",
+                "predictions.parquet",
+                "shap_summary.parquet",
+                "shap_values.parquet",
+                "tree_table.parquet",
+            ):
+                with self.subTest(artifact=artifact):
+                    assert_parquet_tables_identical(
+                        self,
+                        external_dir / artifact,
+                        in_app_dir / artifact,
+                    )
+
+            installer = load_lucidum_installer()
+            installer.install_model_in_lucidum(
+                dataset_path=dataset_path,
+                model_folder=external_dir,
+                model_type="gbm",
+                model_id=GBM_MODEL_ID,
+            )
+            installer.install_model_in_lucidum(
+                dataset_path=dataset_path,
+                model_folder=in_app_dir,
+                model_type="gbm",
+                model_id=in_app_id,
+            )
+            installed_store = GbmModelStore(dataset_path, dataset=dataset)
+            active_pointer = json.loads(
+                (installed_store.root / "active_model.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(set(active_pointer), {"model_id", "activated_at"})
+            self.assertEqual(active_pointer["model_id"], in_app_id)
+
+            app = create_app(
+                dataset_path,
+                token="",
+                tools=["gbm", "line_bar"],
+                use_saved_filters=False,
+                use_kpis=False,
+            )
+
+            def navigator_contract(model: dict[str, Any]) -> dict[str, Any]:
+                result = dict(model)
+                for field in ("model_id", "created_at", "timings", "sources", "active"):
+                    result.pop(field, None)
+                return result
+
+            for endpoint in ("/api/gbm/models", "/api/gbm/config"):
+                status, body = asgi_request(app, "GET", endpoint)
+                self.assertEqual(status, 200)
+                models = {model["model_id"]: model for model in body["models"]}
+                self.assertEqual(set(models), {GBM_MODEL_ID, in_app_id})
+                self.assertEqual(
+                    navigator_contract(models[GBM_MODEL_ID]),
+                    navigator_contract(models[in_app_id]),
+                )
 
     @unittest.skipUnless(HAS_EXAMPLE_DEPENDENCIES, "external-model example dependencies are not installed")
     def test_external_results_report_without_sidecar_then_install_and_work_in_lucidum(self) -> None:

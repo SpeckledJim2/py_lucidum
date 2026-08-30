@@ -365,8 +365,20 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
   parameters/features/feature-config/model/prediction/evaluation/tree/SHAP
   artifacts. Preserve deterministic category ordering and SHAP sampling,
   decoded categorical threshold labels, denominator eligibility, and log-link
-  offset scoring. Do not restore obsolete `feature_config.json` or training-log
-  artifacts.
+  offset scoring. The external helper must remain independent of `py_lucidum`
+  imports while mirroring the full effective parameter defaults saved by in-app
+  training. `parameters.json` must include every Model navigator parameter and
+  all remaining effective defaults; `features.json` is the exact ordered fitted
+  feature list. Derive saved feature kinds from DuckDB's source schema before
+  pandas converts integer inputs to floating matrices, and use the same NumPy
+  reduction for SHAP summaries in both paths. `manifest.json` uses null for an
+  absent offset and retains equivalent stable metadata and warnings; external
+  phase timings are optional, but finite non-negative `timings.training_seconds`
+  is mandatory and run-specific. The optional workspace-copy helper validates
+  required JSON keys/types, model identity, counts, nullable Ginis, timing,
+  Navigator parameters, core artifacts, and conditional SHAP artifacts in both
+  source and staging before replacement or activation. Older folders are not
+  backfilled. Do not restore obsolete `feature_config.json` or training-log artifacts.
 - Keep the external build/report user contract in
   `docs/external-model-builds-and-reports.md`. The 02, 03, and 04 report helpers must
   load the exact GLM or GBM folder named by the matching 01 YAML, regardless of
@@ -466,7 +478,7 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 - GBM parameter cells support grid-search braces: explicit sets like `{200, 300, 400}` and inclusive numeric ranges like `{0.05, 0.3; 0.05}`. Grid search samples combination indexes deterministically from the hypergrid without constructing the full cartesian product, pre-validates only sampled combinations, skips invalid combinations with a notice, trains valid combinations sequentially in one job, persists each as a normal model with `grid_search` metadata, and activates the best completed model by test metric when present, otherwise training metric.
 - GBM always exposes `tweedie_variance_power` in the Parameters grid with default `1.5` and validates LightGBM's `1.0 <= value < 2.0` constraint for every objective. LightGBM uses it for a Tweedie objective or Tweedie metric; when neither is selected, a valid value remains accepted and persisted without affecting the fitted model or evaluation metric.
 - GBM exposes `init_score` as the first parameter-table row even though it is supplied to LightGBM datasets rather than to `lgb.train(params=...)`. `none` preserves the existing denominator-derived log offset for log-link objectives. A selected numeric dataset column or fitted GLM prediction source is a full prediction-space baseline; it is transformed with the objective link, replaces the denominator-derived init score, is persisted as `init_score.parquet`, and makes LightGBM `boost_from_average` irrelevant for that fit.
-- GBM `parameters.json` is reserved for LightGBM-compatible Python params that can be loaded with `json.load()` and passed to `lgb.train(params=...)`, including objective, metric, and generated numeric `interaction_constraints` when applicable. Generated interaction constraints remain exact saved training provenance but are excluded from active-model Parameter rows; the semantic Feature constraints in the manifest are restored instead and converted back to numeric feature indexes immediately before training. Lucidum-only state such as `training_mode`, selected init-score value/provenance, and EBM stage metadata belongs in `manifest.json`.
+- GBM `parameters.json` is reserved for the complete effective LightGBM-compatible Python params that can be loaded with `json.load()` and passed to `lgb.train(params=...)`, including objective, metric, iterations, learning rate, leaves, depth, minimum leaf size, early stopping, every remaining Lucidum default, and generated numeric `interaction_constraints` when applicable. Generated interaction constraints remain exact saved training provenance but are excluded from active-model Parameter rows; the semantic Feature constraints in the manifest are restored instead and converted back to numeric feature indexes immediately before training. Lucidum-only state such as `training_mode`, selected init-score value/provenance, and EBM stage metadata belongs in `manifest.json`.
 - The Parameters header copy command serializes the current edited parameter table as pretty JSON with native number and boolean types, excluding `init_score`, generated `interaction_constraints`, and row metadata. It blocks copying while any LightGBM parameter contains Lucidum grid-search braces because those expressions are not valid scalar `lgb.train(params=...)` values; row-aligned initial scores remain a separate `lgb.Dataset(init_score=...)` input.
 - GBM uses the sidebar Actual, denominator, FAVOURITES, and KPI controls as the model response and offset/exposure inputs. Denominator-backed models expose `gbm_prediction_rate = gbm_prediction / denominator`. The filter controls remain hidden while GBM is active because training ignores the global filter.
 - GBM response-domain validation uses the same eligible rows as training: when a dataset denominator is selected, objective checks include only rows where that denominator casts to a value greater than zero; without a denominator, they continue to check all rows.

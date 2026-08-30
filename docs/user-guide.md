@@ -1297,6 +1297,16 @@ beside its source dataset so it can be reviewed in Lucidum without retraining. T
 existing `install_in_lucidum` configuration name is retained for compatibility; it
 does not install a package or register the model with an external service.
 
+The supplied GBM `01` workflow writes the same complete `parameters.json`, ordered
+`features.json`, and stable `manifest.json` fields as an equivalent in-app build.
+Only identity, timestamps, activation state, and measured runtime are expected to
+differ. Its workspace-copy step rejects incomplete JSON, missing core artifacts, or
+missing SHAP files when the manifest reports saved SHAP rows, and it does so before
+replacing an existing model or active pointer. Older external GBM folders are not
+upgraded in place: sync the current maintained scripts and rerun `01` to rebuild
+them. The [external-model guide](external-model-builds-and-reports.md#gbm-json-contract)
+documents the mandatory keys and permitted run-specific differences.
+
 Install the example dependencies from a checkout:
 
 ```bash

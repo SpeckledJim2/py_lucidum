@@ -16720,6 +16720,181 @@ COPY (
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_gbm_model_navigator_renders_external_and_in_app_contract_identically(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "sample.csv"
+            data_path.write_text(
+                "actualNumerator,denominator,Age,SAMPLE\n"
+                "10,100,30,training\n"
+                "20,200,40,test\n"
+                "30,300,50,validation\n",
+                encoding="utf-8",
+            )
+            store = GbmModelStore(data_path)
+            common_parameters = {
+                "objective": "poisson",
+                "metric": "poisson",
+                "tweedie_variance_power": 1.5,
+                "data_sample_strategy": "bagging",
+                "num_iterations": 16,
+                "learning_rate": 0.1,
+                "num_leaves": 3,
+                "max_depth": -1,
+                "min_data_in_leaf": 12,
+                "early_stopping_rounds": 4,
+                "feature_fraction": 1.0,
+                "bagging_fraction": 1.0,
+                "bagging_freq": 0,
+                "lambda_l1": 0.0,
+                "lambda_l2": 0.0,
+                "min_gain_to_split": 0.0,
+                "max_bin": 255,
+                "num_threads": 0,
+                "verbosity": -1,
+                "seed": 2026,
+            }
+            for model_id, label, created_at, runtime in (
+                ("external-contract", "External contract", "2026-08-30T00:00:00Z", 0.1),
+                ("in-app-contract", "In-app contract", "2026-08-30T00:00:01Z", 0.2),
+            ):
+                self.write_gbm_prediction_model(
+                    store,
+                    model_id,
+                    label,
+                    created_at,
+                    [0.11, 0.21, 0.31],
+                    gini_tr=0.75,
+                    gini_te=0.5,
+                    gini_vl=0.25,
+                )
+                manifest = store.manifest(model_id)
+                manifest.update(
+                    {
+                        "validation_rows": 1,
+                        "shap_rows": 3,
+                        "timings": {"training_seconds": runtime},
+                        "warnings": [],
+                        "feature_scenario": {"name": "report_demo", "features": ["Age"]},
+                        "feature_interaction_group_models": {
+                            "enabled": False,
+                            "error_metric": "max_absolute_error",
+                            "groups": [],
+                        },
+                        "init_score": {"value": "none", "kind": "none", "transform": None},
+                    }
+                )
+                store.write_json(store.artifact_path(model_id, "manifest"), manifest)
+                store.write_json(
+                    store.artifact_path(model_id, "parameters"),
+                    common_parameters,
+                )
+                write_gbm_evaluation(
+                    store,
+                    model_id,
+                    {
+                        "training": {"poisson": [0.11, 0.21, 0.31]},
+                        "test": {"poisson": [0.11, 0.21, 0.31]},
+                    },
+                )
+
+            self.write_gbm_prediction_model(
+                store,
+                "legacy-contract",
+                "Legacy contract",
+                "2026-08-30T00:00:02Z",
+                [0.11, 0.21, 0.31],
+            )
+            store.activate_model("in-app-contract")
+            base_url, server, thread = self.start_app(
+                data_path,
+                tools=["line_bar", "gbm"],
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 800})
+                    page_errors: list[str] = []
+                    page.on("pageerror", lambda error: page_errors.append(str(error)))
+                    try:
+                        page.goto(f"{base_url}/?tool=gbm", wait_until="domcontentloaded")
+                        page.get_by_role("tab", name="Model navigator").click()
+                        page.wait_for_function(
+                            """
+                            () => {
+                              const table = (window.Tabulator?.findTable?.("#gbmModelGrid") || [])
+                                .find((candidate) => candidate?.element?.isConnected);
+                              const ids = new Set((table?.getRows?.() || []).map((row) => row.getData()?.model_id));
+                              return ids.has("external-contract") && ids.has("in-app-contract")
+                                && ids.has("legacy-contract");
+                            }
+                            """,
+                            timeout=10_000,
+                        )
+                        rendered = page.evaluate(
+                            """
+                            () => {
+                              const table = (window.Tabulator?.findTable?.("#gbmModelGrid") || [])
+                                .find((candidate) => candidate?.element?.isConnected);
+                              const fields = [
+                                "response_column", "weight_display", "objective", "metric",
+                                "training_mode_display", "constraint_display", "training_rows",
+                                "best_iteration", "best_training_metric", "best_test_metric",
+                                "gini_tr", "gini_te", "gini_vl", "param_num_iterations",
+                                "param_learning_rate", "param_num_leaves", "param_max_depth",
+                                "param_min_data_in_leaf", "param_early_stopping_rounds", "sample_display",
+                              ];
+                              const capture = (modelId) => {
+                                const row = table.getRows().find((candidate) => candidate.getData()?.model_id === modelId);
+                                return Object.fromEntries(fields.map((field) => [
+                                  field,
+                                  row.getCell(field)?.getElement()?.textContent.trim() ?? null,
+                                ]));
+                              };
+                              return {
+                                external: capture("external-contract"),
+                                inApp: capture("in-app-contract"),
+                                legacyDepth: capture("legacy-contract").param_max_depth,
+                              };
+                            }
+                            """
+                        )
+                        self.assertEqual(rendered["external"], rendered["inApp"])
+                        self.assertEqual(
+                            rendered["external"],
+                            {
+                                "response_column": "actualNumerator",
+                                "weight_display": "denominator",
+                                "objective": "poisson",
+                                "metric": "poisson",
+                                "training_mode_display": "Normal",
+                                "constraint_display": "No",
+                                "training_rows": "2",
+                                "best_iteration": "3",
+                                "best_training_metric": "0.31",
+                                "best_test_metric": "0.31",
+                                "gini_tr": "0.75",
+                                "gini_te": "0.5",
+                                "gini_vl": "0.25",
+                                "param_num_iterations": "16",
+                                "param_learning_rate": "0.1",
+                                "param_num_leaves": "3",
+                                "param_max_depth": "-1",
+                                "param_min_data_in_leaf": "12",
+                                "param_early_stopping_rounds": "4",
+                                "sample_display": "SAMPLE",
+                            },
+                        )
+                        self.assertEqual(rendered["legacyDepth"], "--")
+                        self.assertEqual(page_errors, [])
+                    finally:
+                        browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_sidebar_accordion_works_across_tools(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
