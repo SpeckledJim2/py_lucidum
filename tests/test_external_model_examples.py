@@ -829,6 +829,34 @@ COPY (
         self.assertEqual(len(warnings), 3)
         self.assertTrue(all("Gini could not be calculated" in warning for warning in warnings))
 
+    def test_external_gbm_evaluation_uses_the_same_stable_precision(self) -> None:
+        writer = load_model_results_writer()
+
+        frame = writer.gbm_evaluation_frame(
+            {
+                "training": {"poisson": [-3819.554185897291]},
+                "validation": {"poisson": [-4518.732037833418]},
+            }
+        )
+
+        self.assertEqual(
+            frame.to_dict("records"),
+            [
+                {
+                    "dataset": "training",
+                    "metric": "poisson",
+                    "iteration": 1,
+                    "value": -3819.55418589729,
+                },
+                {
+                    "dataset": "validation",
+                    "metric": "poisson",
+                    "iteration": 1,
+                    "value": -4518.73203783342,
+                },
+            ],
+        )
+
     def test_external_glm_diagnostics_match_navigator_aic_bic_contract(self) -> None:
         import numpy as np
 

@@ -679,10 +679,17 @@ def gbm_evaluation_frame(
                         "dataset": dataset_name,
                         "metric": metric_name,
                         "iteration": iteration,
-                        "value": json_number(value),
+                        "value": canonical_gbm_metric(value),
                     }
                 )
     return pd.DataFrame(rows, columns=["dataset", "metric", "iteration", "value"])
+
+
+def canonical_gbm_metric(value: Any) -> float | None:
+    """Remove immaterial platform-level reduction noise from saved metrics."""
+
+    number = json_number(value)
+    return float(f"{number:.15g}") if number is not None else None
 
 
 def gbm_tree_frame(booster: Any, categorical_labels: dict[str, list[str]]) -> pd.DataFrame:
@@ -745,7 +752,12 @@ def gbm_shap_frames(
             }
             for index, name in enumerate(feature_names)
         ]
-    ).sort_values("mean_abs_shap", ascending=False, ignore_index=True)
+    ).sort_values(
+        ["mean_abs_shap", "feature"],
+        ascending=[False, True],
+        kind="mergesort",
+        ignore_index=True,
+    )
     return values, summary
 
 

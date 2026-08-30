@@ -29,7 +29,7 @@ from py_lucidum.tools.gbm import tabulation as gbm_tabulation
 from py_lucidum.tools.gbm.store import GbmModelStore, GbmSourceProvider
 from py_lucidum.tools.gbm.tabulation import build_gbm_tabulations
 from py_lucidum.tools.gbm.trees import ebm_gain_summary, tree_detail, tree_summary
-from py_lucidum.tools.gbm.training import MissingGbmDependency, append_holdout_evaluation, feature_config_with_mean_abs_shap, gbm_dependencies, gbm_training_dependencies, lightgbm_interaction_constraints, lightgbm_pair_interaction_constraints, lightgbm_progress_payload, normalise_feature_scenario, polars_feature_frame, predict_response_values, shap_dataframes, shap_interaction_group_columns, shap_row_limit, should_use_offset_init_score, train_model, tree_dataframe, training_projection_columns, training_select_sql, write_dataframe_parquet
+from py_lucidum.tools.gbm.training import MissingGbmDependency, append_holdout_evaluation, evaluation_dataframe, feature_config_with_mean_abs_shap, gbm_dependencies, gbm_training_dependencies, lightgbm_interaction_constraints, lightgbm_pair_interaction_constraints, lightgbm_progress_payload, normalise_feature_scenario, polars_feature_frame, predict_response_values, shap_dataframes, shap_interaction_group_columns, shap_row_limit, should_use_offset_init_score, train_model, tree_dataframe, training_projection_columns, training_select_sql, write_dataframe_parquet
 from py_lucidum.tools.gbm.validation import DEFAULT_TWEEDIE_VARIANCE_POWER, GBM_METRICS, GBM_OBJECTIVES, available_feature_interaction_groupings, categorical_distinct_counts, default_parameters, ebm_available, feature_interaction_constraint_groups, feature_rows, normalise_feature_grouping_map, normalise_feature_interaction_features, normalise_feature_interaction_groupings, normalise_feature_interaction_pairs, normalise_features, normalise_parameters, validate_request
 from py_lucidum.tools.glm.store import GlmModelStore
 from py_lucidum.tools.glm.tabulation import export_tabulations, tabulation_config, tabulation_plot, tabulation_table
@@ -4426,6 +4426,40 @@ WHERE LOWER(source.SAMPLE) = 'validation'
         self.assertFalse((store.model_dir(result["model_id"]) / "training_log.json").exists())
         self.assertTrue(any(item.get("leaf_stage") == 3 for item in progress if item.get("phase") == "training"))
 
+    def test_evaluation_artifact_removes_platform_level_reduction_noise(self) -> None:
+        try:
+            import pandas as pd
+        except ImportError as exc:  # pragma: no cover - optional dependency guard.
+            self.skipTest(str(exc))
+
+        frame = evaluation_dataframe(
+            pd,
+            {
+                "training": {
+                    "poisson": [-3819.5541858972915, float("nan")],
+                },
+                "validation": {"poisson": [-4518.732037833419]},
+            },
+        )
+
+        self.assertEqual(
+            frame.to_dict("records"),
+            [
+                {
+                    "dataset": "training",
+                    "metric": "poisson",
+                    "iteration": 1,
+                    "value": -3819.55418589729,
+                },
+                {
+                    "dataset": "validation",
+                    "metric": "poisson",
+                    "iteration": 1,
+                    "value": -4518.73203783342,
+                },
+            ],
+        )
+
     def test_shap_row_limit_supports_compact_choices(self) -> None:
         self.assertEqual(shap_row_limit("0", 123456), 0)
         self.assertEqual(shap_row_limit("10k", 123456), 10000)
@@ -4599,6 +4633,32 @@ WHERE LOWER(source.SAMPLE) = 'validation'
         self.assertEqual([row[0] for row in artifact_columns], ["__lucidum_row_id", "Age", "Segment"])
         self.assertTrue(str(artifact_columns[0][1]).startswith("BIGINT"))
         self.assertTrue(str(artifact_columns[1][1]).startswith("DOUBLE"))
+
+    def test_shap_summary_uses_feature_name_to_break_equal_importance_ties(self) -> None:
+        try:
+            import numpy as np
+            import polars as pl
+        except ImportError as exc:  # pragma: no cover - optional dependency guard.
+            self.skipTest(str(exc))
+
+        class Booster:
+            def predict(self, frame: Any, *, pred_contrib: bool, num_iteration: int) -> Any:
+                return np.zeros((len(frame), 3), dtype="float64")
+
+        _, summary = shap_dataframes(
+            np=np,
+            pl=pl,
+            booster=Booster(),
+            feature_frame=pl.DataFrame({"Zulu": [1, 2], "Alpha": [3, 4]}),
+            score_frame=pl.DataFrame({"__lucidum_row_id": [1, 2], "Zulu": [1, 2], "Alpha": [3, 4]}),
+            feature_names=["Zulu", "Alpha"],
+            model_id="m1",
+            shap_mode="all",
+            shap_seed=2026,
+            best_iteration=1,
+        )
+
+        self.assertEqual(summary.get_column("feature").to_list(), ["Alpha", "Zulu"])
 
     def test_shap_values_include_interaction_group_columns_without_summary_rows(self) -> None:
         try:

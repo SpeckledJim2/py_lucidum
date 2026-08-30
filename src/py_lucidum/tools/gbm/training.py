@@ -1583,10 +1583,17 @@ def evaluation_dataframe(
                         "dataset": dataset_name,
                         "metric": metric_name,
                         "iteration": iteration,
-                        "value": float(value) if value is not None and math.isfinite(float(value)) else None,
+                        "value": canonical_gbm_metric(value),
                     }
                 )
     return pd.DataFrame(rows, columns=["dataset", "metric", "iteration", "value"])
+
+
+def canonical_gbm_metric(value: Any) -> float | None:
+    """Remove immaterial platform-level reduction noise from saved metrics."""
+
+    number = json_safe_number(value)
+    return float(f"{number:.15g}") if number is not None else None
 
 
 def should_use_offset_init_score(params: dict[str, Any], offset_col: str | None) -> bool:
@@ -1763,7 +1770,10 @@ def shap_dataframes(
             ],
             schema=summary_schema,
         )
-        summary = summary.sort("mean_abs_shap", descending=True)
+        summary = summary.sort(
+            ["mean_abs_shap", "feature"],
+            descending=[True, False],
+        )
     return shap_frame, summary
 
 
