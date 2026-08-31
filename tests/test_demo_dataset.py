@@ -127,7 +127,7 @@ class DemoDatasetTests(unittest.TestCase):
         self.assertEqual(
             reader.fieldnames,
             [
-                "Feature", "Grouping", "Base", "min", "max", "banding",
+                "Feature", "Grouping", "Monotonicity", "Base", "min", "max", "banding",
                 "chart_banding", "chart_quantiles", "chart_low_weights",
                 "chart_missings", "chart_labels", "chart_sort",
                 "chart_transform", "chart_sigma", "chart_date_bucket",

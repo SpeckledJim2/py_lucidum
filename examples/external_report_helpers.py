@@ -321,6 +321,11 @@ def load_gbm_summary_settings(
             kpi,
             best_iteration=manifest.get("best_iteration"),
             metric=str(parameters.get("metric") or ""),
+            split_ginis={
+                "training": manifest.get("gini_tr"),
+                "test": manifest.get("gini_te"),
+                "validation": manifest.get("gini_vl"),
+            },
         )
         importance_payload = gbm_model_importance(store, model_id)
         importance = _summary_importance(importance_payload, model_id)
@@ -434,14 +439,23 @@ def features_for_report(features: list[dict[str, Any]], report: dict[str, Any]) 
         row = dict(feature)
         name = row["name"]
         if show_importance and row.get("in_model"):
-            row["title"] = (
-                f"{name} (Rank {row['importance_rank']}, "
-                f"Importance {row['importance_percent']:.1f}%)"
-            )
+            details = [
+                f"Rank {row['importance_rank']}",
+                f"Importance {row['importance_percent']:.1f}%",
+            ]
+            monotonicity = str(row.get("monotonicity") or "").strip()
+            if report.get("chart_content") == "shap_only" and monotonicity:
+                details.append(monotonicity)
+            row["title"] = f"{name} ({', '.join(details)})"
         elif show_importance:
             row["title"] = f"{name} (Not in model)"
         else:
-            row["title"] = name
+            monotonicity = str(row.get("monotonicity") or "").strip()
+            row["title"] = (
+                f"{name} ({monotonicity})"
+                if report.get("chart_content") == "shap_only" and row.get("in_model") and monotonicity
+                else name
+            )
         prepared.append(row)
 
     if sort_by_importance:
@@ -488,6 +502,7 @@ def _gbm_performance(
     *,
     best_iteration: Any,
     metric: str,
+    split_ginis: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     from py_lucidum.core import quote_ident, sql_literal
 
@@ -545,15 +560,16 @@ GROUP BY sample_value
         for row in dataset.con.execute(query).fetchall()
     }
     roles = [
-        ("Training", str(dataset_config["training_value"]), best_metrics.get("training")),
-        ("Test", str(dataset_config["early_stopping_value"]), best_metrics.get("test")),
-        ("Validation", str(dataset_config["validation_value"]), best_metrics.get("validation")),
+        ("Training", "training", str(dataset_config["training_value"]), best_metrics.get("training")),
+        ("Test", "test", str(dataset_config["early_stopping_value"]), best_metrics.get("test")),
+        ("Validation", "validation", str(dataset_config["validation_value"]), best_metrics.get("validation")),
     ]
     rows = []
-    for label, sample_value, metric_value in roles:
+    for label, role, sample_value, metric_value in roles:
         values = results.get(sample_value.strip().lower())
         if not values:
             raise ValueError(f"The {label} SAMPLE value has no eligible scored rows: {sample_value}")
+        gini = _finite_number((split_ginis or {}).get(role))
         rows.append(
             {
                 "sample": label,
@@ -562,7 +578,8 @@ GROUP BY sample_value
                 "actual": _format_kpi(values["actual"], kpi),
                 "prediction": _format_kpi(values["prediction"], kpi),
                 "metric": _format_metric(metric_value, metric),
-                "raw": values,
+                "gini": "—" if gini is None else f"{gini:.4f}",
+                "raw": {**values, "gini": gini},
             }
         )
 
@@ -577,6 +594,7 @@ GROUP BY sample_value
             {"key": "actual", "label": "Actual response"},
             {"key": "prediction", "label": "Model prediction"},
             {"key": "metric", "label": f"{metric or 'Model'} metric"},
+            {"key": "gini", "label": "Normalized Gini"},
         ]
     )
     return {
@@ -620,6 +638,7 @@ def _summary_importance(importance: dict[str, Any], model_id: str) -> dict[str, 
         "columns": [
             {"key": "rank", "label": "Rank"},
             {"key": "feature", "label": "Feature"},
+            {"key": "monotonicity", "label": "Monotonicity"},
             {"key": "importance", "label": "SHAP" if uses_shap else "Gain"},
             {"key": "share", "label": "Share"},
         ],
@@ -627,6 +646,7 @@ def _summary_importance(importance: dict[str, Any], model_id: str) -> dict[str, 
             {
                 "rank": int(row["rank"]),
                 "feature": str(row["feature"]),
+                "monotonicity": str(row.get("monotonicity") or "None"),
                 "importance": (
                     f"{float(row.get('importance') or 0.0) * 100:.1f}%"
                     if uses_shap
@@ -865,6 +885,7 @@ def _add_feature_importance(
         value = max(0.0, float(saved.get("importance") or 0.0))
         feature["importance_rank"] = int(saved["rank"])
         feature["importance_percent"] = value / total * 100 if total > 0 else 0.0
+        feature["monotonicity"] = str(saved.get("monotonicity") or "")
 
 
 def _report_boolean(report: dict[str, Any], name: str) -> bool:

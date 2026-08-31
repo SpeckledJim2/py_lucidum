@@ -49,11 +49,12 @@ application can display it without retraining it.
 2. `02_external_gbm_report_demo.py` creates two feature-by-feature reports: a
    Validation Actual-versus-Expected report with two-sigma error bars, and an
    all-row SHAP-only report whose SHAP ribbons are rebased to 1. The reports
-   can show whole-model feature importance in their chart titles.
+   can show whole-model feature importance in their chart titles. SHAP-only
+   titles also show the fitted monotonicity when a constraint was used.
 3. `03_external_gbm_summary_report_demo.py` creates a model summary containing
    Training, Test, and Validation performance, mean absolute SHAP feature
-   importance, LightGBM parameters, and the saved evaluation history with its
-   Validation marker.
+   importance with fitted monotonicity, LightGBM parameters, and the saved
+   evaluation history with its Validation marker.
 
 ### Optional cross-model workflow
 
@@ -100,6 +101,132 @@ From a source checkout, install the dependencies used by both model types:
 ```bash
 python -m pip install -e ".[glm,gbm,examples]"
 ```
+
+### External modelling quick start for data scientists
+
+Neither workflow requires changing Python code. The normal user edits YAML, CSV,
+and, for a GLM, one formula text file; runs the maintained scripts; and then opens
+the same dataset in Lucidum.
+
+From a source checkout, create one environment containing both example workflows:
+
+```bash
+python3.13 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e ".[glm,gbm,examples]"
+```
+
+Install only `.[glm,examples]` or `.[gbm,examples]` when only one model family is
+needed. On Windows PowerShell, activate the environment with
+`.\.venv\Scripts\Activate.ps1`. On macOS, install `libomp` with Homebrew if
+LightGBM reports that the OpenMP runtime is missing.
+
+To try either supplied model before configuring your own, run its builder and open
+the demo dataset.
+
+For the GLM:
+
+```bash
+python examples/01_external_glm_artifacts_demo.py
+lucidum datasets/motor_premiums.parquet \
+  --tools line-bar,glm \
+  --features specs/feature_spec.csv \
+  --open
+```
+
+For the GBM:
+
+```bash
+python examples/01_external_gbm_artifacts_demo.py
+lucidum datasets/motor_premiums.parquet \
+  --tools line-bar,gbm \
+  --features specs/feature_spec.csv \
+  --open
+```
+
+For your own model:
+
+1. Put the source data in one CSV or Parquet file. Add a physical sample column,
+   normally containing `training`, `test`, and `validation`; the external scripts
+   do not create this split.
+2. Copy the chosen model family's three YAML files, `feature_spec.csv`, and
+   `kpi_spec.csv` into the modelling project. A GLM also needs its formula text
+   file. Keep the numbered scripts and four helper files together in one workflow
+   directory. Paths inside each YAML are resolved from that YAML's directory, not
+   from the terminal's current directory.
+3. Configure the build:
+
+   - For a GLM, edit `config_glm.yaml`: set the dataset, response, optional
+     denominator, sample values, model ID and label, formula path, family, link,
+     training scope, and regularisation. Edit the formula text as a right-hand-side
+     expression without `response ~`.
+   - For a GBM, edit `config_gbm.yaml`: set the dataset, response, optional
+     denominator, sample values, Feature Specification scenario, model ID and
+     label, and LightGBM parameters. In the selected scenario, mark model rows with
+     `feature`. Optional `Monotonicity` values apply when
+     `features.use_monotonicity` is true; blank values or a missing column mean no
+     constraint for that feature.
+
+   In either build YAML, keep `output.install_in_lucidum: true` when the model
+   should appear in the application.
+4. Run the matching builder and pass its YAML explicitly:
+
+   ```bash
+   python path/to/01_external_glm_artifacts_demo.py path/to/config_glm.yaml
+   python path/to/01_external_gbm_artifacts_demo.py path/to/config_gbm.yaml
+   ```
+
+   Run only the command for the chosen family. The script prints the authoritative
+   results folder. With `install_in_lucidum: true`, it also validates, copies, and
+   activates the model in the hidden workspace belonging to this exact dataset
+   version. Lucidum reads this copy and does not retrain the model.
+5. Optionally run the matching `02` and `03` scripts to create portable reports:
+
+   ```bash
+   python path/to/02_external_glm_report_demo.py path/to/config_glm_report.yaml
+   python path/to/03_external_glm_summary_report_demo.py path/to/config_glm_summary_report.yaml
+
+   python path/to/02_external_gbm_report_demo.py path/to/config_gbm_report.yaml
+   python path/to/03_external_gbm_summary_report_demo.py path/to/config_gbm_summary_report.yaml
+   ```
+
+   These scripts read the authoritative results folder named by the matching build
+   YAML and do not need Lucidum to be running. GLM step `03` also builds and scores
+   rating-table tabulations, writes the XLSX workbook, and republishes the updated
+   model when installation is enabled. GBM step `03` writes its model summary; all
+   GBM training, prediction, evaluation, tree, and SHAP artifacts were already
+   created by step `01`.
+6. Launch Lucidum against the same physical dataset file and, normally, the same
+   Feature Specification:
+
+   ```bash
+   lucidum path/to/data.parquet \
+     --tools line-bar,glm \
+     --features path/to/feature_spec.csv \
+     --open
+
+   lucidum path/to/data.parquet \
+     --tools line-bar,gbm \
+     --features path/to/feature_spec.csv \
+     --open
+   ```
+
+   Again, run only the command for the chosen family. Include both as
+   `--tools line-bar,glm,gbm` when both model types should be available together.
+7. Select **GLM** or **GBM**, then **Model navigator**. The externally built model
+   has the green active-model dot immediately after installation. Use **Activate**
+   if another model has since become active. A GLM exposes its saved formula,
+   coefficients, diagnostics, predictions, and, after step `03`, tabulations. A GBM
+   exposes its saved Features and Parameters, Evaluation, Trees, SHAP, and Stacked
+   SHAP artifacts. Line and Bar can use either model's saved predictions.
+
+If a model is absent, first check that `install_in_lucidum` was true during its
+`01` run, then check that Lucidum was launched against the same path and unchanged
+dataset version. Rewriting the data changes the workspace signature, even when the
+filename stays the same, so rerun `01` after replacing the dataset. A GLM needs step
+`03` before its external tabulations appear; GBM SHAP views require a positive
+`training.shap_rows` value at build time.
 
 ### Keep client scripts up to date
 
@@ -314,6 +441,9 @@ additional settings:
   metric.
 - `features.spec_path` — Feature Specification CSV.
 - `features.scenario_column` — column that selects the GBM features.
+- `features.use_monotonicity` — optional boolean, default `true`. When enabled,
+  derive constraints from optional Feature Specification `Monotonicity` metadata;
+  when disabled or when that column is absent, fit without monotonic constraints.
 - `training.parameters` — values passed to `lightgbm.train`.
 - `training.num_boost_round` — maximum number of boosting rounds.
 - `training.early_stopping_rounds` — early-stopping patience.
@@ -322,6 +452,16 @@ additional settings:
 
 A Feature Specification row is used by the model when the selected scenario
 cell contains `feature`, ignoring letter case.
+
+For selected numeric features, `Monotonicity` accepts blank,
+`Increasing`/`1`, or `Decreasing`/`-1`, case-insensitively. The resulting vector is
+derived in canonical fitted-feature order; raw `training.parameters` constraint
+vectors and their LightGBM aliases are rejected. The method defaults to
+`monotone_constraints_method: advanced`, matching an in-app build, and can be set
+to `basic` or `intermediate` when required. The configured method is always saved
+in `parameters.json`, but both builders pass it to LightGBM only with a derived
+nonzero vector. Disabled, absent, or entirely blank monotonicity therefore adds no
+fit-time constraint parameters.
 
 Selected GBM features are then put into a canonical case-insensitive
 alphabetical order (with the original name as the tie-breaker) before matrix
@@ -374,7 +514,7 @@ metadata:
 - `parameters.json` contains the complete effective parameter dictionary used for
   fitting, including Lucidum defaults omitted from the YAML. It must include
   `objective`, `metric`, `tweedie_variance_power`, `data_sample_strategy`,
-  `num_iterations`, `learning_rate`, `num_leaves`, `max_depth`,
+  `monotone_constraints_method`, `num_iterations`, `learning_rate`, `num_leaves`, `max_depth`,
   `min_data_in_leaf`, `early_stopping_rounds`, `feature_fraction`,
   `bagging_fraction`, `bagging_freq`, `lambda_l1`, `lambda_l2`,
   `min_gain_to_split`, `max_bin`, `num_threads`, `verbosity`, and `seed`.
@@ -395,6 +535,10 @@ zero. The remaining model, prediction, evaluation, tree, and feature-config
 artifacts are always required. The installer activates a GBM only after the full
 folder passes this validation, so a failed replacement leaves the previous folder
 and active pointer unchanged.
+
+External GBM folders created before `monotone_constraints_method` became required
+are not upgraded in place. Sync the maintained example files and rerun the `01`
+build to create a complete current artifact set.
 
 ## Where the saved models go
 
@@ -571,18 +715,29 @@ model or used by Lucidum.
 writes a one-page HTML report containing:
 
 - Source, model, configuration, and run information.
-- Performance for Training, Test, and Validation.
-- Feature importance for every model feature.
+- Performance for Training, Test, and Validation, including each fitted split's
+  normalized Gini.
+- Feature importance and fitted monotonicity for every model feature.
 - The LightGBM parameters.
 - The saved Training/Test evaluation history and the single Validation marker
   at the best iteration.
 
 Actual and prediction are formatted using the exact matching row in the KPI
 Specification. MAPE is displayed as a percentage. Other LightGBM metrics keep
-their normal numeric format.
+their normal numeric format. Normalized Gini is the saved `gini_tr`, `gini_te`,
+or `gini_vl` value for the corresponding sample role and is shown to four
+decimal places.
 
 When SHAP was saved, the importance table shows mean absolute SHAP and its
 share of total SHAP importance. Otherwise it shows LightGBM gain and its share.
+The Monotonicity column and SHAP-only chart-title suffixes come from the saved
+fitted feature configuration, so they describe the model build rather than the
+current Feature Specification.
+
+The visible Parameters table summarizes the order-dependent
+`monotone_constraints` vector as constrained, Increasing, and Decreasing feature
+counts. The Feature importance table provides the semantic mapping, while the exact
+vector remains unchanged in `parameters.json` and in the embedded report data.
 
 ## Optional Step 04: compare two exact model builds
 

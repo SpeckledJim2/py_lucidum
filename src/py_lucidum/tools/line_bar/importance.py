@@ -96,6 +96,7 @@ def gbm_model_importance(store: Any, model_id: str, *, description: str | None =
                 "feature": feature,
                 "importance": float(importance),
                 "kind": str(row.get("kind") or ""),
+                "monotonicity": str(row.get("monotonicity") or ""),
             }
         )
 

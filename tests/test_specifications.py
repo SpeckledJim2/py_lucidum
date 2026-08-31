@@ -15,6 +15,7 @@ from py_lucidum.tools.registry import normalise_tools
 FEATURE_EDITOR_COLUMNS = [
     "Feature",
     "Grouping",
+    "Monotonicity",
     "Base",
     "min",
     "max",
@@ -161,7 +162,11 @@ class SpecificationsToolTests(unittest.TestCase):
             )
         )
         self.assertEqual(payload["editor_schema"]["metadata_columns"], FEATURE_EDITOR_COLUMNS[2:-1])
-        self.assertEqual(payload["editor_schema"]["chart_columns"], FEATURE_EDITOR_COLUMNS[6:-1])
+        self.assertEqual(payload["editor_schema"]["chart_columns"], FEATURE_EDITOR_COLUMNS[7:-1])
+        self.assertEqual(
+            payload["editor_schema"]["column_rules"]["Monotonicity"]["values"],
+            ["Increasing", "Decreasing", "1", "-1"],
+        )
         self.assertEqual(
             payload["editor_schema"]["column_rules"]["chart_low_weights"]["values"],
             ["0", "10", "100", "0.1%", "1%"],
@@ -493,6 +498,7 @@ class SpecificationsToolTests(unittest.TestCase):
         row.update({
             "Feature": "Age",
             "Grouping": "Driver",
+            "Monotonicity": "increasing",
             "Base": "40",
             "min": "20",
             "max": "80",
@@ -525,6 +531,7 @@ class SpecificationsToolTests(unittest.TestCase):
     def test_validate_feature_spec_rejects_invalid_metadata_values(self) -> None:
         app = create_app(self.data_path, token="", tools=["specs"], use_saved_filters=False, use_kpis=False)
         cases = {
+            "Monotonicity": ("sideways", "Use Increasing, 1, Decreasing, -1, or blank for Monotonicity"),
             "min": ("not-a-number", "min must be a finite number"),
             "max": ("inf", "max must be a finite number"),
             "banding": ("-1", "banding must be a non-negative finite number"),
@@ -560,7 +567,7 @@ class SpecificationsToolTests(unittest.TestCase):
         features_path = self.root / "feature_spec.csv"
         original_text = (
             ",".join(FEATURE_EDITOR_COLUMNS)
-            + "\nAge,Driver,40,20,80,5,2.5,10,0.1%,hide,all,volume,one,5,month,skip,feature\n"
+            + "\nAge,Driver,,40,20,80,5,2.5,10,0.1%,hide,all,volume,one,5,month,skip,feature\n"
         )
         features_path.write_text(original_text, encoding="utf-8")
         app = create_app(
@@ -586,6 +593,23 @@ class SpecificationsToolTests(unittest.TestCase):
         self.assertIn("0.1%", payload["detail"])
         self.assertEqual(features_path.read_text(encoding="utf-8"), original_text)
         self.assertEqual(app.state.feature_spec["rows"][0]["chart_low_weights"], "0.1%")
+
+    def test_validate_feature_spec_rejects_monotonicity_for_known_non_numeric_column(self) -> None:
+        app = create_app(self.data_path, token="", tools=["specs"], use_saved_filters=False, use_kpis=False)
+        row = {column: "" for column in FEATURE_EDITOR_COLUMNS}
+        row.update({"Feature": "Segment", "Monotonicity": "Increasing", "scenario1": "feature"})
+
+        status, _, body = asgi_post_json(
+            app,
+            "/api/specs/feature/validate",
+            {"columns": FEATURE_EDITOR_COLUMNS, "rows": [row]},
+        )
+
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertFalse(payload["valid"])
+        self.assertIn("numeric feature", payload["errors"][0])
+        self.assertEqual(payload["row_issues"][0]["column"], "Monotonicity")
 
     def test_feature_spec_rejects_reserved_metadata_after_a_scenario(self) -> None:
         app = create_app(self.data_path, token="", tools=["specs"], use_saved_filters=False, use_kpis=False)

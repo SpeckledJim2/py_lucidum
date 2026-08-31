@@ -34,6 +34,7 @@ from .validation import (
     display_monotonicity,
     feature_interaction_constraint_groups,
     metric,
+    MONOTONE_CONSTRAINT_PARAMETER_NAMES,
     normalise_init_score_value,
     normalise_feature_grouping_map,
     normalise_feature_interaction_features,
@@ -603,6 +604,8 @@ def train_model(
 
     emit_preparing_progress(progress_callback, "Preparing GBM: resolving parameters...", 0, stage="resolving_parameters")
     params = normalise_parameters(payload.get("parameters"))
+    for constraint_parameter in MONOTONE_CONSTRAINT_PARAMETER_NAMES:
+        params.pop(constraint_parameter, None)
     selected_init_score = normalise_init_score_value(params.pop("init_score", INIT_SCORE_NONE))
     training_mode = normalise_training_mode(payload.get("training_mode"))
     selected_objective = objective(params)
@@ -767,6 +770,8 @@ def train_model(
         params["interaction_constraints"] = interaction_constraints
         stored_params["interaction_constraints"] = interaction_constraints
 
+    fit_params = lightgbm_fit_parameters(params)
+
     matrix_prep_started = time.perf_counter()
     emit_preparing_progress(
         progress_callback,
@@ -866,7 +871,7 @@ def train_model(
         feature_name=feature_names,
         categorical_feature=categorical_features,
         init_score=train_init,
-        params=params,
+        params=fit_params,
         free_raw_data=True,
     )
     valid_sets = [train_set]
@@ -880,7 +885,7 @@ def train_model(
                 categorical_feature=categorical_features,
                 init_score=valid_init,
                 reference=train_set,
-                params=params,
+                params=fit_params,
                 free_raw_data=True,
             )
         )
@@ -924,7 +929,7 @@ def train_model(
     )
     fit_started = time.perf_counter()
     booster = lgb.train(
-        params,
+        fit_params,
         train_set,
         num_boost_round=num_boost_round,
         valid_sets=valid_sets,
@@ -1262,6 +1267,27 @@ def lightgbm_pair_interaction_constraints(
         if index not in constrained_indexes:
             constraints.append([index])
     return constraints
+
+
+def lightgbm_fit_parameters(parameters: dict[str, Any]) -> dict[str, Any]:
+    """Return parameters that are active for the LightGBM fit.
+
+    LightGBM documents ``monotone_constraints_method`` as active only when a
+    monotone constraint vector is set.  In particular, LightGBM 4.7.0 can crash
+    when the advanced method is combined with interaction constraints but no
+    nonzero monotone vector, so keep the configured method in saved provenance
+    while omitting both inactive fit parameters here.
+    """
+
+    fit_parameters = dict(parameters)
+    constraints = fit_parameters.get("monotone_constraints")
+    has_constraints = isinstance(constraints, (list, tuple)) and any(
+        int(value or 0) != 0 for value in constraints
+    )
+    if not has_constraints:
+        fit_parameters.pop("monotone_constraints", None)
+        fit_parameters.pop("monotone_constraints_method", None)
+    return fit_parameters
 
 
 def emit_progress(progress_callback: ProgressCallback | None, progress: dict[str, Any]) -> None:
@@ -1931,6 +1957,7 @@ __all__ = [
     "lightgbm_progress_payload",
     "lightgbm_interaction_constraints",
     "lightgbm_pair_interaction_constraints",
+    "lightgbm_fit_parameters",
     "create_and_verify_interaction_group_models",
     "feature_config_with_mean_abs_shap",
     "normalise_feature_scenario",

@@ -578,11 +578,35 @@ COPY (
                     "columns": [
                         {"key": "rank", "label": "Rank"},
                         {"key": "feature", "label": "Feature"},
+                        {"key": "monotonicity", "label": "Monotonicity"},
                         {"key": "share", "label": "Share"},
                     ],
-                    "rows": [{"rank": 1, "feature": "AGE", "share": "100.0%"}],
+                    "rows": [
+                        {
+                            "rank": 1,
+                            "feature": "AGE",
+                            "monotonicity": "Increasing",
+                            "share": "60.0%",
+                        },
+                        {
+                            "rank": 2,
+                            "feature": "CLAIMS",
+                            "monotonicity": "None",
+                            "share": "30.0%",
+                        },
+                        {
+                            "rank": 3,
+                            "feature": "NCD",
+                            "monotonicity": "Decreasing",
+                            "share": "10.0%",
+                        },
+                    ],
                 },
-                parameters={"learning_rate": 0.1, "num_leaves": 3},
+                parameters={
+                    "learning_rate": 0.1,
+                    "monotone_constraints": [1, 0, -1],
+                    "num_leaves": 3,
+                },
                 evaluation_chart=evaluation_chart,
             )
 
@@ -594,6 +618,20 @@ COPY (
             self.assertIn('data-summary-section="evaluation"', document)
             self.assertIn("Mean absolute SHAP", document)
             self.assertIn("£100", document)
+            self.assertIn(
+                "2 of 3 features constrained (1 Increasing, 1 Decreasing)",
+                document,
+            )
+            self.assertNotIn("see Feature importance table", document)
+            self.assertNotIn("<td>[1, 0, -1]</td>", document)
+            payload_match = re.search(
+                r'<script id="lucidum-report-data" type="application/json">(.*?)</script>',
+                document,
+                re.DOTALL,
+            )
+            self.assertIsNotNone(payload_match)
+            payload = json.loads(payload_match.group(1))
+            self.assertEqual(payload["parameters"]["monotone_constraints"], [1, 0, -1])
             self.assertIn(".summary-table th { padding: 4px 12px;", document)
             self.assertIn(".summary-table td { padding: 4px 12px;", document)
             self.assertIn("function gbmEvaluationChartOption", document)

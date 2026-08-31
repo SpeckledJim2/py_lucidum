@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from .dataset import Dataset, ModelPredictionSource, ModelSourceBinding, ParquetArtifactMetadata
-from .features import load_features, resolve_features_path
+from .features import load_features, normalise_feature_monotonicity, resolve_features_path
 from .filters import load_saved_filters, resolve_filters_path
 from .kpis import load_kpis, resolve_kpis_path
 from .metrics import (
@@ -53,6 +53,7 @@ __all__ = [
     "is_numeric_kind",
     "json_number",
     "load_features",
+    "normalise_feature_monotonicity",
     "load_kpis",
     "load_saved_filters",
     "metric_relation_context",

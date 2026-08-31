@@ -95,6 +95,7 @@ REQUIRED_GBM_PARAMETER_FIELDS = {
     "metric",
     "tweedie_variance_power",
     "data_sample_strategy",
+    "monotone_constraints_method",
     "num_iterations",
     "learning_rate",
     "num_leaves",
@@ -360,7 +361,12 @@ def validate_gbm_model_folder(path: Path, model_id: str) -> None:
         missing_parameters = sorted(REQUIRED_GBM_PARAMETER_FIELDS - parameters.keys())
         if missing_parameters:
             errors.append("missing parameters: " + ", ".join(missing_parameters))
-        for field in ("objective", "metric", "data_sample_strategy"):
+        for field in (
+            "objective",
+            "metric",
+            "data_sample_strategy",
+            "monotone_constraints_method",
+        ):
             if field in parameters and (
                 not isinstance(parameters[field], str) or not parameters[field].strip()
             ):
@@ -381,6 +387,7 @@ def validate_gbm_model_folder(path: Path, model_id: str) -> None:
             "objective",
             "metric",
             "data_sample_strategy",
+            "monotone_constraints_method",
         }
         for field in sorted(integer_parameters & parameters.keys()):
             if not finite_number(parameters[field]) or not float(parameters[field]).is_integer():
@@ -409,9 +416,24 @@ def validate_gbm_model_folder(path: Path, model_id: str) -> None:
         for field in ("min_data_in_leaf", "early_stopping_rounds", "bagging_freq", "num_threads"):
             if field in parameters and finite_number(parameters[field]) and int(parameters[field]) < 0:
                 errors.append(f"parameter {field} must be non-negative")
+        monotone_method = parameters.get("monotone_constraints_method")
+        if monotone_method not in {"basic", "intermediate", "advanced"}:
+            errors.append(
+                "parameter monotone_constraints_method must be basic, intermediate, or advanced"
+            )
 
     if features is not None and not valid_feature_list(features):
         errors.append("features.json must contain a non-empty array of unique strings")
+    if parameters is not None and features is not None and "monotone_constraints" in parameters:
+        constraints = parameters["monotone_constraints"]
+        if (
+            not isinstance(constraints, list)
+            or len(constraints) != len(features)
+            or any(value not in {-1, 0, 1} for value in constraints)
+        ):
+            errors.append(
+                "parameter monotone_constraints must contain one -1, 0, or 1 per fitted feature"
+            )
 
     if errors:
         raise ValueError("GBM model folder is incomplete: " + "; ".join(errors))

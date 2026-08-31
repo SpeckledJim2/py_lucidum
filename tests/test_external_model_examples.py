@@ -174,7 +174,11 @@ def write_example_configs(
             "early_stopping_value": "test",
             "validation_value": "validation",
         },
-        "features": {"spec_path": feature_spec_path.name, "scenario_column": "report_demo"},
+        "features": {
+            "spec_path": feature_spec_path.name,
+            "scenario_column": "report_demo",
+            "use_monotonicity": True,
+        },
         "model": {"id": GBM_MODEL_ID, "label": "External integration GBM"},
         "training": {
             "num_boost_round": 16,
@@ -183,6 +187,7 @@ def write_example_configs(
             "parameters": {
                 "objective": "poisson",
                 "metric": "poisson",
+                "monotone_constraints_method": "advanced",
                 "learning_rate": 0.1,
                 "num_leaves": 3,
                 "min_data_in_leaf": 12,
@@ -725,6 +730,7 @@ class ExternalModelExampleTests(unittest.TestCase):
 
         self.assertEqual(external, internal)
         self.assertEqual(external["max_depth"], -1)
+        self.assertEqual(external["monotone_constraints_method"], "advanced")
         self.assertEqual(
             helpers.gbm_parameter_warnings(external),
             [
@@ -732,6 +738,161 @@ class ExternalModelExampleTests(unittest.TestCase):
                 "bagging_freq > 0 and bagging_fraction < 1"
             ],
         )
+
+    def test_external_gbm_fit_parameters_omit_only_inactive_monotonicity_settings(self) -> None:
+        helpers = load_model_helpers()
+        parameters = {
+            "objective": "poisson",
+            "monotone_constraints_method": "advanced",
+            "interaction_constraints": [[0, 1], [2]],
+        }
+
+        fit_parameters = helpers.lightgbm_fit_parameters(parameters)
+
+        self.assertNotIn("monotone_constraints_method", fit_parameters)
+        self.assertNotIn("monotone_constraints", fit_parameters)
+        self.assertEqual(fit_parameters["interaction_constraints"], [[0, 1], [2]])
+        self.assertEqual(parameters["monotone_constraints_method"], "advanced")
+
+        for method in ("basic", "intermediate", "advanced"):
+            with self.subTest(method=method):
+                constrained = helpers.lightgbm_fit_parameters(
+                    {
+                        **parameters,
+                        "monotone_constraints_method": method,
+                        "monotone_constraints": [1, 0, -1],
+                    }
+                )
+                self.assertEqual(constrained["monotone_constraints_method"], method)
+                self.assertEqual(constrained["monotone_constraints"], [1, 0, -1])
+
+    def test_external_gbm_monotonicity_switch_defaults_enabled_and_validates_boolean(self) -> None:
+        import yaml
+
+        helpers = load_model_helpers()
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            _, config_path, _ = write_example_configs(root, root / "dataset.parquet")
+            payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+            payload["features"].pop("use_monotonicity")
+            config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+            self.assertTrue(helpers.load_config(config_path, "gbm")["features"]["use_monotonicity"])
+
+            payload["features"]["use_monotonicity"] = False
+            config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+            self.assertFalse(helpers.load_config(config_path, "gbm")["features"]["use_monotonicity"])
+
+            payload["features"]["use_monotonicity"] = "false"
+            config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "features.use_monotonicity must be true or false"):
+                helpers.load_config(config_path, "gbm")
+
+    def test_external_gbm_derives_monotonicity_in_fitted_feature_order(self) -> None:
+        helpers = load_model_helpers()
+        with TemporaryDirectory() as tmp_dir:
+            spec_path = Path(tmp_dir) / "feature_spec.csv"
+            spec_path.write_text(
+                "Feature,Grouping,Monotonicity,scenario\n"
+                "Years,DRIVER,-1,feature\n"
+                "Age,DRIVER,INCREASING,feature\n"
+                "Claims,DRIVER,1,feature\n"
+                "Mileage,DRIVER,decreasing,feature\n",
+                encoding="utf-8",
+            )
+            names = ["Age", "Claims", "Mileage", "Years"]
+            kinds = {name: "numeric" for name in names}
+
+            self.assertEqual(
+                helpers.feature_monotonicity_constraints(
+                    spec_path,
+                    names,
+                    kinds,
+                    enabled=True,
+                    objective="poisson",
+                ),
+                [1, 1, -1, -1],
+            )
+            self.assertEqual(
+                helpers.feature_monotonicity_constraints(
+                    spec_path,
+                    names,
+                    kinds,
+                    enabled=False,
+                    objective="poisson",
+                ),
+                [0, 0, 0, 0],
+            )
+
+            absent_path = Path(tmp_dir) / "without_monotonicity.csv"
+            absent_path.write_text(
+                "Feature,Grouping,scenario\nAge,DRIVER,feature\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                helpers.feature_monotonicity_constraints(
+                    absent_path,
+                    ["Age"],
+                    {"Age": "numeric"},
+                    enabled=True,
+                    objective="poisson",
+                ),
+                [0],
+            )
+
+    def test_external_gbm_rejects_invalid_monotonicity_inputs_and_raw_vectors(self) -> None:
+        helpers = load_model_helpers()
+        for parameter_name in ("monotone_constraints", "monotone_constraint", "monotonic_cst", "mc"):
+            with self.subTest(parameter_name=parameter_name):
+                with self.assertRaisesRegex(ValueError, "Set monotonicity in the Feature Specification"):
+                    helpers.effective_gbm_parameters(
+                        {"parameters": {parameter_name: [1, 0, -1]}}
+                    )
+        with self.assertRaisesRegex(ValueError, "must be basic, intermediate, or advanced"):
+            helpers.effective_gbm_parameters(
+                {"parameters": {"monotone_constraints_method": "approximate"}}
+            )
+
+        with TemporaryDirectory() as tmp_dir:
+            spec_path = Path(tmp_dir) / "feature_spec.csv"
+            spec_path.write_text(
+                "Feature,Grouping,Monotonicity,scenario\nAge,DRIVER,sideways,feature\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "must be Increasing"):
+                helpers.feature_monotonicity_constraints(
+                    spec_path,
+                    ["Age"],
+                    {"Age": "numeric"},
+                    enabled=True,
+                    objective="poisson",
+                )
+
+            spec_path.write_text(
+                "Feature,Grouping,Monotonicity,scenario\nSegment,DRIVER,Increasing,feature\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "Segment must be numeric"):
+                helpers.feature_monotonicity_constraints(
+                    spec_path,
+                    ["Segment"],
+                    {"Segment": "categorical"},
+                    enabled=True,
+                    objective="poisson",
+                )
+
+            spec_path.write_text(
+                "Feature,Grouping,Monotonicity,scenario\nAge,DRIVER,Increasing,feature\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "not supported for objective multiclass"):
+                helpers.feature_monotonicity_constraints(
+                    spec_path,
+                    ["Age"],
+                    {"Age": "numeric"},
+                    enabled=True,
+                    objective="multiclass",
+                )
 
     def test_external_gbm_feature_kinds_come_from_duckdb_source_schema(self) -> None:
         helpers = load_model_helpers()
@@ -1025,6 +1186,7 @@ COPY (
 
             cases = (
                 ("missing max depth", "max_depth"),
+                ("missing monotone method", "monotone_constraints_method"),
                 ("missing manifest Gini", "gini_vl"),
                 ("missing training timing", r"timings\.training_seconds"),
                 ("missing feature list", "features.json"),
@@ -1077,6 +1239,9 @@ COPY (
 
                     if case == "missing max depth":
                         parameters.pop("max_depth")
+                        installer.write_json(source / "parameters.json", parameters)
+                    elif case == "missing monotone method":
+                        parameters.pop("monotone_constraints_method")
                         installer.write_json(source / "parameters.json", parameters)
                     elif case == "missing manifest Gini":
                         manifest.pop("gini_vl")
@@ -1341,9 +1506,9 @@ COPY (
         ]
         importance = {
             "rows": [
-                {"feature": "Beta", "importance": 3.0, "rank": 1},
+                {"feature": "Beta", "importance": 3.0, "rank": 1, "monotonicity": "Increasing"},
                 {"feature": "alpha", "importance": 1.0, "rank": 2},
-                {"feature": "Charlie", "importance": 1.0, "rank": 3},
+                {"feature": "Charlie", "importance": 1.0, "rank": 3, "monotonicity": "Decreasing"},
                 {"feature": "Zero", "importance": 0.0, "rank": 4},
             ]
         }
@@ -1363,6 +1528,22 @@ COPY (
         self.assertEqual(prepared[2]["title"], "Charlie (Rank 3, Importance 20.0%)")
         self.assertEqual(prepared[3]["title"], "Zero (Rank 4, Importance 0.0%)")
         self.assertEqual(prepared[4]["title"], "missing A (Not in model)")
+        shap_prepared = helpers.features_for_report(
+            features,
+            {
+                "show_feature_importance": True,
+                "sort_by_feature_importance": True,
+                "chart_content": "shap_only",
+            },
+        )
+        self.assertEqual(
+            shap_prepared[0]["title"],
+            "Beta (Rank 1, Importance 60.0%, Increasing)",
+        )
+        self.assertEqual(
+            shap_prepared[2]["title"],
+            "Charlie (Rank 3, Importance 20.0%, Decreasing)",
+        )
         sorted_without_titles = helpers.features_for_report(
             features,
             {"show_feature_importance": False, "sort_by_feature_importance": True},
@@ -1396,7 +1577,11 @@ COPY (
             "named-model",
         )
         self.assertEqual(summary_importance["measure"], "LightGBM gain")
-        self.assertEqual(summary_importance["columns"][2]["label"], "Gain")
+        self.assertEqual(
+            [column["label"] for column in summary_importance["columns"]],
+            ["Rank", "Feature", "Monotonicity", "Gain", "Share"],
+        )
+        self.assertEqual(summary_importance["rows"][0]["monotonicity"], "Increasing")
         self.assertEqual(summary_importance["rows"][0]["importance"], "3")
         self.assertEqual(
             [row["share"] for row in summary_importance["rows"]],
@@ -1412,7 +1597,11 @@ COPY (
             },
             "named-model",
         )
-        self.assertEqual(shap_summary["columns"][2]["label"], "SHAP")
+        self.assertEqual(shap_summary["columns"][3]["label"], "SHAP")
+        self.assertEqual(
+            [row["monotonicity"] for row in shap_summary["rows"]],
+            ["None", "None"],
+        )
         self.assertEqual(
             [row["importance"] for row in shap_summary["rows"]],
             ["20.3%", "17.8%"],
@@ -1496,6 +1685,7 @@ COPY (
                     {"format": "currency", "decimals": 0},
                     best_iteration=2,
                     metric="l2",
+                    split_ginis={"training": 0.81234, "test": -0.125, "validation": None},
                 )
                 average = helpers._gbm_performance(
                     dataset,
@@ -1522,6 +1712,14 @@ COPY (
             self.assertEqual(weighted["rows"][0]["weight"], "4")
             self.assertEqual(weighted["rows"][0]["actual"], "£100")
             self.assertEqual(weighted["rows"][0]["prediction"], "£110")
+            self.assertEqual(
+                [row["gini"] for row in weighted["rows"]],
+                ["0.8123", "-0.1250", "—"],
+            )
+            self.assertIn(
+                {"key": "gini", "label": "Normalized Gini"},
+                weighted["columns"],
+            )
             self.assertEqual(average["rows"][0]["rows"], "3")
             self.assertEqual(average["rows"][0]["actual"], "£466")
             self.assertEqual(average["rows"][2]["metric"], "—")
@@ -1744,6 +1942,7 @@ FROM read_parquet({sql_literal(str(glm_dir / 'predictions.parquet'))})
             config["training"]["num_boost_round"] = 4
             config["training"]["early_stopping_rounds"] = 2
             config["training"]["shap_rows"] = 0
+            config["features"]["use_monotonicity"] = False
             gbm_config_path.write_text(
                 yaml.safe_dump(config, sort_keys=False),
                 encoding="utf-8",
@@ -1762,7 +1961,100 @@ FROM read_parquet({sql_literal(str(glm_dir / 'predictions.parquet'))})
             self.assertEqual(manifest["shap_rows"], 0)
             self.assertFalse((model_dir / "shap_values.parquet").exists())
             self.assertFalse((model_dir / "shap_summary.parquet").exists())
+            parameters = json.loads((model_dir / "parameters.json").read_text(encoding="utf-8"))
+            self.assertEqual(parameters["monotone_constraints_method"], "advanced")
+            self.assertNotIn("monotone_constraints", parameters)
             load_lucidum_installer().validate_gbm_model_folder(model_dir, GBM_MODEL_ID)
+
+    @unittest.skipUnless(HAS_EXAMPLE_DEPENDENCIES, "external-model example dependencies are not installed")
+    def test_external_gbm_without_monotonicity_matches_in_app_build(self) -> None:
+        import yaml
+
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            dataset_path = root / "motor_fixture.parquet"
+            write_reduced_dataset(
+                ROOT / "datasets" / "motor_premiums.parquet",
+                dataset_path,
+            )
+            _, gbm_config_path, _ = write_example_configs(
+                root,
+                dataset_path,
+                install_in_lucidum=False,
+            )
+            config = yaml.safe_load(gbm_config_path.read_text(encoding="utf-8"))
+            config["features"]["use_monotonicity"] = False
+            config["training"]["num_boost_round"] = 4
+            config["training"]["early_stopping_rounds"] = 2
+            config["training"]["shap_rows"] = 0
+            gbm_config_path.write_text(
+                yaml.safe_dump(config, sort_keys=False),
+                encoding="utf-8",
+            )
+
+            run_builder(GBM_SCRIPT, gbm_config_path)
+            external_dir = root / "model_results" / "gbm" / GBM_MODEL_ID
+            feature_names = json.loads((external_dir / "features.json").read_text(encoding="utf-8"))
+            dataset = Dataset(dataset_path)
+            in_app_store = GbmModelStore(
+                dataset_path,
+                dataset=dataset,
+                model_root=root / "in_app_models",
+            )
+            training = config["training"]
+            in_app_result = train_gbm_model(
+                dataset,
+                in_app_store,
+                {
+                    "label": config["model"]["label"],
+                    "training_mode": "normal",
+                    "response": config["dataset"]["response_numerator"],
+                    "offset": config["dataset"]["denominator"],
+                    "sample_column": config["dataset"]["sample_column"],
+                    "features": [
+                        {"name": name, "include": True, "monotonicity": ""}
+                        for name in feature_names
+                    ],
+                    "parameters": {
+                        **training["parameters"],
+                        "num_iterations": training["num_boost_round"],
+                        "early_stopping_rounds": training["early_stopping_rounds"],
+                    },
+                    "shap_rows": 0,
+                    "feature_scenario": {
+                        "name": config["features"]["scenario_column"],
+                        "features": feature_names,
+                    },
+                },
+                activate=False,
+            )
+            in_app_dir = in_app_store.model_dir(in_app_result["model_id"])
+
+            external_parameters = json.loads(
+                (external_dir / "parameters.json").read_text(encoding="utf-8")
+            )
+            in_app_parameters = json.loads(
+                (in_app_dir / "parameters.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(external_parameters, in_app_parameters)
+            self.assertEqual(external_parameters["monotone_constraints_method"], "advanced")
+            self.assertNotIn("monotone_constraints", external_parameters)
+            self.assertEqual(
+                (external_dir / "model.txt").read_bytes(),
+                (in_app_dir / "model.txt").read_bytes(),
+            )
+            for artifact in (
+                "evaluation.parquet",
+                "feature_config.parquet",
+                "predictions.parquet",
+                "tree_table.parquet",
+            ):
+                with self.subTest(artifact=artifact):
+                    assert_parquet_tables_identical(
+                        self,
+                        external_dir / artifact,
+                        in_app_dir / artifact,
+                    )
 
     @unittest.skipUnless(HAS_EXAMPLE_DEPENDENCIES, "external-model example dependencies are not installed")
     def test_external_gbm_json_and_deterministic_results_match_in_app_build(self) -> None:
@@ -1776,7 +2068,7 @@ FROM read_parquet({sql_literal(str(glm_dir / 'predictions.parquet'))})
                 dataset_path,
             )
             self.assertEqual(row_count, 1050)
-            _, gbm_config_path, _ = write_example_configs(
+            _, gbm_config_path, feature_spec_path = write_example_configs(
                 root,
                 dataset_path,
                 install_in_lucidum=False,
@@ -1787,6 +2079,14 @@ FROM read_parquet({sql_literal(str(glm_dir / 'predictions.parquet'))})
             external_dir = root / "model_results" / "gbm" / GBM_MODEL_ID
             external_features = json.loads(
                 (external_dir / "features.json").read_text(encoding="utf-8")
+            )
+            helpers = load_model_helpers()
+            monotone_constraints = helpers.feature_monotonicity_constraints(
+                feature_spec_path,
+                external_features,
+                helpers.dataset_column_kinds(dataset_path),
+                enabled=config["features"]["use_monotonicity"],
+                objective=config["training"]["parameters"]["objective"],
             )
 
             dataset = Dataset(dataset_path)
@@ -1806,8 +2106,12 @@ FROM read_parquet({sql_literal(str(glm_dir / 'predictions.parquet'))})
                     "offset": config["dataset"]["denominator"],
                     "sample_column": config["dataset"]["sample_column"],
                     "features": [
-                        {"name": name, "include": True, "monotonicity": ""}
-                        for name in external_features
+                        {
+                            "name": name,
+                            "include": True,
+                            "monotonicity": monotone_constraints[index],
+                        }
+                        for index, name in enumerate(external_features)
                     ],
                     "parameters": {
                         **training["parameters"],
@@ -1832,9 +2136,28 @@ FROM read_parquet({sql_literal(str(glm_dir / 'predictions.parquet'))})
                 (in_app_dir / "parameters.json").read_text(encoding="utf-8")
             )
             self.assertEqual(external_parameters, in_app_parameters)
+            self.assertEqual(external_parameters["monotone_constraints_method"], "advanced")
+            self.assertEqual(external_parameters["monotone_constraints"], monotone_constraints)
             self.assertEqual(
                 json.loads((external_dir / "features.json").read_text(encoding="utf-8")),
                 json.loads((in_app_dir / "features.json").read_text(encoding="utf-8")),
+            )
+            feature_config = pd.read_parquet(external_dir / "feature_config.parquet")
+            constrained_features = {
+                str(row["name"]): str(row["monotonicity"])
+                for row in feature_config.to_dict("records")
+                if str(row["monotonicity"] or "").strip()
+            }
+            self.assertEqual(
+                constrained_features,
+                {
+                    "POSTCODE_CATEGORY": "Increasing",
+                    "VEHICLE_CATEGORY": "Increasing",
+                    "PRIOR_CLAIMS": "Increasing",
+                    "NCD_YEARS": "Decreasing",
+                    "YEARS_LICENCE_HELD": "Decreasing",
+                    "YEARS_OWNED_VEHICLE": "Decreasing",
+                },
             )
 
             external_manifest = json.loads(
@@ -2240,11 +2563,43 @@ FROM read_parquet({sql_literal(str(glm_dir / 'coefficients.parquet'))})
                 [row["sample"] for row in summary_report["performance"]["rows"]],
                 ["Training", "Test", "Validation"],
             )
+            gbm_manifest = json.loads((gbm_dir / "manifest.json").read_text(encoding="utf-8"))
+            self.assertIn(
+                {"key": "gini", "label": "Normalized Gini"},
+                summary_report["performance"]["columns"],
+            )
+            self.assertEqual(
+                [row["gini"] for row in summary_report["performance"]["rows"]],
+                [
+                    f"{gbm_manifest['gini_tr']:.4f}",
+                    f"{gbm_manifest['gini_te']:.4f}",
+                    f"{gbm_manifest['gini_vl']:.4f}",
+                ],
+            )
             self.assertTrue(
                 all(row["actual"].startswith("£") for row in summary_report["performance"]["rows"])
             )
             self.assertNotEqual(summary_report["performance"]["rows"][2]["metric"], "—")
             self.assertEqual(summary_report["feature_importance"]["measure"], "Mean absolute SHAP")
+            self.assertEqual(
+                [column["label"] for column in summary_report["feature_importance"]["columns"]],
+                ["Rank", "Feature", "Monotonicity", "SHAP", "Share"],
+            )
+            summary_monotonicities = {
+                row["feature"]: row["monotonicity"]
+                for row in summary_report["feature_importance"]["rows"]
+            }
+            self.assertEqual(
+                {name: value for name, value in summary_monotonicities.items() if value != "None"},
+                {
+                    "POSTCODE_CATEGORY": "Increasing",
+                    "VEHICLE_CATEGORY": "Increasing",
+                    "PRIOR_CLAIMS": "Increasing",
+                    "NCD_YEARS": "Decreasing",
+                    "YEARS_LICENCE_HELD": "Decreasing",
+                    "YEARS_OWNED_VEHICLE": "Decreasing",
+                },
+            )
             self.assertEqual(
                 [row["rank"] for row in summary_report["feature_importance"]["rows"]],
                 list(range(1, len(summary_report["feature_importance"]["rows"]) + 1)),
@@ -2346,6 +2701,15 @@ FROM read_parquet({sql_literal(str(glm_dir / 'coefficients.parquet'))})
                 )
                 for feature in scenario_order
             }
+            expected_gbm_shap_titles = {
+                feature: (
+                    expected_gbm_titles[feature][:-1]
+                    + f", {gbm_rows[feature]['monotonicity']})"
+                    if feature in gbm_rows and gbm_rows[feature].get("monotonicity")
+                    else expected_gbm_titles[feature]
+                )
+                for feature in scenario_order
+            }
             self.assertEqual(
                 [chart["title"] for chart in glm_report["charts"]],
                 [expected_glm_titles[feature] for feature in scenario_order],
@@ -2369,7 +2733,7 @@ FROM read_parquet({sql_literal(str(glm_dir / 'coefficients.parquet'))})
             )
             self.assertEqual(
                 [chart["title"] for chart in shap_report["charts"]],
-                [expected_gbm_titles[feature] for feature in shap_order],
+                [expected_gbm_shap_titles[feature] for feature in shap_order],
             )
             for chart_spec in glm_report["charts"]:
                 self.assertEqual(chart_spec["metadata"]["sample_values"], ["validation"])

@@ -12,6 +12,7 @@ const SPEC_KINDS = [
 ];
 
 const FALLBACK_FEATURE_METADATA_COLUMNS = [
+  "Monotonicity",
   "Base",
   "min",
   "max",
@@ -31,6 +32,7 @@ const FIELD_TITLES = {
   feature: {
     Feature: "Feature",
     Grouping: "Grouping",
+    Monotonicity: "Monotonicity",
     Base: "Base",
     min: "min",
     max: "max",

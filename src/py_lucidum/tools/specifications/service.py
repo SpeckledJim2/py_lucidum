@@ -24,7 +24,13 @@ from py_lucidum.core.chart_controls import (
     CHART_CONTROL_EDITOR_RULES,
     validate_chart_control_value,
 )
-from py_lucidum.core.features import FEATURE_SPEC_METADATA_COLUMNS, FEATURE_SPEC_REQUIRED_COLUMNS
+from py_lucidum.core.features import (
+    FEATURE_SPEC_METADATA_COLUMNS,
+    FEATURE_SPEC_MONOTONICITY_COLUMN,
+    FEATURE_SPEC_MONOTONICITY_VALUES,
+    FEATURE_SPEC_REQUIRED_COLUMNS,
+    normalise_feature_monotonicity,
+)
 from py_lucidum.core.kpis import KPI_SPEC_COLUMNS, normalise_kpi_denominator
 
 
@@ -225,6 +231,10 @@ def read_spec_file(state: Any, kind: str, dataset: Dataset | None = None) -> dic
 
 def feature_spec_editor_schema() -> dict[str, Any]:
     column_rules = {
+        FEATURE_SPEC_MONOTONICITY_COLUMN: {
+            "editor": "list",
+            "values": list(FEATURE_SPEC_MONOTONICITY_VALUES),
+        },
         "min": {"editor": "number"},
         "max": {"editor": "number"},
         "banding": {"editor": "number", "minimum": 0},
@@ -433,6 +443,7 @@ def validate_feature_spec(
             + ", ".join(misplaced_metadata)
         )
         return
+    dataset_columns = dataset.column_map()
     for row_number, row in nonblank_rows(rows, columns):
         feature = str(row.get("Feature") or "").strip()
         if not feature:
@@ -440,6 +451,35 @@ def validate_feature_spec(
             errors.append(message)
             add_row_issue(row_issues, row_number, "error", message)
             continue
+        monotonicity = str(row.get(FEATURE_SPEC_MONOTONICITY_COLUMN) or "").strip()
+        if monotonicity and FEATURE_SPEC_MONOTONICITY_COLUMN in columns:
+            try:
+                normalise_feature_monotonicity(monotonicity)
+            except ValueError as exc:
+                message = f"feature_spec.csv row {row_number} {FEATURE_SPEC_MONOTONICITY_COLUMN}: {exc}"
+                errors.append(message)
+                add_row_issue(
+                    row_issues,
+                    row_number,
+                    "error",
+                    message,
+                    column=FEATURE_SPEC_MONOTONICITY_COLUMN,
+                )
+            else:
+                source_column = dataset_columns.get(feature)
+                if source_column is not None and not is_numeric_kind(source_column.kind):
+                    message = (
+                        f"feature_spec.csv row {row_number} {FEATURE_SPEC_MONOTONICITY_COLUMN} "
+                        f"requires a numeric feature: {feature}"
+                    )
+                    errors.append(message)
+                    add_row_issue(
+                        row_issues,
+                        row_number,
+                        "error",
+                        message,
+                        column=FEATURE_SPEC_MONOTONICITY_COLUMN,
+                    )
         for column in ("min", "max", "banding"):
             value = str(row.get(column) or "").strip()
             if not value or column not in columns:

@@ -1,20 +1,20 @@
-Feature,Grouping,Base,min,max,banding,chart_banding,chart_quantiles,chart_low_weights,chart_missings,chart_labels,chart_sort,chart_transform,chart_sigma,chart_date_bucket,chart_empty_periods,scenario1,scenario2,scenario3,report_demo
-ANNUAL_MILEAGE,VEHICLE,5000,1000,30000,1000,2500,0,0.1%,show,none,alpha,none,0,none,show,feature,feature,feature,feature
-CAR_VALUE,VEHICLE,1000,1000,85000,1000,,,,,,,,,,,feature,feature,,feature
-DRIVER_AGE,DRIVER,40,17,96,1,5,0,0.1%,show,none,alpha,none,0,none,show,feature,feature,feature,feature
-FUEL_TYPE,VEHICLE,Petrol,,,,0,0,0,show,none,alpha,none,0,none,show,,feature,feature,feature
-LATITUDE,POSTCODE,52.5,50,60.5,0.5,,,,,,,,,,,,feature,feature,
-LICENCE_TYPE,DRIVER,Full UK,,,,0,0,0,show,none,alpha,none,0,none,show,feature,feature,,feature
-LONGITUDE,POSTCODE,-1.5,-7.5,2,0.5,,,,,,,,,,,,feature,feature,
-MAKE,VEHICLE,FORD,,,,0,0,0,show,none,expected,none,0,none,show,,feature,,
-NCD_YEARS,DRIVER,10,0,20,1,,0,0.1%,show,none,alpha,none,0,none,show,feature,,feature,feature
-OVERNIGHT_LOCATION,POLICY,Driveway,,,,,,,,,,,,,,feature,feature,feature,feature
-POSTCODE_AREA,POSTCODE,B,,,,,,,,,expected,,,,,,feature,feature,
-POSTCODE_CATEGORY,POSTCODE,10,1,50,1,,0,0.1%,show,none,alpha,none,0,none,show,feature,feature,feature,feature
-POSTCODE_SECTOR,POSTCODE,LE5 1,,,,0,0,0,show,none,alpha,none,0,none,show,,feature,,
-PRIOR_CLAIMS,DRIVER,0,0,2,1,,,,,,,,,,,feature,,feature,feature
-VEHICLE_AGE,VEHICLE,10,0,20,1,,,,,,,,,,,feature,feature,feature,feature
-VEHICLE_CATEGORY,VEHICLE,10,1,30,1,,,,,,,,,,,feature,,feature,feature
-VEHICLE_USAGE,VEHICLE,Social only,,,,,0,0.1%,show,none,volume,none,0,none,show,feature,feature,feature,feature
-YEARS_LICENCE_HELD,DRIVER,20,0,60,1,,,,,,,,,,,,feature,feature,feature
-YEARS_OWNED_VEHICLE,VEHICLE,0,0,20,1,,,,,,,,,,,feature,,feature,feature
+Feature,Grouping,Monotonicity,Base,min,max,banding,chart_banding,chart_quantiles,chart_low_weights,chart_missings,chart_labels,chart_sort,chart_transform,chart_sigma,chart_date_bucket,chart_empty_periods,scenario1,scenario2,scenario3,report_demo
+ANNUAL_MILEAGE,VEHICLE,,5000,1000,30000,1000,2500,0,0.1%,show,none,alpha,none,0,none,show,feature,feature,feature,feature
+CAR_VALUE,VEHICLE,,1000,1000,85000,1000,,,,,,,,,,,feature,feature,,feature
+DRIVER_AGE,DRIVER,,40,17,96,1,5,0,0.1%,show,none,alpha,none,0,none,show,feature,feature,feature,feature
+FUEL_TYPE,VEHICLE,,Petrol,,,,0,0,0,show,none,alpha,none,0,none,show,,feature,feature,feature
+LATITUDE,POSTCODE,,52.5,50,60.5,0.5,,,,,,,,,,,,feature,feature,
+LICENCE_TYPE,DRIVER,,Full UK,,,,0,0,0,show,none,alpha,none,0,none,show,feature,feature,,feature
+LONGITUDE,POSTCODE,,-1.5,-7.5,2,0.5,,,,,,,,,,,,feature,feature,
+MAKE,VEHICLE,,FORD,,,,0,0,0,show,none,expected,none,0,none,show,,feature,,
+NCD_YEARS,DRIVER,Decreasing,10,0,20,1,,0,0.1%,show,none,alpha,none,0,none,show,feature,,feature,feature
+OVERNIGHT_LOCATION,POLICY,,Driveway,,,,,,,,,,,,,,feature,feature,feature,feature
+POSTCODE_AREA,POSTCODE,,B,,,,,,,,,expected,,,,,,feature,feature,
+POSTCODE_CATEGORY,POSTCODE,Increasing,10,1,50,1,,0,0.1%,show,none,alpha,none,0,none,show,feature,feature,feature,feature
+POSTCODE_SECTOR,POSTCODE,,LE5 1,,,,0,0,0,show,none,alpha,none,0,none,show,,feature,,
+PRIOR_CLAIMS,DRIVER,Increasing,0,0,2,1,,,,,,,,,,,feature,,feature,feature
+VEHICLE_AGE,VEHICLE,,10,0,20,1,,,,,,,,,,,feature,feature,feature,feature
+VEHICLE_CATEGORY,VEHICLE,Increasing,10,1,30,1,,,,,,,,,,,feature,,feature,feature
+VEHICLE_USAGE,VEHICLE,,Social only,,,,,0,0.1%,show,none,volume,none,0,none,show,feature,feature,feature,feature
+YEARS_LICENCE_HELD,DRIVER,Decreasing,20,0,60,1,,,,,,,,,,,,feature,feature,feature
+YEARS_OWNED_VEHICLE,VEHICLE,Decreasing,0,0,20,1,,,,,,,,,,,feature,,feature,feature

@@ -38,6 +38,11 @@ const GBM_PARAMETER_OPTIONS = {
     "bagging",
     "goss",
   ],
+  monotone_constraints_method: [
+    "advanced",
+    "basic",
+    "intermediate",
+  ],
 };
 
 const GBM_FEATURE_MIN_WIDTH = 360;

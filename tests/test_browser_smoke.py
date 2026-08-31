@@ -818,6 +818,19 @@ output:
                                 all("Importance" in heading or "Not in model" in heading for heading in chart_headings),
                                 chart_headings,
                             )
+                            if report_path.name.endswith("all_rows_rebased_shap.html"):
+                                self.assertIn(
+                                    "POSTCODE_CATEGORY",
+                                    "\n".join(chart_headings),
+                                )
+                                self.assertTrue(
+                                    any(
+                                        heading.startswith("POSTCODE_CATEGORY ")
+                                        and heading.endswith(", Increasing)")
+                                        for heading in chart_headings
+                                    ),
+                                    chart_headings,
+                                )
                             if first_is_ranked:
                                 visible_ranks = [
                                     int(match.group(1))
@@ -948,14 +961,44 @@ output:
                                 for value in page.locator(".performance-table tbody tr td:nth-child(3)").all_inner_texts()
                             )
                         )
+                        metric_column = page.locator(
+                            '.performance-table thead th:has-text("l2 metric")'
+                        )
+                        self.assertEqual(metric_column.count(), 1)
+                        metric_index = metric_column.evaluate(
+                            "element => Array.from(element.parentElement.children).indexOf(element) + 1"
+                        )
                         self.assertNotEqual(
-                            performance_rows.nth(2).locator("td:last-child").inner_text(),
+                            performance_rows.nth(2).locator(f"td:nth-child({metric_index})").inner_text(),
                             "—",
+                        )
+                        gini_column = page.locator(
+                            '.performance-table thead th:has-text("Normalized Gini")'
+                        )
+                        self.assertEqual(gini_column.count(), 1)
+                        gini_index = gini_column.evaluate(
+                            "element => Array.from(element.parentElement.children).indexOf(element) + 1"
+                        )
+                        gini_values = page.locator(
+                            f".performance-table tbody tr td:nth-child({gini_index})"
+                        ).all_inner_texts()
+                        self.assertTrue(
+                            all(re.fullmatch(r"-?\d+\.\d{4}", value) for value in gini_values),
+                            gini_values,
                         )
                         self.assertEqual(
                             page.locator('[data-summary-section="feature-importance"] .section-detail').inner_text(),
                             "Importance measure: Mean absolute SHAP",
                         )
+                        self.assertEqual(
+                            page.locator(".importance-table thead th").all_inner_texts(),
+                            ["RANK", "FEATURE", "MONOTONICITY", "SHAP", "SHARE"],
+                        )
+                        monotonicities = page.locator(
+                            ".importance-table tbody tr td:nth-child(3)"
+                        ).all_inner_texts()
+                        self.assertIn("Increasing", monotonicities)
+                        self.assertIn("Decreasing", monotonicities)
                         self.assertIn(
                             "learning_rate",
                             page.locator(".parameter-table").inner_text(),
@@ -14471,10 +14514,10 @@ COPY (
             )
             features_path = tmp_path / "feature_spec.csv"
             features_path.write_text(
-                "Feature,Grouping,scenario1\n"
-                "Age,DRIVER,feature\n"
-                "Segment,VEHICLE,feature\n"
-                "PostcodeArea,DRIVER,\n",
+                "Feature,Grouping,Monotonicity,scenario1\n"
+                "Age,DRIVER,Decreasing,feature\n"
+                "Segment,VEHICLE,,feature\n"
+                "PostcodeArea,DRIVER,,\n",
                 encoding="utf-8",
             )
             store = GbmModelStore(data_path)
@@ -32714,6 +32757,7 @@ COPY (
                 "metric",
                 "tweedie_variance_power",
                 "data_sample_strategy",
+                "monotone_constraints_method",
                 "num_iterations",
                 "learning_rate",
                 "num_leaves",
@@ -32740,6 +32784,15 @@ COPY (
                 names = current_parameter_names()
                 self.assertEqual(names[:len(core_parameter_names)], core_parameter_names)
                 return names
+
+            def feature_monotonicity(name: str) -> str:
+                return page.evaluate(
+                    """
+                    (featureName) => (window.Tabulator?.findTable?.("#gbmFeatureGrid")?.[0]?.getData?.() || [])
+                      .find((feature) => feature.name === featureName)?.monotonicity || ""
+                    """,
+                    name,
+                )
 
             def track_gbm_request(request: object) -> None:
                 nonlocal shap_plot_requests, stacked_shap_requests
@@ -32923,6 +32976,16 @@ COPY (
                     timeout=10_000,
                 )
                 initial_parameter_names = assert_core_parameter_order()
+                self.assertEqual(feature_monotonicity("Age"), "Increasing")
+                self.assertEqual(
+                    page.evaluate(
+                        """
+                        () => (window.Tabulator?.findTable?.("#gbmParameterGrid")?.[0]?.getData?.() || [])
+                          .find((parameter) => parameter.name === "monotone_constraints_method")?.value
+                        """
+                    ),
+                    "advanced",
+                )
                 light_badge_state = gbm_model_badge_state()
                 self.assertEqual(light_badge_state["text"], "4")
                 self.assertFalse(light_badge_state["hidden"])
@@ -33832,6 +33895,7 @@ COPY (
                 choose_feature_scenario("scenario1")
                 assert_feature_heading_matches_checked(2)
                 self.assertEqual(feature_scenario_state()["value"], "scenario1")
+                self.assertEqual(feature_monotonicity("Age"), "Increasing")
                 page.locator("#gbmClearFeaturesBtn").click()
                 assert_feature_heading_matches_checked(0)
                 self.assertEqual(feature_scenario_state()["value"], "")

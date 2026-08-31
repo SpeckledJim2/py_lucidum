@@ -10,6 +10,7 @@ dataset:
 features:
   spec_path: ../specs/feature_spec.csv
   scenario_column: report_demo
+  use_monotonicity: true
 
 model:
   id: EXTERNAL_BUILD-config-gbm
@@ -22,6 +23,7 @@ training:
   parameters:
     objective: gamma
     metric: mape
+    monotone_constraints_method: advanced
     learning_rate: 0.1
     num_leaves: 5
     min_data_in_leaf: 40

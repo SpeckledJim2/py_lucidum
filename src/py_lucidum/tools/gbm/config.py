@@ -16,6 +16,8 @@ from .validation import (
     GBM_OBJECTIVES,
     INIT_SCORE_NONE,
     INIT_SCORE_PARAMETER,
+    MONOTONE_CONSTRAINT_METHODS,
+    MONOTONE_CONSTRAINT_PARAMETER_NAMES,
     OFFSET_COLUMN,
     RESPONSE_COLUMN,
     default_parameters,
@@ -141,7 +143,7 @@ WHERE feature IS NOT NULL
                 "training_mode",
                 "init_score_metadata",
                 "interaction_constraints",
-            }:
+            } | MONOTONE_CONSTRAINT_PARAMETER_NAMES:
                 continue
             if text_name not in seen:
                 rows.append({"name": text_name, "value": value, "important": False})
@@ -180,6 +182,18 @@ WHERE feature IS NOT NULL
             str(row.get("feature")): str(row.get("base") or "").strip()
             for row in rows
             if isinstance(row, dict) and row.get("feature") and str(row.get("base") or "").strip()
+        }
+
+    def feature_monotonicities(self) -> dict[str, str]:
+        rows = self.feature_spec_payload().get("rows", [])
+        if not isinstance(rows, list):
+            return {}
+        return {
+            str(row.get("feature")): str(row.get("monotonicity") or "").strip()
+            for row in rows
+            if isinstance(row, dict)
+            and row.get("feature")
+            and str(row.get("monotonicity") or "").strip()
         }
 
     def feature_interaction_groupings(self, current_groupings: dict[str, str] | None = None) -> list[str]:
@@ -425,6 +439,7 @@ WHERE feature IS NOT NULL
         model_features = self.active_feature_config(active_model_id)
         scenarios = self.feature_scenarios()
         current_feature_groupings = self.feature_groupings()
+        current_feature_monotonicities = self.feature_monotonicities()
         interaction_groupings = self.feature_interaction_groupings(current_feature_groupings)
         with self.dataset.lock:
             sample = sample_metadata(self.dataset, self.store.generated_sample_path)
@@ -435,6 +450,7 @@ WHERE feature IS NOT NULL
                 model_features=model_features,
                 reserved_names=sample_reserved,
                 feature_groupings=current_feature_groupings,
+                feature_monotonicities=current_feature_monotonicities,
             )
             sample_column = detect_sample_column(self.dataset)
             can_use_ebm = ebm_available(self.dataset, generated_sample_path=self.store.generated_sample_path)
@@ -459,6 +475,7 @@ WHERE feature IS NOT NULL
                 "objective": sorted(GBM_OBJECTIVES),
                 "metric": sorted(GBM_METRICS),
                 "data_sample_strategy": list(DATA_SAMPLE_STRATEGIES),
+                "monotone_constraints_method": list(MONOTONE_CONSTRAINT_METHODS),
             },
             "features": features,
             "feature_scenarios": scenarios,

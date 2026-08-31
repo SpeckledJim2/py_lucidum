@@ -187,8 +187,8 @@ screen, or outside Lucidum with a text editor or spreadsheet application such as
 - **KPI Specification** (default `kpi_spec.csv`) defines named Numerator and Denominator
   combinations together with their display format and decimal places.
 - **Feature Specification** (default `feature_spec.csv`) organises features into groups and
-  can define modelling scenarios, interaction groups, chart bases, GLM tabulation
-  grids, and defaults for reproducible external reports.
+  can define modelling scenarios, GBM monotonicity and interaction groups, chart
+  bases, GLM tabulation grids, and defaults for reproducible external reports.
 
 These filenames are defaults rather than requirements. Use `--filters`, `--kpis`,
 and `--features` to select differently named files when launching Lucidum.
@@ -427,8 +427,10 @@ prominently in the report header.
 The saved results can remain independent of Lucidum or be copied into the matching
 dataset workspace for review in the application without retraining.
 
-See [Build models outside Lucidum, then report or view them](https://github.com/SpeckledJim2/py_lucidum/blob/main/docs/external-model-builds-and-reports.md)
-for the complete workflows and YAML reference.
+See the [external modelling quick start](https://github.com/SpeckledJim2/py_lucidum/blob/main/docs/external-model-builds-and-reports.md#external-modelling-quick-start-for-data-scientists)
+for the practical GLM/GBM build-and-open sequence, or
+[Build models outside Lucidum, then report or view them](https://github.com/SpeckledJim2/py_lucidum/blob/main/docs/external-model-builds-and-reports.md)
+for the complete GLM/GBM workflows and YAML reference.
 
 ## Documentation
 

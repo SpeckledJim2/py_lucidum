@@ -4777,6 +4777,9 @@
           .slice(0, 2)
           .length;
         const selectionDropped = expectedSelectionsSnapshot().length < requestedExpectedCount;
+        const droppedSelectionMessage = comparisonDropped || selectionDropped
+          ? "Favourite model selections that do not match the restored Numerator and Denominator were removed."
+          : "";
         if (comparisonDropped || selectionDropped) state.activeLineBarFavouriteId = "";
         syncKpiSelectionFromMetrics();
         syncLineBarXFallback();
@@ -4797,6 +4800,7 @@
           } else {
             await refreshLineBar({ force: true });
           }
+          if (droppedSelectionMessage) setStatus(droppedSelectionMessage, true);
           await Promise.all([
             refreshMetricSummary({ force: true }),
             refreshFilterRowCountMeta(),
@@ -4805,9 +4809,7 @@
           lineBarTool.setView(state.view, { refresh: false });
         }
         return {
-          message: comparisonDropped || selectionDropped
-            ? "Favourite model selections that do not match the restored Numerator and Denominator were removed."
-            : "",
+          message: droppedSelectionMessage,
         };
       }
 

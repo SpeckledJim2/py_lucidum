@@ -29,8 +29,8 @@ from py_lucidum.tools.gbm import tabulation as gbm_tabulation
 from py_lucidum.tools.gbm.store import GbmModelStore, GbmSourceProvider
 from py_lucidum.tools.gbm.tabulation import build_gbm_tabulations
 from py_lucidum.tools.gbm.trees import ebm_gain_summary, tree_detail, tree_summary
-from py_lucidum.tools.gbm.training import MissingGbmDependency, append_holdout_evaluation, evaluation_dataframe, feature_config_with_mean_abs_shap, gbm_dependencies, gbm_training_dependencies, lightgbm_interaction_constraints, lightgbm_pair_interaction_constraints, lightgbm_progress_payload, normalise_feature_scenario, polars_feature_frame, predict_response_values, shap_dataframes, shap_interaction_group_columns, shap_row_limit, should_use_offset_init_score, train_model, tree_dataframe, training_projection_columns, training_select_sql, write_dataframe_parquet
-from py_lucidum.tools.gbm.validation import DEFAULT_TWEEDIE_VARIANCE_POWER, GBM_METRICS, GBM_OBJECTIVES, available_feature_interaction_groupings, categorical_distinct_counts, default_parameters, ebm_available, feature_interaction_constraint_groups, feature_rows, normalise_feature_grouping_map, normalise_feature_interaction_features, normalise_feature_interaction_groupings, normalise_feature_interaction_pairs, normalise_features, normalise_parameters, validate_request
+from py_lucidum.tools.gbm.training import MissingGbmDependency, append_holdout_evaluation, evaluation_dataframe, feature_config_with_mean_abs_shap, gbm_dependencies, gbm_training_dependencies, lightgbm_fit_parameters, lightgbm_interaction_constraints, lightgbm_pair_interaction_constraints, lightgbm_progress_payload, normalise_feature_scenario, polars_feature_frame, predict_response_values, shap_dataframes, shap_interaction_group_columns, shap_row_limit, should_use_offset_init_score, train_model, tree_dataframe, training_projection_columns, training_select_sql, write_dataframe_parquet
+from py_lucidum.tools.gbm.validation import DEFAULT_MONOTONE_CONSTRAINT_METHOD, DEFAULT_TWEEDIE_VARIANCE_POWER, GBM_METRICS, GBM_OBJECTIVES, MONOTONE_CONSTRAINT_METHODS, available_feature_interaction_groupings, categorical_distinct_counts, default_parameters, ebm_available, feature_interaction_constraint_groups, feature_rows, normalise_feature_grouping_map, normalise_feature_interaction_features, normalise_feature_interaction_groupings, normalise_feature_interaction_pairs, normalise_features, normalise_parameters, validate_request
 from py_lucidum.tools.glm.store import GlmModelStore
 from py_lucidum.tools.glm.tabulation import export_tabulations, tabulation_config, tabulation_plot, tabulation_table
 from py_lucidum.tools.line_bar.query import chart
@@ -616,8 +616,13 @@ COPY (
         self.assertEqual(parameters["early_stopping_rounds"], 50)
         self.assertEqual(parameters["num_threads"], 0)
         self.assertEqual(parameters["seed"], 42)
+        self.assertEqual(parameters["monotone_constraints_method"], DEFAULT_MONOTONE_CONSTRAINT_METHOD)
         self.assertEqual(payload["parameter_options"]["objective"], sorted(GBM_OBJECTIVES))
         self.assertEqual(payload["parameter_options"]["metric"], sorted(GBM_METRICS))
+        self.assertEqual(
+            payload["parameter_options"]["monotone_constraints_method"],
+            list(MONOTONE_CONSTRAINT_METHODS),
+        )
         self.assertEqual(
             payload["shap_options"],
             [
@@ -696,9 +701,9 @@ COPY (
     def test_gbm_config_includes_feature_groupings_and_scenarios(self) -> None:
         features_path = self.root / "feature_spec.csv"
         features_path.write_text(
-            "Feature,Grouping,Base,scenario1,scenario2\n"
-            "Age,DRIVER,40,FEATURE,\n"
-            "Segment,POSTCODE,B,,selected feature\n",
+            "Feature,Grouping,Monotonicity,Base,scenario1,scenario2\n"
+            "Age,DRIVER,increasing,40,FEATURE,\n"
+            "Segment,POSTCODE,,B,,selected feature\n",
             encoding="utf-8",
         )
         app = create_app(
@@ -717,7 +722,9 @@ COPY (
 
         self.assertEqual(status, 200)
         self.assertEqual(features["Age"]["grouping"], "DRIVER")
+        self.assertEqual(features["Age"]["monotonicity"], "Increasing")
         self.assertEqual(features["Segment"]["grouping"], "POSTCODE")
+        self.assertEqual(features["Segment"]["monotonicity"], "")
         self.assertEqual(features["PostcodeArea"]["grouping"], "")
         self.assertEqual(
             payload["feature_scenarios"],
@@ -1418,6 +1425,32 @@ COPY (
 
         self.assertEqual(constraints, [[0, 1], [2], [3], [4]])
 
+    def test_lightgbm_fit_parameters_omit_only_inactive_monotonicity_settings(self) -> None:
+        parameters = {
+            "objective": "poisson",
+            "monotone_constraints_method": "advanced",
+            "interaction_constraints": [[0, 1], [2]],
+        }
+
+        fit_parameters = lightgbm_fit_parameters(parameters)
+
+        self.assertNotIn("monotone_constraints_method", fit_parameters)
+        self.assertNotIn("monotone_constraints", fit_parameters)
+        self.assertEqual(fit_parameters["interaction_constraints"], [[0, 1], [2]])
+        self.assertEqual(parameters["monotone_constraints_method"], "advanced")
+
+        for method in MONOTONE_CONSTRAINT_METHODS:
+            with self.subTest(method=method):
+                constrained = lightgbm_fit_parameters(
+                    {
+                        **parameters,
+                        "monotone_constraints_method": method,
+                        "monotone_constraints": [1, 0, -1],
+                    }
+                )
+                self.assertEqual(constrained["monotone_constraints_method"], method)
+                self.assertEqual(constrained["monotone_constraints"], [1, 0, -1])
+
     def test_validate_rejects_unknown_feature_interaction_grouping(self) -> None:
         dataset = Dataset(self.data_path)
         payload = {
@@ -1829,6 +1862,17 @@ COPY (
         with self.assertRaises(ValueError):
             parse_parameter_grid([{"name": "learning_rate", "value": "{0.05, 0.3; -0.05}"}])
 
+    def test_parameter_grid_accepts_all_monotone_constraint_methods(self) -> None:
+        grid = parse_parameter_grid(
+            [{"name": "monotone_constraints_method", "value": "{basic, intermediate, advanced}"}]
+        )
+
+        self.assertEqual(grid.total_combinations, 3)
+        self.assertEqual(
+            [grid.resolved_rows(index)[0]["value"] for index in range(3)],
+            ["basic", "intermediate", "advanced"],
+        )
+
     def test_grid_validation_runs_all_when_sample_request_exceeds_total_and_skips_invalid(self) -> None:
         dataset = Dataset(self.data_path)
         payload = {
@@ -1939,6 +1983,30 @@ COPY (
         self.assertIn("is_unbalance cannot be used", errors)
         self.assertIn("linear_tree=true cannot be used", errors)
         self.assertIn("num_threads must be an integer at least 0", errors)
+
+    def test_monotone_constraint_parameters_are_validated(self) -> None:
+        dataset = Dataset(self.data_path)
+        for name, value, expected in (
+            ("monotone_constraints_method", "approximate", "Choose a valid LightGBM monotone_constraints_method"),
+            ("monotone_constraints", [1, 0], "Set monotonicity in the GBM Feature grid"),
+            ("monotonic_cst", [1, 0], "Set monotonicity in the GBM Feature grid"),
+        ):
+            with self.subTest(name=name):
+                result = validate_request(
+                    dataset,
+                    {
+                        "features": self.request_features(),
+                        "parameters": [
+                            {"name": "objective", "value": "poisson"},
+                            {"name": "metric", "value": "poisson"},
+                            {"name": name, "value": value},
+                        ],
+                        "sample_column": "SAMPLE",
+                    },
+                )
+
+                self.assertFalse(result.ok)
+                self.assertIn(expected, "; ".join(result.errors))
 
     def test_tweedie_variance_power_range_is_validated_for_every_objective(self) -> None:
         dataset = Dataset(self.data_path)
@@ -2591,10 +2659,15 @@ COPY (
     def test_gain_defaults_and_sorts_descending(self) -> None:
         dataset = Dataset(self.data_path)
 
-        rows = feature_rows(dataset, {"Segment": 1.5, "Age": 9.25})
+        rows = feature_rows(
+            dataset,
+            {"Segment": 1.5, "Age": 9.25},
+            feature_monotonicities={"Age": "Increasing"},
+        )
 
         self.assertEqual(rows[0]["name"], "Age")
         self.assertEqual(rows[0]["gain"], 9.25)
+        self.assertEqual(rows[0]["monotonicity"], "Increasing")
         self.assertEqual(rows[1]["name"], "Segment")
         self.assertEqual(rows[1]["gain"], 1.5)
         self.assertEqual(next(row for row in rows if row["name"] == "SAMPLE")["gain"], 0.0)
@@ -2740,6 +2813,7 @@ COPY (
                 {"name": "Age", "include": True, "monotonicity": 1, "gain": 9.25, "mean_abs_shap": 0.4567},
                 {"name": "Segment", "include": True, "monotonicity": "", "gain": 1.5},
             ],
+            feature_monotonicities={"Age": "Decreasing", "Segment": "Increasing"},
         )
         by_name = {row["name"]: row for row in rows}
 
@@ -2853,6 +2927,7 @@ COPY (
                 "learning_rate": 0.125,
                 "custom_penalty": 2.5,
                 "interaction_constraints": [[0], [1, 2]],
+                "monotone_constraints": [1, 0],
             },
         )
         app = create_app(self.data_path, token="", tools=["gbm", "line_bar"], use_saved_filters=False, use_kpis=False)
@@ -2876,6 +2951,7 @@ COPY (
         self.assertEqual(parameters["learning_rate"], 0.125)
         self.assertEqual(parameters["custom_penalty"], 2.5)
         self.assertNotIn("interaction_constraints", parameters)
+        self.assertNotIn("monotone_constraints", parameters)
         self.assertEqual(
             store.read_json(store.artifact_path("m1", "parameters"))["interaction_constraints"],
             [[0], [1, 2]],
@@ -3544,14 +3620,63 @@ COPY (
                 "features": ["VehicleAge"],
             },
         )
-        self.assertEqual(
-            store.read_json(store.artifact_path(result["model_id"], "parameters"))["interaction_constraints"],
-            [[0, 4], [5], [3], [1], [2]],
-        )
+        stored_parameters = store.read_json(store.artifact_path(result["model_id"], "parameters"))
+        self.assertEqual(stored_parameters["interaction_constraints"], [[0, 4], [5], [3], [1], [2]])
+        self.assertEqual(stored_parameters["monotone_constraints_method"], "advanced")
+        self.assertNotIn("monotone_constraints", stored_parameters)
         self.assertEqual(
             store.read_json(store.artifact_path(result["model_id"], "features")),
             ["Age", "CarValue", "Ncd", "PostcodeArea", "Segment", "VehicleAge"],
         )
+
+    def test_training_combines_advanced_monotonicity_with_pair_interactions(self) -> None:
+        try:
+            import lightgbm  # noqa: F401
+        except ImportError:
+            self.skipTest("LightGBM is not installed")
+
+        data_path = self.root / "monotone_pair_train.csv"
+        data_path.write_text(
+            "actualNumerator,Age,Segment,VehicleAge\n"
+            "10,30,A,4\n"
+            "20,40,B,5\n"
+            "30,50,A,6\n"
+            "40,60,B,7\n",
+            encoding="utf-8",
+        )
+        dataset = Dataset(data_path)
+        store = GbmModelStore(data_path)
+        result = train_model(
+            dataset,
+            store,
+            {
+                "label": "Monotone pair interactions",
+                "response": "actualNumerator",
+                "offset": "__none__",
+                "features": [
+                    {"name": "Age", "include": True, "monotonicity": "Increasing"},
+                    {"name": "Segment", "include": True, "monotonicity": ""},
+                    {"name": "VehicleAge", "include": True, "monotonicity": ""},
+                ],
+                "parameters": default_parameters()
+                + [
+                    {"name": "objective", "value": "poisson"},
+                    {"name": "metric", "value": "poisson"},
+                    {"name": "num_iterations", "value": 2},
+                    {"name": "early_stopping_rounds", "value": 0},
+                    {"name": "num_leaves", "value": 3},
+                    {"name": "min_data_in_leaf", "value": 1},
+                ],
+                "sample_column": "",
+                "shap_rows": "0",
+                "feature_interaction_pairs": [{"left": "Age", "right": "Segment"}],
+            },
+        )
+
+        stored_parameters = store.read_json(store.artifact_path(result["model_id"], "parameters"))
+        self.assertEqual(stored_parameters["monotone_constraints_method"], "advanced")
+        self.assertEqual(stored_parameters["monotone_constraints"], [1, 0, 0])
+        self.assertEqual(stored_parameters["interaction_constraints"], [[0, 1], [2]])
 
     def test_training_creates_and_verifies_selected_interaction_group_models(self) -> None:
         try:

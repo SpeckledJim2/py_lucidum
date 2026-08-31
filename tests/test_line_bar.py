@@ -576,7 +576,7 @@ COPY (
   SELECT 'UseofVan' AS name, 'categorical' AS kind, TRUE AS include, NULL AS monotonicity,
          NULL AS monotonicity_value, 3.0 AS gain, NULL AS mean_abs_shap
   UNION ALL
-  SELECT 'YoungestDriverAge', 'integer', TRUE, NULL, NULL, 2.0, NULL
+  SELECT 'YoungestDriverAge', 'integer', TRUE, 'Increasing', 1, 2.0, NULL
 ) TO {sql_literal(str(store.artifact_path("importance-gbm", "feature_config")))} (FORMAT PARQUET)
 """
             )
@@ -2831,6 +2831,10 @@ COPY (
         self.assertEqual(
             [(row["feature"], row["importance"], row["rank"]) for row in payload["rows"]],
             [("YoungestDriverAge", 2.5, 1), ("UseofVan", 0.5, 2)],
+        )
+        self.assertEqual(
+            {row["feature"]: row["monotonicity"] for row in payload["rows"]},
+            {"YoungestDriverAge": "Increasing", "UseofVan": ""},
         )
 
     def test_named_gbm_feature_importance_falls_back_to_gain(self) -> None:

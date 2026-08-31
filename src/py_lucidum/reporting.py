@@ -1162,7 +1162,17 @@ def _gbm_summary_document(
     parameter_table = _summary_table_html(
         [{"key": "parameter", "label": "Parameter"}, {"key": "value", "label": "Value"}],
         [
-            {"parameter": str(name), "value": _parameter_display(value)}
+            {
+                "parameter": str(name),
+                "value": (
+                    _gbm_monotone_constraints_display(
+                        value,
+                        feature_count=len(list(importance.get("rows") or [])),
+                    )
+                    if str(name) == "monotone_constraints"
+                    else _parameter_display(value)
+                ),
+            }
             for name, value in parameters.items()
         ],
         table_class="parameter-table",
@@ -1206,7 +1216,7 @@ def _gbm_summary_document(
     .summary-table td {{ padding: 4px 12px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }}
     .summary-table tbody tr:last-child td {{ border-bottom: 0; }}
     .summary-table th:first-child, .summary-table td:first-child {{ text-align: left; }}
-    .importance-table th:nth-child(2), .importance-table td:nth-child(2), .parameter-table th, .parameter-table td {{ text-align: left; }}
+    .importance-table th:nth-child(2), .importance-table td:nth-child(2), .importance-table th:nth-child(3), .importance-table td:nth-child(3), .parameter-table th, .parameter-table td {{ text-align: left; }}
     .importance-table td:nth-child(2) {{ font-weight: 600; }}
     .parameter-table td:first-child {{ width: 34%; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }}
     .parameter-table td:last-child {{ white-space: normal; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }}
@@ -1915,6 +1925,26 @@ def _parameter_display(value: Any) -> str:
     if isinstance(value, (Mapping, list, tuple)):
         return json.dumps(value, ensure_ascii=False, separators=(", ", ": "))
     return str(value)
+
+
+def _gbm_monotone_constraints_display(value: Any, *, feature_count: int) -> str:
+    """Summarize the order-dependent fitted vector for the visible report table."""
+
+    if not isinstance(value, (list, tuple)):
+        return _parameter_display(value)
+    try:
+        constraints = [float(item) for item in value]
+    except (TypeError, ValueError):
+        return _parameter_display(value)
+    increasing = sum(item > 0 for item in constraints)
+    decreasing = sum(item < 0 for item in constraints)
+    constrained = increasing + decreasing
+    total = len(constraints) or max(0, int(feature_count))
+    feature_label = "feature" if total == 1 else "features"
+    return (
+        f"{constrained} of {total} {feature_label} constrained "
+        f"({increasing} Increasing, {decreasing} Decreasing)"
+    )
 
 
 def _display_value(value: Any) -> str:

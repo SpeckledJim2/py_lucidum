@@ -770,12 +770,14 @@ Feature Specifications begin with `Feature,Grouping`, followed by recognised
 metadata fields and any number of scenario columns. A compact example is:
 
 ```csv
-Feature,Grouping,Base,min,max,banding,scenario1
-DRIVER_AGE,DRIVER,40,17,96,1,feature
+Feature,Grouping,Monotonicity,Base,min,max,banding,scenario1
+DRIVER_AGE,DRIVER,Increasing,40,17,96,1,feature
 ```
 
 - `Feature` must match a dataset column exactly.
 - `Grouping` labels features and supplies optional GBM interaction groups.
+- Optional `Monotonicity` accepts blank, `Increasing`/`1`, or
+  `Decreasing`/`-1`, case-insensitively. Nonblank values require a numeric feature.
 - `Base` anchors zero/one Line and Bar or SHAP rescaling and GLM tabulation bases.
 - Numeric `min`, `max`, and `banding` define GLM rating-table grids.
 - Scenario columns select rows whose cell contains `feature`, case-insensitively.
@@ -799,9 +801,10 @@ formats before saving:
 
 Blank `chart_banding` falls back to `banding` and then the report YAML. Other blank
 `chart_*` values use the matching YAML default. Older Feature Specifications without
-the chart metadata remain usable; use a Feature Specification column-header menu to
-add the missing chart columns before the first scenario. Reserved metadata fields
-must form one contiguous block after `Grouping`; subsequent columns are scenarios.
+`Monotonicity` or chart metadata remain usable; use a Feature Specification
+column-header menu to add missing metadata before the first scenario. Reserved
+metadata fields must form one contiguous block after `Grouping`; subsequent columns
+are scenarios.
 
 [Back to contents ↑](#contents)
 
@@ -936,8 +939,11 @@ Resize the boundaries between them to prioritise the current task; those layout
 choices last for the browser session.
 
 The Feature grid supports selection, monotonicity, saved Grouping metadata, and
-saved Gain or mean absolute SHAP importance. A Feature Specification scenario
-selects the usable features marked for that scenario.
+saved Gain or mean absolute SHAP importance. For a new configuration, Feature
+Specification `Monotonicity` values seed the grid. Grid edits then remain
+authoritative, including after applying a feature scenario. Activating a saved model
+restores its fitted values instead of rereading current specification defaults. A
+specification without the field supplies blank defaults.
 
 Parameter values can contain grid-search braces:
 
@@ -953,6 +959,15 @@ a notice, trains each selected combination, and activates the best completed mod
 `tweedie_variance_power` is available for a Tweedie objective or metric and must
 satisfy LightGBM's `1.0 <= value < 2.0` constraint. It is accepted but has no effect
 when neither the objective nor metric is Tweedie.
+
+`monotone_constraints_method` defaults to LightGBM's `advanced` method and also
+accepts `basic` or `intermediate`, including in grid-search sets. Lucidum derives the
+ordered numeric `monotone_constraints` vector from selected Feature-grid rows just
+before fitting. Raw constraint-vector parameters and aliases are rejected because
+their indexes can become detached from the canonical fitted-feature order. The
+selected method remains visible and saved for reproducibility, but it is passed to
+LightGBM only when at least one selected feature has nonzero monotonicity; otherwise
+both inactive fit parameters are omitted.
 
 The first parameter, `init_score`, can use the normal denominator-derived starting
 point, a numeric dataset field, or an active GLM prediction. Selected prediction
@@ -1297,14 +1312,25 @@ beside its source dataset so it can be reviewed in Lucidum without retraining. T
 existing `install_in_lucidum` configuration name is retained for compatibility; it
 does not install a package or register the model with an external service.
 
-The supplied GBM `01` workflow writes the same complete `parameters.json`, ordered
+The supplied GBM `01` workflow reads Feature Specification monotonicity by default;
+set `features.use_monotonicity: false` to disable it for that external build. An
+omitted switch means enabled, while a missing `Monotonicity` column means no
+constraints. It uses the same `advanced` default and fitted-feature ordering as the
+app. The workflow writes the same complete `parameters.json`, ordered
 `features.json`, and stable `manifest.json` fields as an equivalent in-app build.
+GBM summary reports show the fitted value in a Monotonicity column beside each
+feature, and SHAP-only report titles append `Increasing` or `Decreasing` for
+constrained features. Both read saved model provenance rather than the current
+Feature Specification. The GBM summary's Model performance table also shows the
+saved Training, Test, and Validation normalized Gini values used by Model
+Navigator.
 Only identity, timestamps, activation state, and measured runtime are expected to
 differ. Its workspace-copy step rejects incomplete JSON, missing core artifacts, or
 missing SHAP files when the manifest reports saved SHAP rows, and it does so before
-replacing an existing model or active pointer. Older external GBM folders are not
-upgraded in place: sync the current maintained scripts and rerun `01` to rebuild
-them. The [external-model guide](external-model-builds-and-reports.md#gbm-json-contract)
+replacing an existing model or active pointer. Older external GBM folders lacking
+the current method/constraint provenance are not upgraded in place: sync the current
+maintained scripts and rerun `01` to rebuild them. The
+[external-model guide](external-model-builds-and-reports.md#gbm-json-contract)
 documents the mandatory keys and permitted run-specific differences.
 
 Install the example dependencies from a checkout:
@@ -1330,7 +1356,10 @@ without writing them. A virtual-environment installation can use the same
 
 The numbered scripts under `examples/` can be run normally or as `# %%` cells in
 Positron. See
-[Build models outside Lucidum, then report or view them](external-model-builds-and-reports.md)
+[the external modelling quick start](external-model-builds-and-reports.md#external-modelling-quick-start-for-data-scientists)
+for the data-scientist GLM/GBM build, publish, launch, and Model Navigator sequence,
+or
+[the complete external-model guide](external-model-builds-and-reports.md)
 for the commands, YAML fields, data rules, artefacts, report settings, and direct API
 examples.
 

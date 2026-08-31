@@ -27,6 +27,7 @@ GBM_PARAMETER_DEFAULTS = {
     "metric": "poisson",
     "tweedie_variance_power": 1.5,
     "data_sample_strategy": "bagging",
+    "monotone_constraints_method": "advanced",
     "learning_rate": 0.3,
     "num_leaves": 5,
     "max_depth": -1,
@@ -41,6 +42,23 @@ GBM_PARAMETER_DEFAULTS = {
     "num_threads": 0,
     "verbosity": -1,
     "seed": 42,
+}
+MONOTONE_CONSTRAINT_PARAMETER_NAMES = {
+    "monotone_constraints",
+    "monotone_constraint",
+    "monotonic_cst",
+    "mc",
+}
+MONOTONE_CONSTRAINT_METHODS = {"basic", "intermediate", "advanced"}
+MONOTONE_OBJECTIVES = {
+    "regression",
+    "regression_l1",
+    "huber",
+    "fair",
+    "poisson",
+    "gamma",
+    "tweedie",
+    "binary",
 }
 
 CONFIG_KEYS = {
@@ -89,6 +107,9 @@ CONFIG_KEYS = {
 }
 
 OPTIONAL_CONFIG_KEYS = {
+    "gbm": {
+        "features": {"use_monotonicity"},
+    },
     "glm": {
         "dataset": {"test_value", "validation_value"},
         "model": {"family_parameter", "training_scope"},
@@ -146,6 +167,10 @@ def load_config(path: Path, model_type: str) -> dict[str, Any]:
         )
 
     if model_type == "gbm":
+        raw_use_monotonicity = config["features"].get("use_monotonicity", True)
+        if not isinstance(raw_use_monotonicity, bool):
+            raise ValueError("features.use_monotonicity must be true or false")
+        config["features"]["use_monotonicity"] = raw_use_monotonicity
         sample_values = {
             str(config["dataset"][name]).strip().lower()
             for name in ("training_value", "early_stopping_value", "validation_value")
@@ -227,10 +252,38 @@ def effective_gbm_parameters(training: dict[str, Any]) -> dict[str, Any]:
         for key, value in raw.items():
             name = str(key).strip()
             if name and name not in {"init_score", "num_iterations", "early_stopping_rounds"}:
+                if name in MONOTONE_CONSTRAINT_PARAMETER_NAMES:
+                    raise ValueError(
+                        "Set monotonicity in the Feature Specification instead of "
+                        f"training.parameters.{name}"
+                    )
                 parameters[name] = _coerce_gbm_parameter(value)
     parameters["objective"] = str(parameters.get("objective") or "poisson").strip().lower()
     parameters["metric"] = str(parameters.get("metric") or "poisson").strip().lower()
+    monotone_method = str(
+        parameters.get("monotone_constraints_method") or "advanced"
+    ).strip().lower()
+    if monotone_method not in MONOTONE_CONSTRAINT_METHODS:
+        raise ValueError(
+            "training.parameters.monotone_constraints_method must be "
+            "basic, intermediate, or advanced"
+        )
+    parameters["monotone_constraints_method"] = monotone_method
     return parameters
+
+
+def lightgbm_fit_parameters(parameters: dict[str, Any]) -> dict[str, Any]:
+    """Return the active LightGBM parameters without changing provenance."""
+
+    fit_parameters = dict(parameters)
+    constraints = fit_parameters.get("monotone_constraints")
+    has_constraints = isinstance(constraints, (list, tuple)) and any(
+        int(value or 0) != 0 for value in constraints
+    )
+    if not has_constraints:
+        fit_parameters.pop("monotone_constraints", None)
+        fit_parameters.pop("monotone_constraints_method", None)
+    return fit_parameters
 
 
 def gbm_parameter_warnings(parameters: dict[str, Any]) -> list[str]:
@@ -403,6 +456,53 @@ def prepare_feature_data(
             categorical_features.append(name)
 
     return feature_data, feature_names, categorical_features
+
+
+def feature_monotonicity_constraints(
+    spec_path: Path,
+    feature_names: list[str],
+    column_kinds: dict[str, str],
+    *,
+    enabled: bool,
+    objective: str,
+) -> list[int]:
+    """Return Feature Specification monotonicities in fitted feature order."""
+
+    if not enabled:
+        return [0] * len(feature_names)
+    feature_spec = pd.read_csv(spec_path, dtype="string")
+    if "Monotonicity" not in feature_spec.columns:
+        return [0] * len(feature_names)
+
+    values_by_feature: dict[str, Any] = {}
+    for row in feature_spec[["Feature", "Monotonicity"]].to_dict("records"):
+        name = "" if pd.isna(row.get("Feature")) else str(row.get("Feature")).strip()
+        if name:
+            values_by_feature[name] = row.get("Monotonicity")
+
+    constraints: list[int] = []
+    for name in feature_names:
+        raw = values_by_feature.get(name)
+        text = "" if pd.isna(raw) else str(raw or "").strip().lower()
+        if text == "":
+            value = 0
+        elif text in {"increasing", "1"}:
+            value = 1
+        elif text in {"decreasing", "-1"}:
+            value = -1
+        else:
+            raise ValueError(
+                f"Feature Specification Monotonicity for {name} must be "
+                "Increasing, 1, Decreasing, -1, or blank"
+            )
+        if value and column_kinds.get(name) not in {"integer", "numeric"}:
+            raise ValueError(f"{name} must be numeric to use monotonicity")
+        constraints.append(value)
+
+    selected_objective = str(objective or "").strip().lower()
+    if any(constraints) and selected_objective not in MONOTONE_OBJECTIVES:
+        raise ValueError(f"Monotonicity is not supported for objective {selected_objective}")
+    return constraints
 
 
 def require_columns(data: pd.DataFrame, names: list[str]) -> None:

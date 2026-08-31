@@ -21,7 +21,9 @@ from external_model_helpers import (
     dataset_column_kinds,
     effective_gbm_parameters,
     evaluate_validation_metric,
+    feature_monotonicity_constraints,
     gbm_parameter_warnings,
+    lightgbm_fit_parameters,
     load_config,
     prepare_feature_data,
     read_table,
@@ -125,6 +127,16 @@ for sample_label, sample_rows in (
 
 parameters = effective_gbm_parameters(training_settings)
 objective = str(parameters["objective"]).strip().lower()
+monotone_constraints = feature_monotonicity_constraints(
+    feature_spec_path,
+    feature_names,
+    column_kinds,
+    enabled=bool(feature_settings["use_monotonicity"]),
+    objective=objective,
+)
+if any(monotone_constraints):
+    parameters["monotone_constraints"] = monotone_constraints
+fit_parameters = lightgbm_fit_parameters(parameters)
 use_log_offset = denominator is not None and objective in LOG_LINK_OBJECTIVES
 initial_score = (
     np.log(denominator.where(denominator.gt(0)))
@@ -158,7 +170,7 @@ training_data = lgb.Dataset(
     categorical_feature=categorical_features,
     init_score=initial_score.loc[training_mask] if initial_score is not None else None,
     free_raw_data=False,
-    params=parameters,
+    params=fit_parameters,
 )
 
 test_data = lgb.Dataset(
@@ -171,7 +183,7 @@ test_data = lgb.Dataset(
     init_score=initial_score.loc[test_mask] if initial_score is not None else None,
     reference=training_data,
     free_raw_data=False,
-    params=parameters,
+    params=fit_parameters,
 )
 
 evaluation = {}
@@ -181,7 +193,7 @@ if early_stopping_rounds:
     callbacks.append(lgb.early_stopping(early_stopping_rounds, verbose=False))
 
 model = lgb.train(
-    parameters,
+    fit_parameters,
     training_data,
     num_boost_round=int(training_settings["num_boost_round"]),
     valid_sets=[training_data, test_data],

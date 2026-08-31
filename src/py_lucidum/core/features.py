@@ -8,14 +8,28 @@ from .chart_controls import CHART_CONTROL_COLUMNS
 
 
 FEATURE_SPEC_REQUIRED_COLUMNS = ["Feature", "Grouping"]
+FEATURE_SPEC_MONOTONICITY_COLUMN = "Monotonicity"
+FEATURE_SPEC_MONOTONICITY_VALUES = ("Increasing", "Decreasing", "1", "-1")
 FEATURE_SPEC_BASE_COLUMN = "Base"
 FEATURE_SPEC_METADATA_COLUMNS = {
+    FEATURE_SPEC_MONOTONICITY_COLUMN: "monotonicity",
     "Base": "base",
     "min": "min",
     "max": "max",
     "banding": "banding",
     **{column: column for column in CHART_CONTROL_COLUMNS},
 }
+
+
+def normalise_feature_monotonicity(raw: Any) -> str:
+    text = str(raw or "").strip().lower()
+    if not text:
+        return ""
+    if text in {"increasing", "1"}:
+        return "Increasing"
+    if text in {"decreasing", "-1"}:
+        return "Decreasing"
+    raise ValueError("Use Increasing, 1, Decreasing, -1, or blank for Monotonicity")
 
 
 def resolve_features_path(features_path: str | Path | None, use_features: bool = True) -> Path | None:
@@ -69,7 +83,10 @@ def load_features(features_path: str | Path | None, use_features: bool = True, m
                     scenario_features[scenario_name].append(feature)
             row_payload = {"feature": feature, "grouping": grouping, "scenarios": scenarios}
             for column_name, payload_key in metadata_columns:
-                row_payload[payload_key] = str(row.get(column_name) or "").strip()
+                value = str(row.get(column_name) or "").strip()
+                if column_name == FEATURE_SPEC_MONOTONICITY_COLUMN:
+                    value = normalise_feature_monotonicity(value)
+                row_payload[payload_key] = value
             rows.append(row_payload)
         return {
             "rows": rows,

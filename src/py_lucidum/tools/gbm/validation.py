@@ -25,6 +25,14 @@ DEFAULT_TWEEDIE_VARIANCE_POWER = 1.5
 DEFAULT_TRAINING_MODE = "normal"
 TRAINING_MODES = ("normal", "ebm")
 DATA_SAMPLE_STRATEGIES = ("bagging", "goss")
+MONOTONE_CONSTRAINT_METHODS = ("basic", "intermediate", "advanced")
+DEFAULT_MONOTONE_CONSTRAINT_METHOD = "advanced"
+MONOTONE_CONSTRAINT_PARAMETER_NAMES = {
+    "monotone_constraints",
+    "monotone_constraint",
+    "monotonic_cst",
+    "mc",
+}
 GBM_OBJECTIVES = (
     "regression",
     "regression_l1",
@@ -84,6 +92,11 @@ def default_parameters() -> list[dict[str, Any]]:
         {"name": "metric", "value": DEFAULT_METRIC, "important": True},
         {"name": "tweedie_variance_power", "value": DEFAULT_TWEEDIE_VARIANCE_POWER, "important": True},
         {"name": "data_sample_strategy", "value": "bagging", "important": True},
+        {
+            "name": "monotone_constraints_method",
+            "value": DEFAULT_MONOTONE_CONSTRAINT_METHOD,
+            "important": True,
+        },
         {"name": "num_iterations", "value": 1000, "important": True},
         {"name": "learning_rate", "value": 0.3, "important": True},
         {"name": "num_leaves", "value": 5, "important": True},
@@ -160,12 +173,26 @@ def parameter_option_errors(params: dict[str, Any]) -> list[str]:
     selected_objective = objective(params)
     selected_metric = metric(params)
     selected_data_sample_strategy = str(params.get("data_sample_strategy") or "bagging").strip().lower()
+    selected_monotone_method = str(
+        params.get("monotone_constraints_method") or DEFAULT_MONOTONE_CONSTRAINT_METHOD
+    ).strip().lower()
     if selected_objective not in GBM_OBJECTIVES:
         errors.append(f"Choose a valid LightGBM objective: {selected_objective}")
     if selected_metric not in GBM_METRICS:
         errors.append(f"Choose a valid LightGBM metric: {selected_metric}")
     if selected_data_sample_strategy not in DATA_SAMPLE_STRATEGIES:
         errors.append(f"Choose a valid LightGBM data_sample_strategy: {selected_data_sample_strategy}")
+    if selected_monotone_method not in MONOTONE_CONSTRAINT_METHODS:
+        errors.append(
+            "Choose a valid LightGBM monotone_constraints_method: "
+            f"{selected_monotone_method}"
+        )
+    raw_constraint_names = sorted(MONOTONE_CONSTRAINT_PARAMETER_NAMES.intersection(params))
+    if raw_constraint_names:
+        errors.append(
+            "Set monotonicity in the GBM Feature grid instead of supplying LightGBM "
+            f"constraint parameters: {', '.join(raw_constraint_names)}"
+        )
     return errors
 
 
@@ -521,6 +548,7 @@ def feature_rows(
     model_features: list[dict[str, Any]] | None = None,
     reserved_names: set[str] | None = None,
     feature_groupings: dict[str, str] | None = None,
+    feature_monotonicities: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     columns = dataset.all_column_map()
     invalid_columns = dataset.invalid_column_errors()
@@ -556,6 +584,11 @@ def feature_rows(
             else bool(model_feature) and usable and row_kind in {"integer", "numeric", "categorical"}
         )
         gain = model_feature.get("gain") if model_feature else (gains or {}).get(column.name, 0.0)
+        monotonicity = (
+            model_feature.get("monotonicity")
+            if use_model_features
+            else (feature_monotonicities or {}).get(column.name, "")
+        )
         row = {
             "name": column.name,
             "grouping": (feature_groupings or {}).get(column.name, ""),
@@ -567,7 +600,7 @@ def feature_rows(
             "invalid": bool(invalid_error),
             "high_cardinality": high_cardinality,
             "distinct_count": distinct_count,
-            "monotonicity": display_monotonicity(model_feature.get("monotonicity")) if include else "",
+            "monotonicity": display_monotonicity(monotonicity) if include else "",
             "gain": round(float(gain or 0.0), 3),
         }
         mean_abs_shap = json_number(model_feature.get("mean_abs_shap"))
@@ -1116,6 +1149,7 @@ def sample_split_messages(counts: dict[str, int], *, source_label: str) -> tuple
 
 __all__ = [
     "DEFAULT_METRIC",
+    "DEFAULT_MONOTONE_CONSTRAINT_METHOD",
     "DEFAULT_OBJECTIVE",
     "DEFAULT_TWEEDIE_VARIANCE_POWER",
     "DEFAULT_TRAINING_MODE",
@@ -1124,6 +1158,8 @@ __all__ = [
     "GBM_OBJECTIVES",
     "INIT_SCORE_NONE",
     "INIT_SCORE_PARAMETER",
+    "MONOTONE_CONSTRAINT_METHODS",
+    "MONOTONE_CONSTRAINT_PARAMETER_NAMES",
     "OFFSET_COLUMN",
     "RESPONSE_COLUMN",
     "TRAINING_MODES",
