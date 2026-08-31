@@ -14799,6 +14799,7 @@ COPY (
                     page.on("pageerror", lambda error: page_errors.append(str(error)))
                     try:
                         page.goto(base_url, wait_until="domcontentloaded")
+                        self.wait_for_app_ready(page)
                         page.locator("#datasetMeta", has_text="sample.csv").wait_for(timeout=10_000)
                         page.locator("#gbmTool").click()
                         page.locator("#modelToolWrap:not(.hidden) .gbm-tool").wait_for(timeout=10_000)
