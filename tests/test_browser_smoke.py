@@ -3645,6 +3645,8 @@ COPY (
                           const originalFetch = window.fetch.bind(window);
                           window.__lucidumReleaseDelayedMapSummary = null;
                           window.__lucidumDelayNextMapSummary = false;
+                          window.__lucidumDelayedMapSummaryStartedAt = null;
+                          window.__lucidumDelayedMapSummaryMetaAt250 = null;
                           window.fetch = async (...args) => {
                             const input = args[0];
                             const rawUrl = typeof input === "string" ? input : input?.url || "";
@@ -3652,6 +3654,12 @@ COPY (
                             const responsePromise = originalFetch(...args);
                             if (path === "/api/uk-map/summary" && window.__lucidumDelayNextMapSummary) {
                               window.__lucidumDelayNextMapSummary = false;
+                              window.__lucidumDelayedMapSummaryStartedAt = performance.now();
+                              window.__lucidumDelayedMapSummaryMetaAt250 = null;
+                              window.setTimeout(() => {
+                                window.__lucidumDelayedMapSummaryMetaAt250 =
+                                  document.querySelector("#mapGroupMeta")?.textContent || "";
+                              }, 250);
                               await new Promise((resolve) => {
                                 window.__lucidumReleaseDelayedMapSummary = resolve;
                               });
@@ -3872,7 +3880,6 @@ COPY (
                             () => {
                               window.__lucidumReleaseDelayedMapSummary = null;
                               window.__lucidumDelayNextMapSummary = true;
-                              window.__lucidumDelayedUnitStartedAt = performance.now();
                             }
                             """
                         )
@@ -3886,9 +3893,15 @@ COPY (
                         unit_grace_meta = page.locator("#mapGroupMeta").inner_text()
                         self.assertIn("sectors matched", unit_grace_meta)
                         self.assertNotIn("Computing map...", unit_grace_meta)
-                        page.wait_for_timeout(250)
-                        self.assertIn("sectors matched", page.locator("#mapGroupMeta").inner_text())
-                        self.assertNotIn("Computing map...", page.locator("#mapGroupMeta").inner_text())
+                        page.wait_for_function(
+                            "() => window.__lucidumDelayedMapSummaryMetaAt250 !== null",
+                            timeout=2_000,
+                        )
+                        unit_grace_meta_at_250 = page.evaluate(
+                            "() => window.__lucidumDelayedMapSummaryMetaAt250"
+                        )
+                        self.assertIn("sectors matched", unit_grace_meta_at_250)
+                        self.assertNotIn("Computing map...", unit_grace_meta_at_250)
                         page.wait_for_function(
                             """
                             () => (document.querySelector("#mapGroupMeta")?.textContent || "").trim() === "Computing map..."
@@ -3896,7 +3909,7 @@ COPY (
                             timeout=2_000,
                         )
                         delayed_unit_elapsed = page.evaluate(
-                            "() => performance.now() - window.__lucidumDelayedUnitStartedAt"
+                            "() => performance.now() - window.__lucidumDelayedMapSummaryStartedAt"
                         )
                         self.assertGreaterEqual(delayed_unit_elapsed, 450)
                         unit_pending_panel_height = page.locator("#mapToolbar").evaluate(
