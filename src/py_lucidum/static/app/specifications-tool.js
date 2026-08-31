@@ -73,6 +73,7 @@ export function createSpecificationsTool({
   let selection = null;
   let selectionDragging = false;
   let pendingScrollRestore = null;
+  let pendingLoad = null;
   let validationTimer = null;
   let validationRequestId = 0;
   const specs = new Map();
@@ -190,7 +191,10 @@ export function createSpecificationsTool({
   }
 
   async function loadKind(kind, options = {}) {
-    if (loading) return;
+    if (loading) {
+      pendingLoad = { kind, options: { ...options } };
+      return;
+    }
     const cached = specs.get(kind);
     if (cached?.dirty || (cached && !options.force)) {
       renderSpec(cached);
@@ -212,7 +216,14 @@ export function createSpecificationsTool({
     } finally {
       loading = false;
       syncButtons();
+      await loadPendingKind();
     }
+  }
+
+  async function loadPendingKind() {
+    const request = pendingLoad;
+    pendingLoad = null;
+    if (request) await loadKind(request.kind, request.options);
   }
 
   function cacheSpec(payload, dirty) {
@@ -599,6 +610,7 @@ export function createSpecificationsTool({
 
   async function saveCurrentSpec() {
     if (loading || !specCanSave(specs.get(activeKind))) return;
+    const kind = activeKind;
     const payload = activePayload();
     if (!payload) return;
     cancelPendingValidation();
@@ -606,13 +618,13 @@ export function createSpecificationsTool({
     loading = true;
     syncButtons();
     try {
-      const result = await api(`/api/specs/${activeKind}/save`, {
+      const result = await api(`/api/specs/${kind}/save`, {
         method: "POST",
         body: JSON.stringify(payload),
       });
       const spec = cacheSpec(result.spec, false);
       renderSpec(spec);
-      await reloadSchemaAfterSpecsSave(activeKind);
+      await reloadSchemaAfterSpecsSave(kind);
       showNotice(result);
       showClipboardToast(`${result.message}: ${result.path || spec.path}`);
     } catch (error) {
@@ -621,6 +633,7 @@ export function createSpecificationsTool({
     } finally {
       loading = false;
       syncButtons();
+      await loadPendingKind();
     }
   }
 
