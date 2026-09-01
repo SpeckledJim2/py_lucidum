@@ -520,6 +520,16 @@ output:
                     timeout=120,
                 )
 
+            with feature_spec_path.open(newline="", encoding="utf-8") as handle:
+                feature_rows = list(csv.DictReader(handle))
+            for row in feature_rows:
+                if row["Feature"] == "MAKE":
+                    row["report_demo"] = "feature"
+            with feature_spec_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=list(feature_rows[0]))
+                writer.writeheader()
+                writer.writerows(feature_rows)
+
             glm_report_config = root / "config_glm_report.yaml"
             gbm_report_config = root / "config_gbm_report.yaml"
             glm_summary_config = root / "config_glm_summary_report.yaml"
@@ -672,6 +682,8 @@ output:
                     "ANNUAL_MILEAGE",
                     False,
                     "Weighted mean absolute centred linear-predictor contribution",
+                    15,
+                    False,
                 ),
                 (
                     report_dir / "motor_fixture_external_gbm_validation_actual_vs_expected.html",
@@ -680,6 +692,8 @@ output:
                     "ANNUAL_MILEAGE",
                     False,
                     "Mean absolute SHAP",
+                    15,
+                    False,
                 ),
                 (
                     report_dir / "motor_fixture_external_gbm_all_rows_rebased_shap.html",
@@ -688,6 +702,8 @@ output:
                     "",
                     True,
                     "Mean absolute SHAP",
+                    14,
+                    True,
                 ),
             ]
 
@@ -802,13 +818,24 @@ output:
                             first_feature,
                             first_is_ranked,
                             importance_measure,
+                            chart_count,
+                            has_omitted_features,
                         ) in report_checks:
                             page.goto(report_path.as_uri(), wait_until="domcontentloaded")
                             page.locator(".report-chart canvas").first.wait_for(timeout=15_000)
-                            self.assertEqual(page.locator(".chart-card").count(), 14)
+                            self.assertEqual(page.locator(".chart-card").count(), chart_count)
                             self.assertIn("SOURCE PARQUET", page.locator(".report-header").inner_text())
-                            self.assertIn("MODEL", page.locator(".report-provenance").inner_text())
-                            self.assertIn(str(root.resolve()), page.locator(".report-provenance").inner_text())
+                            provenance_text = page.locator(".report-provenance").inner_text()
+                            self.assertIn("MODEL", provenance_text)
+                            self.assertIn(str(root.resolve()), provenance_text)
+                            if has_omitted_features:
+                                self.assertIn(
+                                    "FEATURES NOT SHOWN (NOT PRESENT IN MODEL)",
+                                    provenance_text,
+                                )
+                                self.assertIn("MAKE", provenance_text)
+                            else:
+                                self.assertNotIn("FEATURES NOT SHOWN", provenance_text)
                             self.assertEqual(
                                 page.locator(".report-metadata-footer dd").inner_text(),
                                 importance_measure,

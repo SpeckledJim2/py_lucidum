@@ -93,7 +93,11 @@ def load_report_settings(path: Path, model_type: str) -> tuple[dict[str, Any], l
         build_config["output"]["model_results_root"],
     )
     model_folder = model_results_root / model_type / model_id
-    needs_importance = any(
+    needs_shap_feature_membership = model_type == "gbm" and any(
+        report.get("chart_content") == "shap_only"
+        for report in reports
+    )
+    needs_importance = needs_shap_feature_membership or any(
         report["show_feature_importance"] or report["sort_by_feature_importance"]
         for report in reports
     )
@@ -106,6 +110,9 @@ def load_report_settings(path: Path, model_type: str) -> tuple[dict[str, Any], l
     )
     if needs_importance:
         _add_feature_importance(report_features, importance, model_type, model_id)
+    if model_type == "gbm":
+        for report in reports:
+            report["omitted_features"] = omitted_features_for_report(report_features, report)
 
     settings = {
         "model_type": model_type,
@@ -434,8 +441,11 @@ def features_for_report(features: list[dict[str, Any]], report: dict[str, Any]) 
 
     show_importance = report["show_feature_importance"]
     sort_by_importance = report["sort_by_feature_importance"]
+    shap_only = report.get("chart_content") == "shap_only"
     prepared = []
     for feature in features:
+        if shap_only and not feature.get("in_model"):
+            continue
         row = dict(feature)
         name = row["name"]
         if show_importance and row.get("in_model"):
@@ -444,7 +454,7 @@ def features_for_report(features: list[dict[str, Any]], report: dict[str, Any]) 
                 f"Importance {row['importance_percent']:.1f}%",
             ]
             monotonicity = str(row.get("monotonicity") or "").strip()
-            if report.get("chart_content") == "shap_only" and monotonicity:
+            if shap_only and monotonicity:
                 details.append(monotonicity)
             row["title"] = f"{name} ({', '.join(details)})"
         elif show_importance:
@@ -453,10 +463,18 @@ def features_for_report(features: list[dict[str, Any]], report: dict[str, Any]) 
             monotonicity = str(row.get("monotonicity") or "").strip()
             row["title"] = (
                 f"{name} ({monotonicity})"
-                if report.get("chart_content") == "shap_only" and row.get("in_model") and monotonicity
+                if shap_only and row.get("in_model") and monotonicity
                 else name
             )
         prepared.append(row)
+
+    if shap_only and not prepared:
+        omitted = omitted_features_for_report(features, report)
+        detail = f": {', '.join(omitted)}" if omitted else ""
+        raise ValueError(
+            "GBM SHAP report selects no features present in the fitted model"
+            f"{detail}"
+        )
 
     if sort_by_importance:
         prepared.sort(
@@ -467,6 +485,17 @@ def features_for_report(features: list[dict[str, Any]], report: dict[str, Any]) 
             )
         )
     return prepared
+
+
+def omitted_features_for_report(
+    features: list[dict[str, Any]],
+    report: dict[str, Any],
+) -> list[str]:
+    """Return selected feature names that cannot produce a SHAP chart."""
+
+    if report.get("chart_content") != "shap_only":
+        return []
+    return [str(feature["name"]) for feature in features if not feature.get("in_model")]
 
 
 def report_header(settings: dict[str, Any], report: dict[str, Any], script_file: str) -> dict[str, Any]:
@@ -486,6 +515,9 @@ def report_header(settings: dict[str, Any], report: dict[str, Any], script_file:
         "build config": settings["build_config_path"].name,
         "script run": Path(script_file).name,
     }
+    omitted_features = list(report.get("omitted_features") or [])
+    if omitted_features:
+        header["features not shown (not present in model)"] = omitted_features
     if report["show_feature_importance"] or report["sort_by_feature_importance"]:
         header["importance measure"] = settings["importance_measure"]
     if settings["kpi_spec_path"] is not None:

@@ -504,6 +504,92 @@ class ExternalModelExampleTests(unittest.TestCase):
                 legacy_settings, _ = helpers.load_report_settings(report_path, "glm")
             self.assertIsNone(legacy_settings["kpi_spec_path"])
 
+    def test_gbm_shap_report_resolves_membership_without_importance_display(self) -> None:
+        import yaml
+
+        helpers = load_report_helpers()
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            feature_path = root / "features.csv"
+            feature_path.write_text(
+                "Feature,Grouping,report\n"
+                "MODEL_FEATURE,TEST,feature\n"
+                "REPORT_ONLY,TEST,feature\n",
+                encoding="utf-8",
+            )
+            build_path = root / "config_gbm.yaml"
+            build_path.write_text(
+                yaml.safe_dump(
+                    {
+                        "dataset": {
+                            "path": "data.csv",
+                            "response_numerator": "Y",
+                            "denominator": None,
+                            "sample_column": "SAMPLE",
+                        },
+                        "model": {"id": "report-model", "label": "Report model"},
+                        "output": {"model_results_root": "model-results"},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            report_path = root / "config_gbm_report.yaml"
+            report_path.write_text(
+                yaml.safe_dump(
+                    {
+                        "build_config": build_path.name,
+                        "features": {
+                            "spec_path": feature_path.name,
+                            "scenario_column": "report",
+                        },
+                        "chart": {
+                            "expected": "gbm_prediction",
+                            "expected_source": "gbm",
+                        },
+                        "reports": [
+                            {
+                                "name": "shap",
+                                "title": "SHAP",
+                                "sample_values": "all",
+                                "chart_content": "shap_only",
+                                "partial_dependence": "shap",
+                                "transform": "none",
+                                "sigma": 0,
+                                "show_feature_importance": False,
+                                "sort_by_feature_importance": False,
+                            }
+                        ],
+                        "output": {"directory": "reports"},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            importance = {
+                "metric": "mean_abs_shap",
+                "rows": [
+                    {
+                        "feature": "MODEL_FEATURE",
+                        "importance": 1.0,
+                        "rank": 1,
+                    }
+                ],
+            }
+            with patch.object(
+                helpers,
+                "_model_details",
+                return_value=(root / "model-results" / "gbm" / "report-model", importance),
+            ) as model_details:
+                settings, features = helpers.load_report_settings(report_path, "gbm")
+
+            self.assertTrue(model_details.call_args.kwargs["needs_importance"])
+            self.assertEqual(
+                [row["name"] for row in helpers.features_for_report(features, settings["reports"][0])],
+                ["MODEL_FEATURE"],
+            )
+            self.assertEqual(settings["reports"][0]["omitted_features"], ["REPORT_ONLY"])
+
     def test_double_lift_resolves_identically_named_relative_and_absolute_build_configs(self) -> None:
         import yaml
 
@@ -1537,6 +1623,10 @@ COPY (
             },
         )
         self.assertEqual(
+            [row["name"] for row in shap_prepared],
+            ["Beta", "alpha", "Charlie", "Zero"],
+        )
+        self.assertEqual(
             shap_prepared[0]["title"],
             "Beta (Rank 1, Importance 60.0%, Increasing)",
         )
@@ -1544,6 +1634,41 @@ COPY (
             shap_prepared[2]["title"],
             "Charlie (Rank 3, Importance 20.0%, Decreasing)",
         )
+        self.assertEqual(
+            helpers.omitted_features_for_report(
+                features,
+                {"chart_content": "shap_only"},
+            ),
+            ["Missing Z", "missing A"],
+        )
+        shap_without_importance = helpers.features_for_report(
+            features,
+            {
+                "show_feature_importance": False,
+                "sort_by_feature_importance": False,
+                "chart_content": "shap_only",
+            },
+        )
+        self.assertEqual(
+            [row["name"] for row in shap_without_importance],
+            ["Charlie", "Beta", "alpha", "Zero"],
+        )
+        self.assertEqual(
+            [row["title"] for row in shap_without_importance],
+            ["Charlie (Decreasing)", "Beta (Increasing)", "alpha", "Zero"],
+        )
+        with self.assertRaisesRegex(
+            ValueError,
+            "no features present in the fitted model: Missing Z, missing A",
+        ):
+            helpers.features_for_report(
+                [features[0], features[3]],
+                {
+                    "show_feature_importance": False,
+                    "sort_by_feature_importance": False,
+                    "chart_content": "shap_only",
+                },
+            )
         sorted_without_titles = helpers.features_for_report(
             features,
             {"show_feature_importance": False, "sort_by_feature_importance": True},
@@ -1563,6 +1688,31 @@ COPY (
         self.assertEqual(
             [row["name"] for row in displayed_in_scenario_order],
             ["Missing Z", "Charlie", "Beta", "missing A", "alpha", "Zero"],
+        )
+        header = helpers.report_header(
+            {
+                "dataset_path": Path("data.parquet"),
+                "model_folder": Path("model-results/gbm/named-model"),
+                "actual": "Y",
+                "denominator": None,
+                "expected": "gbm_prediction",
+                "scenario": "reporting_features",
+                "config_path": Path("config_gbm_report.yaml"),
+                "build_config_path": Path("config_gbm.yaml"),
+                "importance_measure": "Mean absolute SHAP",
+                "kpi_spec_path": None,
+            },
+            {
+                "sample_values": "all",
+                "show_feature_importance": True,
+                "sort_by_feature_importance": True,
+                "omitted_features": ["Missing Z", "missing A"],
+            },
+            "02_external_gbm_report_demo.py",
+        )
+        self.assertEqual(
+            header["features not shown (not present in model)"],
+            ["Missing Z", "missing A"],
         )
         self.assertEqual(
             helpers._importance_measure({"metric": "mean_abs_shap"}),
@@ -2261,6 +2411,13 @@ FROM read_parquet({sql_literal(str(glm_dir / 'predictions.parquet'))})
             self.assertIn(GBM_MODEL_ID, gbm_run.stdout)
             self.assertFalse((root / ".lucidum").exists())
 
+            # A reporting scenario may legitimately add dimensions after the
+            # model has been fitted. A/E keeps them, while SHAP-only reports
+            # must omit features with no fitted SHAP column.
+            report_spec = pd.read_csv(feature_spec_path, dtype=str, keep_default_na=False)
+            report_spec.loc[report_spec["Feature"] == "MAKE", "report_demo"] = "feature"
+            report_spec.to_csv(feature_spec_path, index=False)
+
             dataset = Dataset(dataset_path)
             model_results_root = root / "model_results"
             glm_store = GlmModelStore(
@@ -2438,6 +2595,17 @@ FROM read_parquet({sql_literal(str(glm_dir / 'coefficients.parquet'))})
             self.assertEqual(glm_report["metadata"]["model"], str(glm_dir.resolve()))
             self.assertEqual(gbm_report["metadata"]["model"], str(gbm_dir.resolve()))
             self.assertEqual(shap_report["metadata"]["model"], str(gbm_dir.resolve()))
+            omitted_metadata_key = "features not shown (not present in model)"
+            self.assertNotIn(omitted_metadata_key, glm_report["metadata"])
+            self.assertNotIn(omitted_metadata_key, gbm_report["metadata"])
+            self.assertEqual(shap_report["metadata"][omitted_metadata_key], ["MAKE"])
+            shap_document = shap_report_path.read_text(encoding="utf-8")
+            provenance = shap_document.split(
+                '<dl class="report-provenance">',
+                maxsplit=1,
+            )[1].split("</dl>", maxsplit=1)[0]
+            self.assertIn("Features Not Shown (Not Present In Model)", provenance)
+            self.assertIn("MAKE", provenance)
             self.assertEqual(glm_report["metadata"]["KPI spec"], "kpi_spec.csv")
             self.assertEqual(gbm_report["metadata"]["KPI spec"], "kpi_spec.csv")
             self.assertEqual(shap_report["metadata"]["KPI spec"], "kpi_spec.csv")
@@ -2616,12 +2784,12 @@ FROM read_parquet({sql_literal(str(glm_dir / 'coefficients.parquet'))})
             )
             self.assertEqual(gbm_report["metadata"]["importance measure"], "Mean absolute SHAP")
             self.assertEqual(shap_report["metadata"]["importance measure"], "Mean absolute SHAP")
-            self.assertEqual(len(glm_report["charts"]), 14)
-            self.assertEqual(len(gbm_report["charts"]), 14)
+            self.assertEqual(len(glm_report["charts"]), 15)
+            self.assertEqual(len(gbm_report["charts"]), 15)
             self.assertEqual(len(shap_report["charts"]), 14)
             scenario_order = [
                 "ANNUAL_MILEAGE", "CAR_VALUE", "DRIVER_AGE", "FUEL_TYPE",
-                "LICENCE_TYPE", "NCD_YEARS", "OVERNIGHT_LOCATION",
+                "LICENCE_TYPE", "MAKE", "NCD_YEARS", "OVERNIGHT_LOCATION",
                 "POSTCODE_CATEGORY", "PRIOR_CLAIMS",
                 "VEHICLE_AGE", "VEHICLE_CATEGORY", "VEHICLE_USAGE",
                 "YEARS_LICENCE_HELD", "YEARS_OWNED_VEHICLE",
@@ -2720,10 +2888,9 @@ FROM read_parquet({sql_literal(str(glm_dir / 'coefficients.parquet'))})
             )
             gbm_rank = {row["feature"]: row["rank"] for row in gbm_importance["rows"]}
             shap_order = sorted(
-                scenario_order,
+                [feature for feature in scenario_order if feature in gbm_rank],
                 key=lambda feature: (
-                    0 if feature in gbm_rank else 1,
-                    gbm_rank.get(feature, 0),
+                    gbm_rank[feature],
                     feature.casefold(),
                 ),
             )

@@ -987,6 +987,7 @@ def _report_document(
     full_width_metadata = {
         "source parquet",
         "model",
+        "features not shown (not present in model)",
         "baseline build config",
         "baseline model",
         "challenger build config",

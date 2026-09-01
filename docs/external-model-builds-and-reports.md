@@ -662,7 +662,13 @@ whole fitted model, not only the selected report rows:
 - GBM importance is mean absolute SHAP when saved SHAP values are available;
   otherwise it is LightGBM gain.
 
-A selected feature that is not in the model is labelled `Not in model`.
+A selected feature that is not in the model remains available in an
+Actual-versus-Expected report and is labelled `Not in model`. A GBM `shap_only`
+report instead charts only the fitted features selected by that same scenario.
+The report header lists selected features that were not present in the fitted
+model and therefore were not shown; users do not need a separate SHAP scenario.
+If none of the selected features were fitted, report generation stops with an
+error listing the unavailable features instead of writing an empty report.
 
 ## Step 03: create model summaries
 

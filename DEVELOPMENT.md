@@ -108,7 +108,11 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
     shared Line/Bar renderer. Their optional config-relative `kpi_spec` is
     matched exactly on Actual/Denominator and serialized into chart presentation
     metadata; omission retains generic numeric formatting, while transform `one`
-    continues to use uplift percentages.
+    continues to use uplift percentages. A GBM `shap_only` report intersects its
+    selected Feature Specification scenario with the fitted feature set, records
+    omitted non-model features in a full-width report-header field, and fails
+    clearly rather than writing an empty report when the intersection is empty;
+    A/E reports continue to include reporting-only features.
   - The 03 GBM summary script names the exact model ID from the 01 config and
     writes eligible split performance, KPI-formatted Actual/prediction values,
     SHAP-preferred whole-model importance, parameters, and saved evaluation
