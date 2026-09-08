@@ -13504,13 +13504,12 @@ COPY (
                         page.locator("#specGrid .tabulator-cell.tabulator-editing input").fill(value)
                         page.keyboard.press("Enter")
 
-                    def assert_spec_full_bleed_layout(expected_first_title: str) -> None:
-                        page.locator(
-                            "#specGrid .tabulator-header .tabulator-col[tabulator-field]"
-                        ).first.wait_for(timeout=10_000)
-                        layout = page.evaluate(
+                    def assert_spec_full_bleed_layout(expected_first_title: str, expected_field: str) -> None:
+                        # A tab switch can destroy the old grid between separate wait/evaluate calls.
+                        # Capture the requested grid's layout atomically once its headers are ready.
+                        layout_handle = page.wait_for_function(
                             """
-                            () => {
+                            expectedField => {
                               const tool = document.querySelector(".spec-tool");
                               const tabs = document.querySelector(".spec-control-row");
                               const control = document.querySelector(".spec-file-row");
@@ -13521,6 +13520,12 @@ COPY (
                               const notice = document.querySelector("#specNotice");
                               const grid = document.querySelector("#specGrid");
                               const firstHeader = grid.querySelector(".tabulator-header .tabulator-col[tabulator-field]");
+                              const expectedHeader = grid.querySelector(
+                                `.tabulator-header .tabulator-col[tabulator-field="${expectedField}"]`
+                              );
+                              const tableholder = grid.querySelector(".tabulator-tableholder");
+                              if (!firstHeader || !expectedHeader || !tableholder
+                                || firstHeader.getBoundingClientRect().width <= 0) return null;
                               const rect = (node) => {
                                 const bounds = node.getBoundingClientRect();
                                 return {
@@ -13555,9 +13560,7 @@ COPY (
                                 ),
                                 gridBorderRadius: getComputedStyle(grid).borderRadius,
                                 gridBackground: getComputedStyle(grid).backgroundColor,
-                                tableholderBackground: getComputedStyle(
-                                  grid.querySelector(".tabulator-tableholder")
-                                ).backgroundColor,
+                                tableholderBackground: getComputedStyle(tableholder).backgroundColor,
                                 panelBackground: (() => {
                                   const probe = document.createElement("span");
                                   probe.style.background = "var(--panel)";
@@ -13571,8 +13574,12 @@ COPY (
                                 ).length,
                               };
                             }
-                            """
+                            """,
+                            arg=expected_field,
+                            timeout=10_000,
                         )
+                        layout = layout_handle.json_value()
+                        layout_handle.dispose()
                         self.assertTrue(layout["copyInsideControl"])
                         self.assertTrue(layout["pathInsideCopy"])
                         self.assertTrue(layout["noticeInsideCopy"])
@@ -13609,7 +13616,7 @@ COPY (
                     page.locator("#specNotice", has_text="Valid feature spec").wait_for(timeout=10_000)
                     self.assertEqual(page.locator(".spec-kind-tabs #specSaveBtn").count(), 0)
                     self.assertEqual(page.locator(".spec-file-row #specSaveBtn").count(), 1)
-                    assert_spec_full_bleed_layout("Feature")
+                    assert_spec_full_bleed_layout("Feature", "Feature")
                     spec_rail_geometry = page.locator(".spec-control-row").evaluate(
                         """
                         (rail) => {
@@ -13650,7 +13657,7 @@ COPY (
                     page.locator("#specFilePath", has_text="kpi_spec.csv (new file)").wait_for(timeout=10_000)
                     page.locator("#specNotice", has_text="Valid KPI spec").wait_for(timeout=10_000)
                     page.locator(".spec-cell-placeholder", has_text="Numeric column").wait_for(timeout=10_000)
-                    assert_spec_full_bleed_layout("Group")
+                    assert_spec_full_bleed_layout("Group", "actual")
                     wait_for_save_button_state({"disabled": False, "dirty": False, "pending": True})
                     page.locator("#specSaveBtn").click()
                     page.locator("#specNotice", has_text="KPI spec saved").wait_for(timeout=10_000)
@@ -13674,7 +13681,7 @@ COPY (
                     page.locator('[data-spec-kind="filter"]').click()
                     page.locator('[data-spec-kind="filter"][aria-selected="true"]').wait_for(timeout=10_000)
                     page.locator("#specNotice:not(.spec-notice-empty)").wait_for(timeout=10_000)
-                    assert_spec_full_bleed_layout("Group")
+                    assert_spec_full_bleed_layout("Group", "expression")
                     page.set_viewport_size({"width": 420, "height": 800})
                     page.wait_for_timeout(100)
                     narrow_control = page.evaluate(
