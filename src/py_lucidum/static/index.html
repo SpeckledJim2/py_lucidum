@@ -452,8 +452,12 @@
                 </div>
               </div>
               <div id="mapDotSizeControl" class="control map-strip-mode-control" hidden>
-                <h3>Dot size</h3>
-                <div id="mapDotSizeMode" class="segmented map-dot-size-mode" role="group" aria-label="Dot size">
+                <div class="map-dot-size-heading">
+                  <h3 id="mapDotSizeLabel" title="Relative Adaptive dot size, from 1 to 10. 1 matches Min at one physical pixel; 5 is the default." aria-live="polite" aria-atomic="true">Dot Size (5)</h3>
+                  <button id="mapDotSizeDecrease" class="app-command-button map-dot-size-step" type="button" data-map-dot-size-step="-1" title="Smaller dots" aria-label="Smaller dots"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m10 4-4 4 4 4"></path></svg></button>
+                  <button id="mapDotSizeIncrease" class="app-command-button map-dot-size-step" type="button" data-map-dot-size-step="1" title="Larger dots" aria-label="Larger dots"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m6 4 4 4-4 4"></path></svg></button>
+                </div>
+                <div id="mapDotSizeMode" class="segmented map-dot-size-mode" role="group" aria-label="Dot Size">
                   <button id="mapDotSizeMin" type="button" data-map-dot-size-mode="min" data-stable-label="Min" aria-pressed="false">Min</button>
                   <button id="mapDotSizeAdaptive" class="active" type="button" data-map-dot-size-mode="adaptive" data-stable-label="Adaptive" aria-pressed="true">Adaptive</button>
                 </div>

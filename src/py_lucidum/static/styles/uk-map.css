@@ -399,6 +399,50 @@
         padding-inline: 8px;
       }
 
+      .map-settings-scroll.app-settings-strip > .map-strip-mode-control .map-dot-size-heading {
+        align-items: center;
+        display: grid;
+        gap: 2px;
+        grid-template-columns: max-content 20px 20px;
+        grid-template-rows: 11px;
+        height: 11px;
+        margin: 0 0 5px;
+        padding-inline-start: var(--app-control-button-padding-inline);
+        white-space: nowrap;
+      }
+
+      .map-settings-scroll.app-settings-strip > .map-strip-mode-control .map-dot-size-heading h3 {
+        font-variant-numeric: tabular-nums;
+        margin: 0;
+        min-width: 11ch;
+        padding: 0;
+      }
+
+      .map-dot-size-step {
+        align-items: center;
+        display: inline-flex;
+        flex: 0 0 20px;
+        height: 16px;
+        justify-content: center;
+        min-height: 16px;
+        padding: 0;
+        width: 20px;
+      }
+
+      .map-dot-size-step svg {
+        fill: none;
+        height: 14px;
+        stroke: currentColor;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 1.5;
+        width: 14px;
+      }
+
+      .map-dot-size-step[hidden] {
+        display: none;
+      }
+
       .map-strip-mode-control .segmented button:disabled {
         color: color-mix(in srgb, currentColor 50%, transparent);
         cursor: default;

@@ -2516,6 +2516,52 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.run_node_script(script)
 
 
+    def test_uk_map_dot_size_favourites_normalise_and_preserve_preference(self) -> None:
+        module = Path("src/py_lucidum/static/app/uk-map-tool.js").resolve().as_uri()
+        script = """
+import assert from "node:assert/strict";
+import { createUkMapTool } from "__MODULE__";
+const elements = new Map();
+const el = (id) => {
+  if (!elements.has(id)) elements.set(id, {
+    id, classList: { toggle() {} }, style: { setProperty() {} },
+  });
+  return elements.get(id);
+};
+globalThis.document = { querySelectorAll: () => [] };
+const state = { schema: {}, mapLevel: "unit" };
+const tool = createUkMapTool({
+  state, el, locationParams: new URLSearchParams(),
+  columnExists: () => true, numericColumnExists: () => true,
+  syncActiveFilterLabels() {},
+});
+for (const [value, expected] of [
+  [undefined, 5], [null, 5], ["", 5], ["  ", 5], [false, 5], [true, 5],
+  [[], 5], [{}, 5], ["invalid", 5], [NaN, 5], [Infinity, 5],
+  [-20, 1], [0, 1], [30, 10], [6.7, 7], ["8", 8],
+]) {
+  await tool.applyFavouriteState({ level: "unit", dotSizeLevel: value });
+  assert.equal(state.mapDotSizeLevel, expected);
+  assert.equal(tool.captureFavouriteState().dotSizeLevel, expected);
+}
+await tool.applyFavouriteState({ level: "unit", dotSize: 2 });
+assert.equal(state.mapDotSizeLevel, 5);
+assert.equal(state.mapDotSizeMode, "adaptive");
+assert.equal("dotSize" in tool.captureFavouriteState(), false);
+await tool.applyFavouriteState({ level: "unit", dotSizeMode: "min", dotSizeLevel: 7 });
+const saved = tool.captureFavouriteState();
+assert.equal(saved.dotSizeMode, "min");
+assert.equal(saved.dotSizeLevel, 7);
+assert.equal(el("mapDotSizeLabel").textContent, "Dot Size");
+assert.equal(el("mapDotSizeIncrease").hidden, true);
+assert.equal(el("mapDotSizeDecrease").hidden, true);
+await tool.applyFavouriteState({ ...saved, dotSizeMode: "adaptive" });
+assert.equal(el("mapDotSizeLabel").textContent, "Dot Size (7)");
+assert.equal(el("mapDotSizeIncrease").hidden, false);
+assert.equal(el("mapDotSizeDecrease").hidden, false);
+""".replace("__MODULE__", module)
+        self.run_node_script(script)
+
     def test_initial_tool_buttons_match_enabled_tools(self) -> None:
         cases = [
             (
@@ -2657,7 +2703,7 @@ if (option.grid.bottom !== 54) throw new Error(`plot grid bottom should stay unc
         self.assertIn('base-openfreemap-positron.png', index)
         self.assertIn('base-openfreemap-dark.png', index)
         self.assertIn('id="mapDotSizeMode"', index)
-        self.assertIn('role="group" aria-label="Dot size"', index)
+        self.assertIn('role="group" aria-label="Dot Size"', index)
         self.assertIn('id="mapDotSizeMin"', index)
         self.assertIn('data-map-dot-size-mode="min"', index)
         self.assertIn('aria-pressed="false">Min</button>', index)

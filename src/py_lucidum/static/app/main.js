@@ -165,6 +165,7 @@
         mapPalette: "divergent",
         mapLineWeight: 1,
         mapDotSizeMode: "adaptive",
+        mapDotSizeLevel: 5,
         mapOpacity: 1,
         mapHotspots: 0,
         mapAreaLabels: "off",

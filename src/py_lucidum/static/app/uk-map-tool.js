@@ -595,6 +595,9 @@ export function createUkMapTool({
   const MAP_UNIT_ADAPTIVE_SPARSE_DIAMETER = 6;
   const MAP_UNIT_ADAPTIVE_ZOOM_RANGE = 6;
   const MAP_UNIT_DOT_SIZE_MODES = new Set(["min", "adaptive"]);
+  const MAP_UNIT_DOT_SIZE_DEFAULT = 5;
+  const MAP_UNIT_DOT_SIZE_MIN = 1;
+  const MAP_UNIT_DOT_SIZE_MAX = 10;
   const MAP_OPACITY_PRESETS = [0.2, 0.6, 1];
   const MAP_DEFAULT_VIEW = { center: { lat: 54.5, lng: -3.2 }, zoom: 6 };
   const MAP_AREA_LABEL_MODES = new Set(["off", "on"]);
@@ -1687,6 +1690,13 @@ export function createUkMapTool({
     return MAP_UNIT_DOT_SIZE_MODES.has(mode) ? mode : "adaptive";
   }
 
+  function normaliseMapDotSizeLevel(value) {
+    const number = typeof value === "number" || (typeof value === "string" && value.trim())
+      ? Number(value)
+      : NaN;
+    return clampMapNumber(number, MAP_UNIT_DOT_SIZE_DEFAULT, MAP_UNIT_DOT_SIZE_MIN, MAP_UNIT_DOT_SIZE_MAX, { integer: true });
+  }
+
   function normaliseMapAreaLabels(value, legacyLabelSize = 0) {
     const mode = String(value || "").toLowerCase();
     if (MAP_AREA_LABEL_MODES.has(mode)) return mode;
@@ -1720,6 +1730,7 @@ export function createUkMapTool({
       palette,
       lineWeight: normaliseMapBorderWeight(payload.lineWeight),
       dotSizeMode: normaliseMapDotSizeMode(payload.dotSizeMode),
+      dotSizeLevel: normaliseMapDotSizeLevel(payload.dotSizeLevel),
       opacity: normaliseMapOpacity(payload.opacity),
       hotspots: clampMapNumber(payload.hotspots, 0, -9, 9, { integer: true }),
       areaLabels: normaliseMapAreaLabels(payload.areaLabels, payload.labelSize),
@@ -1738,6 +1749,7 @@ export function createUkMapTool({
       palette: state.mapPalette,
       lineWeight: normaliseMapBorderWeight(state.mapLineWeight),
       dotSizeMode: normaliseMapDotSizeMode(state.mapDotSizeMode),
+      dotSizeLevel: normaliseMapDotSizeLevel(state.mapDotSizeLevel),
       opacity: normaliseMapOpacity(state.mapOpacity),
       hotspots: Number(state.mapHotspots),
       areaLabels: normaliseMapAreaLabels(state.mapAreaLabels),
@@ -1754,6 +1766,7 @@ export function createUkMapTool({
     state.mapPalette = next.palette;
     state.mapLineWeight = next.lineWeight;
     state.mapDotSizeMode = next.dotSizeMode;
+    state.mapDotSizeLevel = next.dotSizeLevel;
     state.mapOpacity = next.opacity;
     state.mapHotspots = next.hotspots;
     state.mapAreaLabels = next.areaLabels;
@@ -2386,11 +2399,21 @@ export function createUkMapTool({
     const ratio = Number.isFinite(Number(pixelRatio)) && Number(pixelRatio) > 0
       ? Number(pixelRatio)
       : 1;
-    if (normaliseMapDotSizeMode(state.mapDotSizeMode) === "min") {
+    const level = normaliseMapDotSizeLevel(state.mapDotSizeLevel);
+    if (normaliseMapDotSizeMode(state.mapDotSizeMode) === "min" || level === MAP_UNIT_DOT_SIZE_MIN) {
       return { diameter: 1 / ratio, radius: 0.5 / ratio, singleDevicePixel: true };
     }
-    const diameter = unitPointAdaptiveDiameter(zoom, fittedZoom, pointCount);
-    if (diameter <= MAP_UNIT_ADAPTIVE_DENSE_BASE_DIAMETER) {
+    const adaptiveDiameter = unitPointAdaptiveDiameter(zoom, fittedZoom, pointCount);
+    const baselineIsSinglePixel = adaptiveDiameter <= MAP_UNIT_ADAPTIVE_DENSE_BASE_DIAMETER;
+    const baselineDiameter = baselineIsSinglePixel ? 1 / ratio : adaptiveDiameter;
+    // Keep the default's existing physical-pixel baseline before scaling it.
+    const diameter = level === MAP_UNIT_DOT_SIZE_DEFAULT
+      ? baselineDiameter
+      : Math.max(1 / ratio, baselineDiameter * level / MAP_UNIT_DOT_SIZE_DEFAULT);
+    const singleDevicePixel = level === MAP_UNIT_DOT_SIZE_DEFAULT
+      ? baselineIsSinglePixel
+      : diameter <= 1 / ratio;
+    if (singleDevicePixel) {
       return { diameter: 1 / ratio, radius: 0.5 / ratio, singleDevicePixel: true };
     }
     return { diameter, radius: diameter / 2, singleDevicePixel: false };
@@ -3409,6 +3432,13 @@ export function createUkMapTool({
     lineWeightControl?.classList.toggle("disabled", unitMode);
     const dotSizeControl = el("mapDotSizeControl");
     if (dotSizeControl) dotSizeControl.hidden = !unitMode;
+    const dotSizeLevel = normaliseMapDotSizeLevel(state.mapDotSizeLevel);
+    const adaptiveDots = normaliseMapDotSizeMode(state.mapDotSizeMode) === "adaptive";
+    el("mapDotSizeLabel").textContent = adaptiveDots ? `Dot Size (${dotSizeLevel})` : "Dot Size";
+    el("mapDotSizeDecrease").hidden = !adaptiveDots;
+    el("mapDotSizeIncrease").hidden = !adaptiveDots;
+    el("mapDotSizeDecrease").disabled = !unitMode || !adaptiveDots || dotSizeLevel <= MAP_UNIT_DOT_SIZE_MIN;
+    el("mapDotSizeIncrease").disabled = !unitMode || !adaptiveDots || dotSizeLevel >= MAP_UNIT_DOT_SIZE_MAX;
     document.querySelectorAll("[data-map-dot-size-mode]").forEach((button) => {
       const active = button.dataset.mapDotSizeMode === normaliseMapDotSizeMode(state.mapDotSizeMode);
       button.classList.toggle("active", active);
@@ -3662,6 +3692,17 @@ export function createUkMapTool({
     el("mapLegendToggle").addEventListener("click", toggleMapLegendCollapsed);
     el("mapBaseLayerTiles").addEventListener("change", handleMapLayerControlChange);
     el("mapLevelTiles").addEventListener("change", handleMapLayerControlChange);
+    document.querySelectorAll("[data-map-dot-size-step]").forEach((button) => {
+      button.addEventListener("click", () => {
+        if (state.mapLevel !== "unit" || normaliseMapDotSizeMode(state.mapDotSizeMode) !== "adaptive") return;
+        const current = normaliseMapDotSizeLevel(state.mapDotSizeLevel);
+        const next = normaliseMapDotSizeLevel(current + Number(button.dataset.mapDotSizeStep));
+        if (next === current) return;
+        state.mapDotSizeLevel = next;
+        clearActiveMapFavourite({ force: true });
+        redrawMapInPlace();
+      });
+    });
     document.querySelectorAll(".map-palette-button").forEach((button) => {
       button.addEventListener("click", () => {
         state.mapPalette = button.dataset.palette || "viridis";

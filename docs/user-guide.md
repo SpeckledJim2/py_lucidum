@@ -674,6 +674,15 @@ area name, KPI, and `N` or Weight detail as area and sector cards.
 - **Adaptive** grows dots with zoom and adjusts their maximum size for the filtered
   point count. Small datasets remain easy to see while large datasets avoid
   oversized points.
+- **Dot Size (N)** fine-tunes Adaptive with the left and right chevrons. Choose
+  1–10, with 5 matching the default size. Level 1 matches **Min** exactly: one
+  physical pixel, regardless of zoom or point count. Levels 2–10 scale the default
+  diameter by N/5, so 10 uses 200%. N stays fixed as you zoom; dots at levels 2–10
+  continue adapting.
+  Dots cannot shrink below one physical pixel, so smaller settings may look the
+  same on an already dense map. In Min mode the heading shows only **Dot Size**;
+  the number and chevrons are hidden, and N is remembered for your return to
+  Adaptive. Map view favourites save both the mode and N; older favourites use 5.
 
 ![Lucidum UK Postcode Unit map](https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/postcode_unit.png)
 

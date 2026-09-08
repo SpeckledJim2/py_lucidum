@@ -19779,6 +19779,7 @@ COPY (
                         timeout=10_000,
                     )
                     self.assertEqual(page.locator("#mapDotSizeAdaptive").get_attribute("aria-pressed"), "true")
+                    self.assertEqual(page.locator("#mapDotSizeLabel").text_content(), "Dot Size (5)")
                     self.assertEqual(page.locator("#mapDotSizeMin").get_attribute("aria-pressed"), "false")
                     self.assertEqual(page.locator("#mapAreaLabelsOff").get_attribute("aria-pressed"), "false")
                     self.assertEqual(page.locator("#mapAreaLabelsOn").get_attribute("aria-pressed"), "true")
@@ -19988,6 +19989,7 @@ COPY (
                         self.assertAlmostEqual(saved_map["zoom"], 9, delta=0.01)
                         self.assertAlmostEqual(saved_map["bearing"], 37.5, delta=0.01)
                         self.assertEqual(saved_map["dotSizeMode"], "adaptive")
+                        self.assertEqual(saved_map["dotSizeLevel"], 5)
                         self.assertEqual(saved_map["areaLabels"], "off")
                         self.assertEqual(saved_map["baseMap"], "openFreeMapPositron")
                         self.assertEqual(saved_map["lineWeight"], 3)
@@ -21920,6 +21922,30 @@ COPY (
                         self.assertLess(intermediate_low["diameter"], sparse_low["diameter"])
                         self.assertAlmostEqual(dense_high["fittedZoom"], fitted_zoom)
 
+                        page.evaluate("""() => {
+                          for (let i = 0; i < 5; i++) document.querySelector("#mapDotSizeIncrease").click();
+                        }""")
+                        doubled_high = unit_style_at_zoom(fitted_zoom + 6, 500_000)
+                        doubled_middle = unit_style_at_zoom(fitted_zoom + 3, 500_000)
+                        doubled_low = unit_style_at_zoom(fitted_zoom, 500_000)
+                        self.assertAlmostEqual(doubled_high["diameter"], 20)
+                        self.assertAlmostEqual(doubled_middle["diameter"], 11)
+                        self.assertAlmostEqual(doubled_low["diameter"] * doubled_low["pixelRatio"], 2)
+                        self.assertEqual(page.locator("#mapDotSizeLabel").text_content(), "Dot Size (10)")
+                        page.evaluate("""() => {
+                          for (let i = 0; i < 9; i++) document.querySelector("#mapDotSizeDecrease").click();
+                        }""")
+                        small_high = unit_style_at_zoom(fitted_zoom + 6, 500_000)
+                        small_low = unit_style_at_zoom(fitted_zoom, 500_000)
+                        self.assertTrue(small_high["singleDevicePixel"])
+                        self.assertAlmostEqual(small_high["diameter"] * small_high["pixelRatio"], 1)
+                        self.assertTrue(small_low["singleDevicePixel"])
+                        self.assertAlmostEqual(small_low["diameter"] * small_low["pixelRatio"], 1)
+                        self.assertEqual(page.locator("#mapDotSizeLabel").text_content(), "Dot Size (1)")
+                        self.assertEqual(len(summary_requests), summary_request_count_before_camera_moves)
+                        page.evaluate("""() => {
+                          for (let i = 0; i < 4; i++) document.querySelector("#mapDotSizeIncrease").click();
+                        }""")
                         page.evaluate('() => document.querySelector("#mapDotSizeMin")?.click()')
                         page.wait_for_function(
                             """
@@ -22343,7 +22369,7 @@ COPY (
             base_url, server, thread = self.start_app(
                 data_path,
                 defaults={"actual": "price", "denominator": "__none__"},
-                tools=["uk_map"],
+                tools=["uk_map", "line_bar"],
                 token="",
                 line_bar_favourites_path=favourites_path,
             )
@@ -22356,6 +22382,8 @@ COPY (
                     )
                     for browser_name, browser_type, device_scale_factor in browser_cases:
                         with self.subTest(browser=browser_name, device_scale_factor=device_scale_factor):
+                            # Each browser starts without the previous case's auto-restored favourite.
+                            favourites_path.write_text('{"version": 2, "favourites": []}', encoding="utf-8")
                             browser = browser_type.launch()
                             context = browser.new_context(
                                 viewport={"width": 1100, "height": 720},
@@ -22411,7 +22439,105 @@ COPY (
                                     timeout=10_000,
                                 )
                                 request_count = len(summary_requests)
-                                page.evaluate('() => document.querySelector("#mapDotSizeMin")?.click()')
+                                if page.locator("#mapControlReset").get_attribute("aria-expanded") == "false":
+                                    page.locator("#mapControlReset").click()
+                                decrease = page.locator("#mapDotSizeDecrease")
+                                increase = page.locator("#mapDotSizeIncrease")
+                                label = page.locator("#mapDotSizeLabel")
+                                self.assertEqual(label.text_content(), "Dot Size (5)")
+                                page.evaluate(
+                                    """() => {
+                                      const map = document.querySelector("#ukMap")._lucidumMap;
+                                      window.__dotSizeLayer = Object.values(map._layers)
+                                        .find((layer) => layer?.data?.level === "unit");
+                                      window.__dotSizeGeometry = window.__dotSizeLayer.geometryPoints;
+                                      window.__dotSizeCamera = JSON.stringify([map.getCenter(), map.getZoom(), map.getBearing()]);
+                                    }"""
+                                )
+
+                                def wait_for_diameter(diameter: float) -> None:
+                                    page.wait_for_function(
+                                        """diameter => {
+                                          const layer = Object.values(document.querySelector("#ukMap")._lucidumMap._layers)
+                                            .find((item) => item?.data?.level === "unit");
+                                          return layer?.canvasMapLayer?.visible
+                                            && Math.abs(layer.pointDiameter - diameter) < 0.0001;
+                                        }""",
+                                        arg=diameter,
+                                    )
+
+                                wait_for_diameter(6)
+                                initial_heading_width = label.bounding_box()["width"]
+                                initial_heading_y = label.bounding_box()["y"]
+                                initial_control_width = page.locator("#mapDotSizeControl").bounding_box()["width"]
+                                # Native keyboard activation must change size while retaining Adaptive.
+                                increase.focus()
+                                increase.press("Enter")
+                                wait_for_diameter(7.2)
+                                self.assertEqual(label.text_content(), "Dot Size (6)")
+                                decrease.focus()
+                                decrease.press("Space")
+                                wait_for_diameter(6)
+                                self.assertEqual(page.locator("#mapDotSizeAdaptive").get_attribute("aria-pressed"), "true")
+                                for _ in range(5):
+                                    increase.click()
+                                wait_for_diameter(12)
+                                self.assertEqual(label.text_content(), "Dot Size (10)")
+                                self.assertTrue(increase.is_disabled())
+                                self.assertAlmostEqual(label.bounding_box()["width"], initial_heading_width)
+                                for _ in range(9):
+                                    decrease.click()
+                                wait_for_diameter(1 / device_scale_factor)
+                                self.assertEqual(label.text_content(), "Dot Size (1)")
+                                self.assertTrue(decrease.is_disabled())
+                                level_one_canvas = page.evaluate("""() => {
+                                  const layer = window.__dotSizeLayer;
+                                  const canvas = layer.canvas;
+                                  const pixels = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height).data;
+                                  let paintedPixels = 0;
+                                  for (let i = 3; i < pixels.length; i += 4) {
+                                    if (pixels[i] > 0) paintedPixels++;
+                                  }
+                                  return { paintedPixels, image: canvas.toDataURL(), singleDevicePixel: layer.singleDevicePixel };
+                                }""")
+                                self.assertTrue(level_one_canvas["singleDevicePixel"])
+                                self.assertEqual(level_one_canvas["paintedPixels"], 2)
+                                page.locator("#mapDotSizeMin").click()
+                                wait_for_diameter(1 / device_scale_factor)
+                                self.assertEqual(page.evaluate("() => window.__dotSizeLayer.canvas.toDataURL()"), level_one_canvas["image"])
+                                page.locator("#mapDotSizeAdaptive").click()
+                                self.assertEqual(label.text_content(), "Dot Size (1)")
+                                for _ in range(6):
+                                    increase.click()
+                                wait_for_diameter(8.4)
+                                page.locator("#mapDotSizeAdaptive").click()
+                                self.assertEqual(label.text_content(), "Dot Size (7)")
+                                self.assertTrue(page.evaluate(
+                                    """() => {
+                                      const map = document.querySelector("#ukMap")._lucidumMap;
+                                      const layer = Object.values(map._layers).find((item) => item?.data?.level === "unit");
+                                      const point = map.latLngToContainerPoint([51.5074, -0.1278]);
+                                      return layer === window.__dotSizeLayer
+                                        && layer.geometryPoints === window.__dotSizeGeometry
+                                        && JSON.stringify([map.getCenter(), map.getZoom(), map.getBearing()]) === window.__dotSizeCamera
+                                        && layer.findNearest(point)?.key === "E1 1AA"
+                                        && layer.hitRadius >= 6;
+                                    }"""
+                                ))
+                                self.assertEqual(len(summary_requests), request_count)
+                                page.locator("#mapDotSizeMin").click()
+                                self.assertTrue(decrease.is_disabled())
+                                self.assertTrue(increase.is_disabled())
+                                self.assertEqual(label.text_content(), "Dot Size")
+                                self.assertAlmostEqual(page.locator("#mapDotSizeControl").bounding_box()["width"], initial_control_width)
+                                self.assertAlmostEqual(label.bounding_box()["y"], initial_heading_y)
+                                self.assertTrue(page.locator("#mapDotSizeDecrease").is_hidden())
+                                self.assertTrue(page.locator("#mapDotSizeIncrease").is_hidden())
+                                page.locator("#mapDotSizeAdaptive").click()
+                                self.assertEqual(label.text_content(), "Dot Size (7)")
+                                self.assertAlmostEqual(label.bounding_box()["y"], initial_heading_y)
+                                wait_for_diameter(8.4)
+                                page.locator("#mapDotSizeMin").click()
                                 page.wait_for_function(
                                     """
                                     () => {
@@ -22487,6 +22613,7 @@ COPY (
                                         if item["name"] == "Minimum unit dots"
                                     )
                                     self.assertEqual(saved_map["dotSizeMode"], "min")
+                                    self.assertEqual(saved_map["dotSizeLevel"], 7)
                                     self.assertNotIn("dotSize", saved_map)
                                     page.evaluate('() => document.querySelector("#mapDotSizeAdaptive")?.click()')
                                     page.wait_for_function(
@@ -22494,6 +22621,10 @@ COPY (
                                         '?.getAttribute("aria-pressed") === "true"',
                                         timeout=10_000,
                                     )
+                                    increase.click()
+                                    wait_for_diameter(9.6)
+                                    self.assertEqual(label.text_content(), "Dot Size (8)")
+                                    self.assertEqual(page.locator(".saved-favourite-option.active").count(), 0)
                                     favourite_request_count = len(summary_requests)
                                     page.evaluate(
                                         """
@@ -22515,6 +22646,9 @@ COPY (
                                         """,
                                         timeout=10_000,
                                     )
+                                    self.assertEqual(label.text_content(), "Dot Size")
+                                    self.assertTrue(page.locator("#mapDotSizeIncrease").is_hidden())
+                                    self.assertTrue(page.locator("#mapDotSizeDecrease").is_hidden())
                                     self.assertEqual(len(summary_requests), favourite_request_count)
                                     request_count = len(summary_requests)
 
@@ -22541,6 +22675,36 @@ COPY (
                                 self.assertEqual(resized["hitRadius"], 6)
                                 self.assertNotAlmostEqual(resized["fittedZoom"], initial["fittedZoom"])
                                 self.assertEqual(len(summary_requests), request_count)
+
+                                page.set_viewport_size({"width": 700, "height": 720})
+                                label.scroll_into_view_if_needed()
+                                narrow_min_heading = label.bounding_box()
+                                page.locator("#mapDotSizeAdaptive").click()
+                                wait_for_diameter(8.4)
+                                self.assertEqual(label.bounding_box(), narrow_min_heading)
+                                self.assertEqual(page.locator("#mapToolbar").bounding_box()["height"], 50)
+                                step_box = increase.bounding_box()
+                                mode_box = page.locator("#mapDotSizeMode").bounding_box()
+                                self.assertLessEqual(step_box["y"] + step_box["height"], mode_box["y"])
+                                # Resolution and tool switches retain the preference.
+                                page.evaluate("""() => {
+                                  const input = document.querySelector('input[name="mapLevel"][value="area"]');
+                                  input.checked = true;
+                                  input.dispatchEvent(new Event("change", { bubbles: true }));
+                                }""")
+                                page.wait_for_function('() => document.querySelector("#mapGroupMeta").textContent.includes("areas matched")')
+                                self.assertTrue(page.locator("#mapDotSizeControl").is_hidden())
+                                page.evaluate("""() => {
+                                  const input = document.querySelector('input[name="mapLevel"][value="unit"]');
+                                  input.checked = true;
+                                  input.dispatchEvent(new Event("change", { bubbles: true }));
+                                }""")
+                                wait_for_diameter(8.4)
+                                self.assertEqual(label.text_content(), "Dot Size (7)")
+                                page.locator('button[data-tool="line_bar"]').click()
+                                page.locator('button[data-tool="uk_map"]').click()
+                                wait_for_diameter(8.4)
+                                self.assertEqual(label.text_content(), "Dot Size (7)")
                                 self.assertEqual(page_errors, [])
                             finally:
                                 context.close()
@@ -32646,7 +32810,7 @@ COPY (
                 self.assertFalse(page.locator("#mapDotSizeControl").is_hidden())
                 self.assertFalse(page.locator("#mapDotSizeMin").is_disabled())
                 self.assertFalse(page.locator("#mapDotSizeAdaptive").is_disabled())
-                self.assertEqual(page.locator("#mapDotSizeControl > h3").text_content().strip(), "Dot size")
+                self.assertEqual(page.locator("#mapDotSizeLabel").text_content().strip(), "Dot Size (5)")
                 self.assertEqual(page.locator("#mapDotSizeAdaptive").get_attribute("aria-pressed"), "true")
                 self.assertEqual(page.locator("#mapDotSizeMin").get_attribute("aria-pressed"), "false")
                 self.assertEqual(page.locator("#mapHotspotsMinLabel").text_content().strip(), "Low")
