@@ -12,7 +12,7 @@ from typing import Any
 from uuid import uuid4
 
 from py_lucidum._version import __version__
-from py_lucidum.core import Dataset, is_numeric_kind, load_features, load_kpis, quote_ident, sql_literal
+from py_lucidum.core import Dataset, is_numeric_kind, is_response_column, load_features, load_kpis, quote_ident, sql_literal
 from py_lucidum.core.chart_controls import normalise_chart_controls as _normalise_chart_controls
 from py_lucidum.model_metrics import GINI_SPLITS
 
@@ -90,7 +90,7 @@ def line_bar_chart(
         )
         columns = dataset.column_map()
         _require_column(columns, x, "x-axis")
-        _require_numeric_column(columns, actual, "Actual")
+        _require_response_column(columns, actual)
         _require_column(columns, sample_column, "SAMPLE")
         if denominator:
             _require_numeric_column(columns, denominator, "Denominator")
@@ -266,7 +266,7 @@ def double_lift_chart(
     dataset = Dataset(path)
     try:
         columns = dataset.column_map()
-        _require_numeric_column(columns, actual, "Actual")
+        _require_response_column(columns, actual)
         _require_column(columns, sample_column, "SAMPLE")
         if denominator:
             _require_numeric_column(columns, denominator, "Denominator")
@@ -911,6 +911,12 @@ def _choice(value: Any, choices: set[str], label: str) -> str:
 def _require_column(columns: Mapping[str, Any], name: str, label: str) -> None:
     if name not in columns:
         raise ValueError(f"{label} column is missing: {name}")
+
+
+def _require_response_column(columns: Mapping[str, Any], name: str) -> None:
+    _require_column(columns, name, "Actual")
+    if not is_response_column(columns[name]):
+        raise ValueError(f"Actual column must be numeric or Boolean: {name}")
 
 
 def _require_numeric_column(columns: Mapping[str, Any], name: str, label: str) -> None:

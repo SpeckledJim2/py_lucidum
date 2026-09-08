@@ -1358,6 +1358,67 @@ COPY (
             else:
                 self.assertAlmostEqual(float(result["diagnostics"][key]), float(expected[key]), places=10)
 
+    def test_boolean_response_training_matches_integer_and_restores_outputs(self) -> None:
+        self.require_glm_dependencies()
+        from py_lucidum import line_bar_chart
+        from py_lucidum.tools.line_bar.query import chart
+
+        data_path = self.root / "boolean_glm.parquet"
+        con = duckdb.connect()
+        try:
+            con.execute(f"""
+COPY (
+  SELECT *, CAST(BooleanResponse AS INTEGER) AS NumericResponse
+  FROM (SELECT i % 3 AS Feature, i % 2 = 0 AS Flag,
+    CASE WHEN i = 119 THEN NULL ELSE (i * 7) % 11 < 5 END AS BooleanResponse,
+    'training' AS SAMPLE
+    FROM range(120) t(i))
+) TO '{data_path.as_posix()}' (FORMAT PARQUET)
+""")
+        finally:
+            con.close()
+        dataset = Dataset(data_path)
+        self.addCleanup(dataset.con.close)
+        store = GlmModelStore(data_path)
+        results = []
+        predictions = []
+        for response in ["BooleanResponse", "NumericResponse"]:
+            result = train_model(dataset, store, {
+                "label": response, "formula": "Feature", "response_column": response,
+                "denominator_column": "", "family": "binomial", "training_scope": "all",
+            })
+            results.append(result)
+            self.assertEqual(result["training_rows"], 119)
+            manifest = store.manifest(result["model_id"])
+            self.assertEqual(manifest["response_column"], response)
+            self.assertEqual(manifest["family"], "binomial")
+            predictions.append(store.read_parquet_records(store.artifact_path(result["model_id"], "predictions")))
+        self.assertEqual(predictions[0], predictions[1])
+        diagnostics = [store.read_json(store.artifact_path(result["model_id"], "diagnostics")) for result in results]
+        self.assertAlmostEqual(diagnostics[0]["deviance"], diagnostics[1]["deviance"], places=10)
+        model_id = results[0]["model_id"]
+        restored = GlmModelStore(data_path)
+        restored.activate_model(model_id)
+        self.assertEqual(restored.active_model_id(), model_id)
+        dataset.register_data_source_provider(GlmSourceProvider(restored))
+        source = restored.source_id(model_id)
+        request = {
+            "source": source, "x": "Feature", "denominator": "__none__",
+            "responses": [{"numerator": "BooleanResponse"}, {"numerator": "glm_prediction"}],
+            "partialDependence": {"mode": "glm"},
+        }
+        plotted = chart(dataset, request)
+        self.assertEqual(len(plotted["responses"]), 2)
+        self.assertTrue(plotted["rows"])
+        self.assertEqual(plotted["partial_dependence"]["mode"], "glm")
+        self.assertTrue(plotted["partial_dependence"]["rows"], plotted["partial_dependence"])
+        self.assertEqual(dataset.column_map_for_source(source)["BooleanResponse"].kind, "categorical")
+        tabulated = build_tabulations(dataset, restored, {"model_ids": [model_id]}, {"rows": []})
+        self.assertEqual(tabulated["models"][0]["status"], "tabulated")
+        report = line_bar_chart(data_path, x="Feature", actual="BooleanResponse", expected="glm_prediction",
+                                expected_source="glm", model_id=model_id)
+        self.assertTrue(report)
+
     def test_glm_training_writes_weighted_predictions_and_publishes_source(self) -> None:
         self.require_glm_dependencies()
         dataset = Dataset(self.data_path)

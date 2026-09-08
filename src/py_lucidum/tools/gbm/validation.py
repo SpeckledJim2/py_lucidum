@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from py_lucidum.core import ColumnInfo, Dataset, is_numeric_kind, json_number, quote_ident, sql_literal
+from py_lucidum.core import ColumnInfo, Dataset, is_numeric_kind, is_response_column, json_number, quote_ident, sql_literal
 from py_lucidum.tools.glm.store import GlmModelStore
 
 from .sample import (
@@ -435,8 +435,8 @@ def init_score_current_options(dataset: Dataset, saved_value: Any = None, *, res
 
 def selected_response_column(payload: dict[str, Any], columns: dict[str, ColumnInfo]) -> str:
     candidate = str(payload.get("response") or payload.get("response_column") or RESPONSE_COLUMN).strip()
-    if not candidate or candidate not in columns or not is_numeric_kind(columns[candidate].kind):
-        raise ValueError("Choose a valid numeric GBM response column")
+    if not candidate or candidate not in columns or not is_response_column(columns[candidate]):
+        raise ValueError("Choose a valid numeric or Boolean GBM response column")
     return candidate
 
 

@@ -3551,6 +3551,84 @@ COPY (
         self.assertFalse(result["ok"])
         self.assertIn("init_score cannot use grid-search braces", "; ".join(result["errors"]))
 
+    def test_boolean_response_training_matches_integer_and_restores_outputs(self) -> None:
+        try:
+            gbm_training_dependencies()
+        except MissingGbmDependency as exc:
+            self.skipTest(str(exc))
+        from py_lucidum import line_bar_chart, double_lift_chart
+
+        data_path = self.root / "boolean_gbm.parquet"
+        con = duckdb.connect()
+        try:
+            con.execute(f"""
+COPY (
+  SELECT *, CAST(BooleanResponse AS INTEGER) AS NumericResponse
+  FROM (SELECT i % 3 AS Feature, i % 2 = 0 AS Flag,
+    (i * 7) % 11 < 5 AS BooleanResponse,
+    CASE WHEN i < 90 THEN 'training' ELSE 'test' END AS SAMPLE,
+    'AB' AS PostcodeArea
+    FROM range(120) t(i))
+) TO '{data_path.as_posix()}' (FORMAT PARQUET)
+""")
+        finally:
+            con.close()
+        dataset = Dataset(data_path)
+        self.addCleanup(dataset.con.close)
+        store = GbmModelStore(data_path)
+        results = []
+        predictions = []
+        for response in ["BooleanResponse", "NumericResponse", "BooleanResponse"]:
+            result = train_model(dataset, store, {
+                "label": response, "response": response, "offset": "__none__", "sample_column": "SAMPLE",
+                "features": [{"name": "Feature", "include": True}, {"name": "Flag", "include": True}],
+                "parameters": default_parameters() + [
+                    {"name": "objective", "value": "binary"}, {"name": "metric", "value": "binary_logloss"},
+                    {"name": "num_iterations", "value": 3}, {"name": "early_stopping_rounds", "value": 0},
+                    {"name": "num_leaves", "value": 2}, {"name": "min_data_in_leaf", "value": 1},
+                    {"name": "num_threads", "value": 1}, {"name": "seed", "value": 42},
+                ],
+                "shap_rows": "all",
+            })
+            results.append(result)
+            manifest = store.manifest(result["model_id"])
+            self.assertEqual(manifest["response_column"], response)
+            self.assertEqual(store.read_json(store.artifact_path(result["model_id"], "parameters"))["objective"], "binary")
+            predictions.append(store.read_parquet_records(store.artifact_path(result["model_id"], "predictions")))
+        self.assertEqual(predictions[0], predictions[1])
+        models = {item["model_id"]: item for item in store.list_models()}
+        for key in ["gini_tr", "gini_te"]:
+            self.assertIsNotNone(models[results[0]["model_id"]][key])
+            self.assertEqual(models[results[0]["model_id"]][key], models[results[1]["model_id"]][key])
+        model_id = results[0]["model_id"]
+        restored = GbmModelStore(data_path)
+        restored.activate_model(model_id)
+        self.assertEqual(restored.active_model_id(), model_id)
+        dataset.register_data_source_provider(GbmSourceProvider(restored))
+        source = restored.source_id(model_id, "predictions")
+        plotted = chart(dataset, {
+            "source": source, "x": "Flag", "denominator": "__none__",
+            "responses": [{"numerator": "BooleanResponse"}, {"numerator": "gbm_prediction"}],
+            "partialDependence": {"mode": "shap"},
+        })
+        self.assertEqual(len(plotted["responses"]), 2)
+        self.assertTrue(plotted["rows"])
+        self.assertEqual(plotted["partial_dependence"]["mode"], "shap")
+        self.assertTrue(plotted["partial_dependence"]["rows"], plotted["partial_dependence"])
+        self.assertEqual(dataset.column_map_for_source(source)["BooleanResponse"].kind, "categorical")
+        mapped = map_summary(dataset, {"source": "dataset", "numerator": "BooleanResponse", "level": "area"})
+        self.assertTrue(mapped["rows"])
+        tabulated = build_gbm_tabulations(dataset, restored, model_id, {"rows": []})
+        self.assertEqual(tabulated["status"], "tabulated")
+        report = line_bar_chart(data_path, x="Flag", actual="BooleanResponse", expected="gbm_prediction",
+                                expected_source="gbm", model_id=model_id)
+        self.assertTrue(report)
+        lift = double_lift_chart(data_path, actual="BooleanResponse",
+            baseline_model_type="gbm", baseline_model_id=model_id, baseline_model_folder=restored.model_dir(model_id),
+            challenger_model_type="gbm", challenger_model_id=results[2]["model_id"],
+            challenger_model_folder=restored.model_dir(results[2]["model_id"]))
+        self.assertTrue(lift)
+
     def test_training_persists_feature_interaction_pairs(self) -> None:
         try:
             import lightgbm  # noqa: F401

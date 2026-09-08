@@ -101,6 +101,12 @@ This tab lets the user select a single tree in the model from a searchable list 
 
 ## Validation
 
+The shared Numerator accepts numeric and native Boolean response columns. Boolean
+responses are converted to 0/1 during training preparation; source columns and
+categorical predictor handling remain unchanged. Selecting a Boolean Numerator
+does not change the objective, and existing missing-response and objective-domain
+validation still applies.
+
 Before training the model, the tool must check
 
 - is the selected objective function consistent with the response (e.g. Gamma can't have non-negative values)

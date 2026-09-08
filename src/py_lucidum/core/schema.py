@@ -32,6 +32,15 @@ def is_numeric_kind(kind: str) -> bool:
     return kind in {"integer", "numeric"}
 
 
+def is_boolean_column(column: ColumnInfo) -> bool:
+    return column.duckdb_type.upper() in {"BOOL", "BOOLEAN"}
+
+
+def is_response_column(column: ColumnInfo) -> bool:
+    """Allow scalar Boolean responses without changing categorical feature behaviour."""
+    return is_numeric_kind(column.kind) or is_boolean_column(column)
+
+
 def duckdb_error_message(error: Any) -> str:
     message = str(error).splitlines()[0].strip()
     prefix = "Invalid Input Error: "

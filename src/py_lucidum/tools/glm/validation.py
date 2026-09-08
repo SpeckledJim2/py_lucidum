@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from py_lucidum.core import Dataset, is_numeric_kind, quote_ident, sql_literal
+from py_lucidum.core import Dataset, is_numeric_kind, is_response_column, quote_ident, sql_literal
 
 
 RESPONSE_COLUMN = "response_column"
@@ -733,6 +733,7 @@ def validate_request(dataset: Dataset, payload: dict[str, Any]) -> dict[str, Any
     warnings: list[str] = []
     valid_columns = column_map(dataset)
     numeric_columns = numeric_column_names(dataset)
+    response_columns = {column.name for column in dataset.valid_schema_columns() if is_response_column(column)}
 
     try:
         family = normalise_family(payload.get("family"))
@@ -765,8 +766,8 @@ def validate_request(dataset: Dataset, payload: dict[str, Any]) -> dict[str, Any
     response_column = formula.response_column if formula else selected_response_column(payload)
     if response_column and response_column not in valid_columns:
         errors.append(f"Choose a valid response column: {response_column}")
-    elif response_column and response_column not in numeric_columns:
-        errors.append("Choose a numeric response column for GLM fitting")
+    elif response_column and response_column not in response_columns:
+        errors.append("Choose a numeric or Boolean response column for GLM fitting")
 
     denominator_source = str(payload.get("denominator_source") or "dataset").strip() or "dataset"
     denominator_column = selected_denominator_column(payload)

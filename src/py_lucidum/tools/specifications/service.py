@@ -12,6 +12,7 @@ from uuid import uuid4
 from py_lucidum.core import (
     Dataset,
     is_numeric_kind,
+    is_response_column,
     load_features,
     load_kpis,
     load_saved_filters,
@@ -49,7 +50,7 @@ SPEC_FILE_NAMES = {
 KPI_PLACEHOLDERS = {
     "group": "KPI group",
     "name": "Display name",
-    "actual": "Numeric column",
+    "actual": "Numeric or Boolean column",
     "denominator": "Weight column or N",
     "decimals": "Decimal places",
     "format": "number, currency, or percent",
@@ -407,8 +408,8 @@ def validate_kpi_spec(
             message = f"kpi_spec.csv row {row_number} actual column does not exist: {actual}"
             errors.append(message)
             add_row_issue(row_issues, row_number, "error", message)
-        elif not is_numeric_kind(actual_column.kind):
-            message = f"kpi_spec.csv row {row_number} actual column must be numeric: {actual}"
+        elif not is_response_column(actual_column):
+            message = f"kpi_spec.csv row {row_number} actual column must be numeric or Boolean: {actual}"
             errors.append(message)
             add_row_issue(row_issues, row_number, "error", message)
         denominator = normalise_kpi_denominator(row.get("denominator"))

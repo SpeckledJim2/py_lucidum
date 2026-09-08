@@ -1,3 +1,8 @@
+export function isResponseColumn(column) {
+  return ["integer", "numeric"].includes(column?.kind)
+    || ["BOOL", "BOOLEAN"].includes(String(column?.duckdb_type || "").toUpperCase());
+}
+
 export function dataSourceForId(schema, sourceId) {
   const id = String(sourceId || "dataset");
   const sources = schema?.data_sources || [];

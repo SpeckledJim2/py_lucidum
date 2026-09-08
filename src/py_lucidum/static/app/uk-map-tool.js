@@ -864,7 +864,7 @@ export function createUkMapTool({
     setGroupMeta("uk_map", "Choose an Actual column");
     setMapRowMeta("");
     setMapMatchLiveStatus("");
-    setChartMessage("UK mapping needs a numeric Actual column.");
+    setChartMessage("UK mapping needs a numeric or Boolean Numerator.");
   }
 
   function setMapRowMeta(message) {

@@ -12,6 +12,7 @@ from py_lucidum.core import (
     denominator_valid_condition,
     has_denominator_column,
     is_numeric_kind,
+    is_response_column,
     json_number,
     metric_relation_context,
     normalise_denominator,
@@ -316,8 +317,8 @@ def normalise_level(raw: Any) -> str:
 
 def normalise_response(request: dict[str, Any], columns: dict[str, ColumnInfo]) -> dict[str, str]:
     numerator = str(request.get("numerator") or request.get("actual") or "")
-    if not numerator or numerator not in columns or not is_numeric_kind(columns[numerator].kind):
-        raise ValueError("Choose a valid numeric Actual column")
+    if not numerator or numerator not in columns or not is_response_column(columns[numerator]):
+        raise ValueError("Choose a valid numeric or Boolean Actual column")
     return {"label": str(request.get("label") or numerator), "numerator": numerator}
 
 

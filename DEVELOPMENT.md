@@ -214,9 +214,27 @@ New frontend tool styles should live in a tool-owned file under `static/styles/`
 - Prefer doing derived or convenience calculations on the fly when the user selects a tool, source, feature, or filter. Avoid startup-time pre-calculation unless it is specifically part of the desired startup behavior, such as Column Profile's initial landing view.
 - Line/Bar accepts a `source` request field and defaults it to `dataset`. Unknown sources are rejected before query execution.
 
+**Boolean Numerators**
+
+- Response eligibility is numeric analytical kinds or scalar DuckDB `BOOL`/`BOOLEAN`,
+  shared through `core.schema.is_response_column` and the frontend schema helper.
+  Keep Boolean analytical `kind` categorical and keep `is_numeric_kind` unchanged;
+  do not infer response eligibility from distinct values or coerce text/nested types.
+- The Numerator accepts Boolean columns across shared summaries, Line/Bar (Actual
+  only), UK Mapping and smoothing exports, Histogram, GLM, GBM, and reporting APIs.
+  SQL/Polars/NumPy response casts map false/true to 0/1 and retain nulls. Histogram
+  uses integer response binning metadata without changing the dataset schema.
+- Numerator defaults, KPIs, favourites, reloads and model activation use response
+  eligibility. Denominator, Expected, coordinates, ratio inputs and GBM init_score
+  retain numeric-only checks. Existing request and artifact formats are unchanged.
+- Boolean selection does not change GLM family or GBM objective. Existing domain,
+  denominator, missing-response and sample rules apply exactly as for numeric 0/1.
+  Charts exclude missing responses, GLM excludes them from fitting, and GBM keeps
+  its existing missing-response validation. Source files remain unmodified.
+
 **Defaults, saved filters, KPIs, and feature specs**
 
-- Without explicit defaults, the x-axis starts with the first dataset column, Actual starts with the first numeric column, and Expected starts as none.
+- Without explicit defaults, the x-axis starts with the first dataset column, Actual starts with the first numeric column (or the first Boolean column if no numeric column exists), and Expected starts as none.
 - CLI options, programmatic defaults, and URL parameters can override initial selections. `line_bar_favourite` / `--line-bar-favourite` selects a saved Favourite by id or case-insensitive name; when it is absent, the first saved Favourite in persisted order is restored automatically when favourites exist. Favourite startup state must be applied before the first visible tool refresh so users never see a default chart/map before the restored state. `line_bar_favourites_path` is accepted by `serve(...)`, `serve_line_bar(...)`, and `create_app(...)`; the CLI equivalent is `--line-bar-favourites`. It is the server-side JSON storage path for favourites and must not be added to generated URLs or browser query parameters.
 - Line/Bar feature and Expected picker lists default to A-Z ordering for ordinary dataset fields. Expected keeps `No expected line` pinned, then lists every KPI-compatible saved GLM newest-first followed by every compatible GBM newest-first; each model contributes its primary and optional tabulated prediction, never its prediction-rate variant. The model rows share the scrollable region with dataset fields so large model collections remain reachable. The Expected picker section starts collapsed on every app launch and can be reopened for the current browser session with the splitter chevron; its open/closed state is not persisted.
 - Saved filters load from an explicit `--filters` path, otherwise `./filter_spec.csv`, otherwise `./specs/filter_spec.csv`.

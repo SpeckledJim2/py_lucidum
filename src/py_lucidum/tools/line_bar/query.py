@@ -19,6 +19,7 @@ from py_lucidum.core import (
     normalise_denominator,
     normalise_denominator_source,
     is_numeric_kind,
+    is_response_column,
     json_number,
     parse_positive_float,
     quote_ident,
@@ -2014,7 +2015,7 @@ def normalise_responses(
         return responses
     resolved_query_columns = query_columns if isinstance(query_columns, list) else []
     field_index = 0
-    for item in raw:
+    for response_index, item in enumerate(raw):
         if not isinstance(item, dict):
             continue
         query_column = str(resolved_query_columns[field_index] or "") if field_index < len(resolved_query_columns) else ""
@@ -2022,7 +2023,9 @@ def normalise_responses(
         numerator = item.get("numerator")
         if not numerator or numerator not in columns:
             continue
-        if not is_numeric_kind(columns[str(numerator)].kind):
+        column = columns[str(numerator)]
+        eligible = is_response_column(column) if response_index == 0 else is_numeric_kind(column.kind)
+        if not eligible:
             continue
         if query_column and query_column not in columns:
             continue

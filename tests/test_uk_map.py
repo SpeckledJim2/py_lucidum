@@ -365,7 +365,7 @@ class UkMapToolTests(unittest.TestCase):
                 postcode_sector="PostcodeSector",
                 numerator="Actual",
             )
-        with self.assertRaisesRegex(ValueError, "numeric numerator"):
+        with self.assertRaisesRegex(ValueError, "numeric or Boolean numerator"):
             smooth_postcode_sectors(
                 source_path,
                 self.root / "bad-numerator.parquet",

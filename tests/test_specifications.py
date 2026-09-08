@@ -197,7 +197,7 @@ class SpecificationsToolTests(unittest.TestCase):
         self.assertNotIn("generation_message", filter_payload)
         self.assertEqual(kpi_payload["rows"], [{"group": "", "name": "", "actual": "", "denominator": "", "decimals": "", "format": ""}])
         self.assertEqual(filter_payload["rows"], [{"theme": "", "name": "", "expression": ""}])
-        self.assertEqual(kpi_payload["placeholders"]["actual"], "Numeric column")
+        self.assertEqual(kpi_payload["placeholders"]["actual"], "Numeric or Boolean column")
         self.assertEqual(kpi_payload["placeholders"]["format"], "number, currency, or percent")
         self.assertEqual(filter_payload["placeholders"]["expression"], "DuckDB WHERE expression")
         self.assertFalse((self.root / "specs" / "kpi_spec.csv").exists())

@@ -1361,6 +1361,7 @@ import {{
   dataSourceHasColumn,
   isModelPredictionColumn,
   isModelTool,
+  isResponseColumn,
   preferredStartupSource,
   sourceColumns,
   toolEnabled,
@@ -1374,6 +1375,12 @@ const schema = {{
     {{ id: "glm:one:predictions", kind: "glm_predictions", active: true, columns: [{{ name: "glm_prediction", kind: "numeric" }}, {{ name: "glm_prediction_rate", kind: "numeric" }}, {{ name: "glm_tabulated_prediction", kind: "numeric" }}] }},
   ],
 }};
+for (const column of [{{ kind: "integer", duckdb_type: "INTEGER" }}, {{ kind: "numeric", duckdb_type: "DOUBLE" }}, {{ kind: "categorical", duckdb_type: "BOOLEAN" }}, {{ kind: "categorical", duckdb_type: "BOOL" }}]) {{
+  if (!isResponseColumn(column)) throw new Error("valid response rejected");
+}}
+for (const duckdb_type of ["VARCHAR", "BOOLEAN[]", "BOOLEAN[2]", "STRUCT(flag BOOLEAN)"]) {{
+  if (isResponseColumn({{ kind: "categorical", duckdb_type }})) throw new Error("invalid response accepted");
+}}
 if (dataSourceForId(schema, "dataset").id !== "dataset") throw new Error("dataSourceForId failed");
 if (!dataSourceHasColumn(schema, "gbm:one:predictions", "gbm_prediction")) throw new Error("dataSourceHasColumn failed");
 if (sourceColumns(schema, "dataset").length !== 1) throw new Error("sourceColumns failed");

@@ -32,7 +32,7 @@ from .metric_sources import (
     normalise_denominator_source,
     relation_row_count,
 )
-from .schema import ColumnInfo, duckdb_error_message, infer_kind, is_numeric_kind, json_number, parse_positive_float, suggested_band_width
+from .schema import ColumnInfo, duckdb_error_message, infer_kind, is_boolean_column, is_numeric_kind, is_response_column, json_number, parse_positive_float, suggested_band_width
 from .sql import quote_ident, sql_literal
 from .workspace import dataset_slug, dataset_workspace_metadata, dataset_workspace_root
 
@@ -50,7 +50,9 @@ __all__ = [
     "denominator_warnings",
     "duckdb_error_message",
     "infer_kind",
+    "is_boolean_column",
     "is_numeric_kind",
+    "is_response_column",
     "json_number",
     "load_features",
     "normalise_feature_monotonicity",

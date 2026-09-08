@@ -19,7 +19,7 @@ from py_lucidum.core import (
     denominator_warnings,
     duckdb_error_message,
     has_denominator_column,
-    is_numeric_kind,
+    is_response_column,
     json_number,
     load_features,
     load_kpis,
@@ -371,8 +371,8 @@ def create_app(
                 context = metric_relation_context(dataset, source_id=source_id, fields=fields)
                 relation = context["relation"]
                 columns = context["columns"]
-                if actual not in columns or not is_numeric_kind(columns[actual].kind):
-                    raise ValueError("Choose a valid numeric Actual column")
+                if actual not in columns or not is_response_column(columns[actual]):
+                    raise ValueError("Choose a valid numeric or Boolean Actual column")
                 denominator = normalise_denominator(raw_denominator, columns)
                 field_columns = context.get("field_columns") or []
                 actual_query_column = str(field_columns[0] or actual) if field_columns else actual

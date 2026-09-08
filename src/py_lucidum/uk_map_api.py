@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from py_lucidum.core import Dataset, is_numeric_kind, quote_ident, sql_literal
+from py_lucidum.core import Dataset, is_numeric_kind, is_response_column, quote_ident, sql_literal
 from py_lucidum.tools.uk_map.query import build_summary_sql
 from py_lucidum.tools.uk_map.smoothing import write_sector_smoothing_parquet
 
@@ -39,7 +39,9 @@ def smooth_postcode_sectors(
     try:
         columns = dataset.column_map()
         sector_column = _required_column(columns, postcode_sector, "postcode-sector")
-        numerator_column = _required_numeric_column(columns, numerator, "numerator")
+        numerator_column = _required_column(columns, numerator, "numerator")
+        if not is_response_column(columns[numerator_column]):
+            raise ValueError("Choose a numeric or Boolean numerator column.")
         denominator_column = None
         if denominator is not None and str(denominator).strip():
             denominator_column = _required_numeric_column(columns, denominator, "denominator")

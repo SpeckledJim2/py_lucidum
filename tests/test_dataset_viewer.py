@@ -136,7 +136,7 @@ class DatasetViewerToolTests(unittest.TestCase):
 
         status, _, body = asgi_post_json(app, "/api/metrics/summary", {"actual": "Segment", "denominator": "__none__"})
         self.assertEqual(status, 400)
-        self.assertEqual(json.loads(body)["detail"], "Choose a valid numeric Actual column")
+        self.assertEqual(json.loads(body)["detail"], "Choose a valid numeric or Boolean Actual column")
 
         status, _, body = asgi_post_json(app, "/api/metrics/summary", {"actual": "Score", "denominator": "Segment"})
         self.assertEqual(status, 400)

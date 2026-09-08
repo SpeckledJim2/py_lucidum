@@ -505,7 +505,7 @@ def main() -> int:
     parser.add_argument("--buttons", action="store_true", help="Show the Stop app and Open monitor buttons in the app header")
     parser.add_argument("--title-prefix", default=None, help="Text to show before the dataset file or folder name in the app header")
     parser.add_argument("--x", default=None, help="Initial x-axis feature. Defaults to the first dataset column.")
-    parser.add_argument("--actual", default=None, help="Initial Actual / line 1 numeric feature. Defaults to the first numeric column.")
+    parser.add_argument("--actual", default=None, help="Initial Numerator / line 1 numeric or Boolean feature. Defaults to the first numeric column, or first Boolean column if none is numeric.")
     parser.add_argument("--expected", default=None, help="Initial Expected / line 2 numeric feature. Defaults to None.")
     parser.add_argument("--expected2", default=None, help="Initial second Expected / line 3 numeric feature. Defaults to None.")
     parser.add_argument("--denominator", default=None, help="Initial Weight column. Defaults to Average row value.")

@@ -31,6 +31,7 @@
         dataSourceHasColumn as schemaDataSourceHasColumn,
         isModelPredictionColumn,
         isModelTool,
+        isResponseColumn,
         preferredStartupSource as schemaPreferredStartupSource,
         sourceColumns as schemaSourceColumns,
         toolEnabled as schemaToolEnabled,
@@ -1053,6 +1054,14 @@
 
       function numericColumns() {
         return sourceColumns().filter((c) => isNumericKind(c.kind));
+      }
+
+      function responseColumns() {
+        return sourceColumns().filter(isResponseColumn);
+      }
+
+      function defaultResponseColumn() {
+        return numericColumns()[0]?.name || responseColumns()[0]?.name || "";
       }
 
       function selectedColumn() {
@@ -2432,7 +2441,7 @@
 
       function fillActualMetricSelect(select) {
         select.innerHTML = "";
-        appendActualMetricGroup(select, "Dataset features", numericColumnsForSource("dataset"), "dataset", "dataset", "No numeric dataset features");
+        appendActualMetricGroup(select, "Dataset features", dataSourceColumns("dataset").filter(isResponseColumn), "dataset", "dataset", "No numeric or Boolean dataset features");
         const predictionColumns = activePredictionColumns();
         const trainedModels = modelPredictionSourcesExist();
         appendActualMetricGroup(
@@ -2894,6 +2903,14 @@
         return Boolean(name && numericColumns().some((col) => col.name === name));
       }
 
+      function responseColumnExists(name) {
+        return Boolean(name && responseColumns().some((col) => col.name === name));
+      }
+
+      function datasetResponseColumnExists(name) {
+        return Boolean(name && dataSourceColumns("dataset").some((col) => col.name === name && isResponseColumn(col)));
+      }
+
       function datasetNumericColumnExists(name) {
         return Boolean(name && numericColumnsForSource("dataset").some((col) => col.name === name));
       }
@@ -2983,7 +3000,7 @@
       function modelMetricSelectionError(selection, modelKind = "") {
         if (!selection) return "";
         const modelLabel = modelKind ? modelKind.toUpperCase() : "model";
-        if (!selection.numerator || !datasetNumericColumnExists(selection.numerator)) {
+        if (!selection.numerator || !datasetResponseColumnExists(selection.numerator)) {
           return `The active ${modelLabel} Numerator is unavailable in this dataset. No replacement chart was requested.`;
         }
         if (selection.denominator !== "__none__" && !datasetNumericColumnExists(selection.denominator)) {
@@ -3090,7 +3107,7 @@
         syncLineBarXFallback();
         fillMetricSelect(el("actualNumerator"));
         if (previousActual && !setActualSelection(previousActual, previousActualSource)) {
-          el("actualNumerator").value = numericColumnExists(previousActual) ? previousActual : numericColumns()[0]?.name || "";
+          el("actualNumerator").value = responseColumnExists(previousActual) ? previousActual : defaultResponseColumn();
         }
         fillMetricSelect(el("expectedNumerator"), true);
         fillDenominatorSelect(el("denominator"));
@@ -3145,7 +3162,7 @@
           ? previousActualSource
           : requestedModelMetrics?.sourceId || previousActualSource;
         if (!setActualSelection(requestedActual, requestedActualSource)) {
-          el("actualNumerator").value = numericColumnExists(previousActual) ? previousActual : numericColumns()[0]?.name || "";
+          el("actualNumerator").value = responseColumnExists(previousActual) ? previousActual : defaultResponseColumn();
         }
         const requestedDenominator = !modelMetricError && requestedModelMetrics
           ? {
@@ -3281,7 +3298,7 @@
           }))
           .filter((kpi) => (
             kpi.name &&
-            datasetNumericColumnExists(kpi.actual) &&
+            datasetResponseColumnExists(kpi.actual) &&
             (kpi.denominator === "__none__" || datasetNumericColumnExists(kpi.denominator)) &&
             Number.isInteger(kpi.decimals) &&
             kpi.decimals >= 0 &&
@@ -4839,7 +4856,7 @@
         const requestedExpected2 = requestedDefault("expected2");
         const requestedDenominator = requestedDefault("denominator");
         if (!setActualSelection(requestedActual, state.source)) {
-          el("actualNumerator").value = numericColumnExists(requestedActual) ? requestedActual : numericColumns()[0]?.name || "";
+          el("actualNumerator").value = responseColumnExists(requestedActual) ? requestedActual : defaultResponseColumn();
         }
         if (!el("actualNumerator").value) chooseFirstActualSelection();
         if (!setDenominatorSelection({

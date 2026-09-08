@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import duckdb
 
-from py_lucidum.core import Dataset, dataset_slug, dataset_workspace_metadata, is_numeric_kind
+from py_lucidum.core import Dataset, dataset_slug, dataset_workspace_metadata, is_numeric_kind, is_response_column
 from py_lucidum.tools.line_bar.model_ratio import (
     PREDICTION_RATIO_COLUMN,
     PREDICTION_RATIO_SOURCE_RE,
@@ -214,7 +214,7 @@ class LineBarFavouriteStore:
         source = self.validate_favourite_source(view.get("source"), "", errors, label="data source")
         actual = view.get("actual") if isinstance(view.get("actual"), dict) else {}
         actual_source = self.validate_favourite_source(actual.get("sourceId") or source, actual.get("value"), errors, label="Actual source")
-        self.validate_column(actual_source, actual.get("value"), errors, label="Actual", numeric=True)
+        self.validate_column(actual_source, actual.get("value"), errors, label="Actual", response=True)
         denominator = str(view.get("denominator") or "__none__").strip() or "__none__"
         if denominator != "__none__":
             denominator_source = self.validate_favourite_source(
@@ -495,6 +495,7 @@ class LineBarFavouriteStore:
         *,
         label: str,
         numeric: bool = False,
+        response: bool = False,
     ) -> None:
         column_name = str(name or "").strip()
         if not column_name:
@@ -511,6 +512,8 @@ class LineBarFavouriteStore:
         if column is None:
             errors.append(f"Favourite uses missing {label} column: {column_name}")
             return
+        if response and not is_response_column(column):
+            errors.append(f"Favourite {label} column is not numeric or Boolean: {column_name}")
         if numeric and not is_numeric_kind(column.kind):
             errors.append(f"Favourite {label} column is not numeric: {column_name}")
 

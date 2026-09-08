@@ -7,7 +7,8 @@ from py_lucidum.core import (
     ColumnInfo,
     Dataset,
     has_denominator_column,
-    is_numeric_kind,
+    is_boolean_column,
+    is_response_column,
     json_number,
     metric_relation_context,
     normalise_denominator,
@@ -208,9 +209,9 @@ def histogram(dataset: Dataset, request: dict[str, Any]) -> dict[str, Any]:
 def normalise_actual(request: dict[str, Any], columns: dict[str, ColumnInfo]) -> dict[str, str]:
     numerator = str(request.get("actual") or request.get("numerator") or "").strip()
     column = columns.get(numerator)
-    if not numerator or column is None or not is_numeric_kind(column.kind):
-        raise ValueError("Choose a valid numeric Actual column")
-    return {"label": str(request.get("label") or numerator), "numerator": numerator, "kind": column.kind}
+    if not numerator or column is None or not is_response_column(column):
+        raise ValueError("Choose a valid numeric or Boolean Actual column")
+    return {"label": str(request.get("label") or numerator), "numerator": numerator, "kind": "integer" if is_boolean_column(column) else column.kind}
 
 
 def normalise_distribution(value: Any) -> str:

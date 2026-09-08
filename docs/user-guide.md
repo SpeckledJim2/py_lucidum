@@ -240,6 +240,29 @@ Actual and Weight.
 - Chart axes name the underlying calculation, such as
   `PREMIUM / glm_prediction`.
 
+The Numerator accepts numeric columns and native Boolean (`true`/`false`) columns.
+For calculations, Lucidum treats `false` as `0` and `true` as `1`, without changing
+the source data. With **Average row value**, a Boolean Numerator shows the proportion
+of non-missing responses that are true. With a numeric Denominator, grouped metrics
+remain the sum of the converted Numerator divided by the sum of the Denominator
+for contributing rows. KPI specifications and favourites can save Boolean Numerators.
+
+Boolean Numerators work in Line and Bar, UK Mapping, Histogram, GLM and GBM.
+Histogram bins them as integer 0/1 values when no Denominator is selected. Missing
+responses remain missing: analytical tools exclude them, GLM excludes them from
+fitting, and GBM reports missing responses under its usual validation rules.
+
+Selecting a Boolean Numerator does not change the model family or objective. Choose
+**binomial** for a binary GLM or **binary** for a binary GBM through the normal model
+controls; other choices retain their usual response-domain validation. Model
+predictions, saved-model activation, tabulations and reports use the original
+response column name.
+
+Boolean columns remain categorical when used as grouping features or predictors.
+Denominator, Expected, map coordinates and GBM `init_score` dataset columns still
+require numeric types. Text columns containing the strings `"true"` and `"false"`
+are not Boolean responses; Lucidum uses the type read by DuckDB.
+
 The sidebar summaries always follow the global filter. Tool-specific missing-value
 choices can change a Line and Bar result without changing the meaning of the shared
 Numerator and Denominator summaries.

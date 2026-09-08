@@ -6187,6 +6187,137 @@ COPY (
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_boolean_numerator_across_tools_kpis_favourites_and_models(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            data_path = root / "boolean.csv"
+            data_path.write_text(
+                "BooleanResponse,NumericResponse,Age,Segment,PostcodeArea,PostcodeSector,PostcodeUnit,lat,long,SAMPLE\n"
+                "true,1,30,A,AB,AB10 1,AB10 1AA,57.1,-2.1,training\n"
+                "false,0,40,A,AB,AB10 1,AB10 1AB,57.2,-2.2,test\n"
+                "true,1,50,B,AL,AL1 1,AL1 1AA,51.7,-0.4,training\n",
+                encoding="utf-8",
+            )
+            kpis_path = root / "kpi_spec.csv"
+            kpis_path.write_text("group,name,actual,denominator,decimals,format\n"
+                "Flags,Numeric share,NumericResponse,N,1,percent\n"
+                "Flags,Boolean share,BooleanResponse,N,1,percent\n", encoding="utf-8")
+            glm_store = GlmModelStore(data_path)
+            self.write_glm_prediction_model(glm_store, "boolean-glm", "Boolean GLM", "2026-09-01T00:00:00Z",
+                [0.6, 0.4, 0.7], response_column="BooleanResponse", denominator_column="", family="normal")
+            gbm_store = GbmModelStore(data_path)
+            self.write_gbm_prediction_model(gbm_store, "boolean-gbm", "Boolean GBM", "2026-09-01T00:00:00Z",
+                [0.7, 0.3, 0.8], response_column="BooleanResponse", offset_column="")
+            gbm_store.write_json(gbm_store.artifact_path("boolean-gbm", "parameters"),
+                {"objective": "regression", "metric": "l2", "num_iterations": 3})
+            base_url, server, thread = self.start_app(data_path, tools=["line_bar", "uk_map", "histogram", "glm", "gbm"],
+                defaults={"x": "Segment"}, kpis_path=kpis_path, use_kpis=True, buttons=True)
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1440, "height": 1000})
+                    errors: list[str] = []
+                    page.on("pageerror", lambda error: errors.append(str(error)))
+                    page.on("response", lambda response: errors.append(f"{response.status} {response.url}")
+                        if "/api/" in response.url and response.status >= 400 else None)
+                    page.goto(base_url, wait_until="domcontentloaded")
+                    self.wait_for_app_ready(page)
+                    self.assertEqual(page.locator("#actualNumerator").input_value(), "NumericResponse")
+                    self.assertEqual(page.locator('#denominator option[value="BooleanResponse"]').count(), 0)
+                    self.assertEqual(page.locator('#expectedNumerator option[value="BooleanResponse"]').count(), 0)
+                    with page.expect_response(lambda response: response.url.endswith("/api/chart") and response.status == 200):
+                        page.locator("#actualNumerator").select_option("BooleanResponse")
+                    self.assertEqual(page.locator("#actualNumerator").input_value(), "BooleanResponse")
+                    with page.expect_response(lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200):
+                        page.locator("#ukMapTool").click()
+                    page.wait_for_function("() => document.querySelector('#mapBinaryExtremes').hidden")
+                    with page.expect_response(lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200):
+                        page.locator('input[name="mapLevel"][value="unit"]').check()
+                    page.locator("#mapBinaryExtremes").wait_for(state="visible")
+                    with page.expect_response(lambda response: response.url.endswith("/api/histogram/chart") and response.status == 200):
+                        page.locator("#histogramTool").click()
+                    self.assertEqual(page.locator("#actualNumerator").input_value(), "BooleanResponse")
+                    page.locator("#glmTool").click()
+                    page.locator("#glmFamilySelect").wait_for(state="visible")
+                    page.locator("#glmFamilySelect").select_option("normal")
+                    page.locator("#actualNumerator").select_option("NumericResponse")
+                    page.locator("#actualNumerator").select_option("BooleanResponse")
+                    self.assertEqual(page.locator("#glmFamilySelect").input_value(), "normal")
+                    page.locator("#gbmTool").click()
+                    objective_script = "() => (window.Tabulator?.findTable?.('#gbmParameterGrid')?.[0]?.getData?.() || []).find(row => row.name === 'objective')?.value"
+                    page.wait_for_function(objective_script)
+                    objective = page.evaluate(objective_script)
+                    page.locator("#actualNumerator").select_option("NumericResponse")
+                    page.locator("#actualNumerator").select_option("BooleanResponse")
+                    self.assertEqual(page.evaluate(objective_script), objective)
+                    page.locator("#lineBarTool").click()
+                    for kind in ["glm", "gbm"]:
+                        page.locator("#actualNumerator").select_option("NumericResponse")
+                        if page.locator(f"#{kind}ModelCollapseBtn").get_attribute("aria-expanded") != "true":
+                            page.locator(f"#{kind}ModelCollapseBtn").click()
+                        with page.expect_response(lambda response: response.url.endswith("/api/chart") and response.status == 200):
+                            page.locator(f'#{kind}ModelSelect [data-{kind}-model-id="boolean-{kind}"]').click()
+                        page.wait_for_function("() => document.querySelector('#actualNumerator').value === 'BooleanResponse'")
+                        self.assertEqual(page.locator("#expectedNumerator").input_value(), f"{kind}_prediction")
+                    if page.locator("#favouritesCollapseBtn").get_attribute("aria-expanded") != "true":
+                        page.locator("#favouritesCollapseBtn").click()
+                    self.click_sidebar_favourite_action(page, "#sidebarFavouriteAddBtn")
+                    page.locator("#sidebarFavouriteNameInput").fill("Boolean view")
+                    page.locator('[data-favourite-action="save-add"]').click()
+                    favourite = page.locator(".saved-favourite-option", has_text="Boolean view")
+                    favourite.wait_for()
+                    page.locator("#actualNumerator").select_option("NumericResponse")
+                    favourite.click()
+                    page.wait_for_function("() => document.querySelector('#actualNumerator').value === 'BooleanResponse'")
+                    with page.expect_response(lambda response: response.url.endswith("/api/reload") and response.status == 200):
+                        page.locator("#reloadBtn").click()
+                    self.wait_for_app_ready(page)
+                    self.assertEqual(page.locator("#actualNumerator").input_value(), "BooleanResponse")
+                    if page.locator("#kpiCollapseBtn").get_attribute("aria-expanded") != "true":
+                        page.locator("#kpiCollapseBtn").click()
+                    page.locator(".kpi-option", has_text="Numeric share").click()
+                    page.locator(".kpi-option", has_text="Boolean share").click()
+                    page.wait_for_function("() => document.querySelector('#actualNumerator').value === 'BooleanResponse'")
+                    page.reload(wait_until="domcontentloaded")
+                    self.wait_for_app_ready(page)
+                    self.assertEqual(page.locator("#actualNumerator").input_value(), "BooleanResponse")
+                    self.assertEqual(errors, [])
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_boolean_numerator_startup_defaults(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            for numeric in [False, True]:
+                with self.subTest(numeric=numeric):
+                    data_path = root / f"defaults-{numeric}.csv"
+                    data_path.write_text("BooleanResponse,Segment" + (",NumericResponse" if numeric else "") + "\n"
+                        + "true,A" + (",1" if numeric else "") + "\n"
+                        + "false,B" + (",0" if numeric else "") + "\n", encoding="utf-8")
+                    base_url, server, thread = self.start_app(data_path, tools=["line_bar"], defaults={"x": "Segment"})
+                    try:
+                        assert sync_playwright is not None
+                        with sync_playwright() as playwright:
+                            browser = playwright.chromium.launch()
+                            page = browser.new_page()
+                            for query, expected in [("", "NumericResponse" if numeric else "BooleanResponse"),
+                                                    ("?actual=BooleanResponse", "BooleanResponse")]:
+                                page.goto(base_url + query, wait_until="domcontentloaded")
+                                self.wait_for_app_ready(page)
+                                self.assertEqual(page.locator("#actualNumerator").input_value(), expected)
+                                page.wait_for_function("() => document.querySelector('#lineBarGroupMeta').textContent.includes('groups')")
+                            browser.close()
+                    finally:
+                        server.should_exit = True
+                        thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_column_profile_displays_boolean_columns_as_logical(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "logical_profile.parquet"
