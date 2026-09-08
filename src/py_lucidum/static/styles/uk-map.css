@@ -494,6 +494,10 @@
         padding-inline-start: var(--app-control-button-padding-inline);
       }
 
+      #mapHotspotsControl [hidden] {
+        display: none;
+      }
+
       .map-strip-slider-row b {
         color: var(--map-slider-end-label);
         font-size: 10px;

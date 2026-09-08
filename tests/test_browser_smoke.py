@@ -21636,6 +21636,180 @@ COPY (
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_uk_map_binary_extremes_preserve_context_and_favourites(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "binary_map.csv"
+            data_path.write_text(
+                "PostcodeArea,PostcodeSector,PostcodeUnit,lat,long,flag,other\n"
+                "AB,AB10 1,AB10 1AA,57.1,-2.1,0,1\n"
+                "AB,AB10 6,AB10 6AA,57.2,-2.2,1,0\n"
+                "AL,AL1 1,AL1 1AA,51.8,-0.3,0,1\n"
+                "M,M1 1,M1 1AA,53.48,-2.24,0,1\n"
+                "EH,EH1 1,EH1 1AA,55.95,-3.19,,\n"
+                "ZZ,ZZ1 1,ZZ1 1AA,,,2,2\n",
+                encoding="utf-8",
+            )
+            favourites_path = Path(tmp_dir) / "favourites.json"
+            base_url, server, thread = self.start_app(
+                data_path, defaults={"actual": "flag", "denominator": "__none__"},
+                tools=["uk_map"], token="", line_bar_favourites_path=favourites_path,
+            )
+            try:
+                assert sync_playwright is not None
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1440, "height": 900})
+                    errors: list[str] = []
+                    requests: list[str] = []
+                    page.on("pageerror", lambda error: errors.append(str(error)))
+                    page.on("request", lambda request: requests.append(request.url)
+                            if request.url.endswith("/api/uk-map/summary") else None)
+                    try:
+                        page.goto(base_url, wait_until="domcontentloaded")
+                        self.wait_for_app_ready(page)
+                        page.wait_for_function("() => document.querySelector('#mapGroupMeta')?.textContent.includes('areas matched')")
+                        self.assertTrue(page.locator("#mapHotspots").is_visible())
+                        # An area average of 0.5 retains percentage ranking.
+                        page.locator("#mapHotspots").evaluate("input => { input.value = '9'; input.dispatchEvent(new Event('input', {bubbles:true})); }")
+
+                        def level(value: str) -> None:
+                            page.locator(f'#mapLevelTiles input[value="{value}"]').evaluate(
+                                "input => { input.checked = true; input.dispatchEvent(new Event('change', {bubbles:true})); }"
+                            )
+                            page.wait_for_function(
+                                "value => document.querySelector('#mapGroupMeta')?.textContent.includes(value === 'unit' ? 'units plotted' : value === 'area' ? 'areas matched' : 'sectors matched')",
+                                arg=value,
+                            )
+
+                        level("unit")
+                        page.locator("#mapBinaryExtremes").wait_for(state="visible")
+                        self.assertFalse(page.locator("#mapHotspots").is_visible())
+                        high = page.locator('[data-map-binary-extreme="9"]')
+                        low = page.locator('[data-map-binary-extreme="-9"]')
+                        all_values = page.locator('[data-map-binary-extreme="0"]')
+                        self.assertEqual(high.get_attribute("aria-pressed"), "true")
+                        page.evaluate("""() => {
+                          window.binaryLayer = () => Object.values(document.querySelector('#ukMap')._lucidumMap._layers)
+                            .find(layer => layer.data?.level === 'unit');
+                          window.binarySnapshot = () => {
+                            const layer = window.binaryLayer();
+                            return {
+                              values: layer.metricPoints.value,
+                              selected: layer.hotspotIndexes === null ? null : [...layer.hotspotIndexes],
+                              palette: layer.scale.palette,
+                              zero: layer.scale.color(0), one: layer.scale.color(1),
+                              keys: layer.geometryPoints.key,
+                            };
+                          };
+                        }""")
+                        snapshot = page.evaluate("() => window.binarySnapshot()")
+                        self.assertEqual(snapshot["values"], [0, 1, 0, None, 0])
+                        self.assertEqual(snapshot["selected"], [1])
+                        self.assertEqual(snapshot["palette"], ["#00441b", "#67001f"])
+                        self.assertEqual(snapshot["zero"], "#00441b")
+                        self.assertEqual(snapshot["one"], "#67001f")
+                        self.assertEqual(page.locator("#mapLegendBody .map-legend-row").count(), 4)
+                        self.assertIn("Unhighlighted", page.locator("#mapLegendBody").text_content())
+                        self.assertIn("No data", page.locator("#mapLegendBody").text_content())
+
+                        # Read the actual canvas pixels and hover hit targets after a settled redraw.
+                        page.wait_for_function("() => window.binaryLayer()?.canvasMapLayer?.map && !document.querySelector('#ukMap')._lucidumMapLibre.isMoving()")
+                        page.locator("#mapDotSizeMin").click()
+                        page.wait_for_function("() => window.binaryLayer().colorBuckets[0] === 0 && window.binaryLayer().colorBuckets[3] === 254")
+                        pixels = page.evaluate("""() => {
+                          const layer = window.binaryLayer();
+                          const map = document.querySelector('#ukMap')._lucidumMap;
+                          const ratio = layer.canvas.width / map.getSize().x;
+                          return [0, 1, 3].map(index => {
+                            const point = layer.projectUnitPoint(index, map.getSize());
+                            return { pixel: [...layer.canvas.getContext('2d').getImageData(
+                              Math.round(point.x * ratio), Math.round(point.y * ratio), 1, 1).data],
+                              hit: layer.findNearest(point)?.key || null };
+                          });
+                        }""")
+                        self.assertGreater(pixels[0]["pixel"][3], 0)
+                        self.assertLess(pixels[0]["pixel"][3], pixels[1]["pixel"][3])
+                        self.assertLessEqual(max(pixels[0]["pixel"][:3]) - min(pixels[0]["pixel"][:3]), 30)
+                        self.assertEqual(pixels[0]["hit"], "AB10 1AA")
+                        self.assertEqual(pixels[2]["pixel"][3], 0)
+                        self.assertIsNone(pixels[2]["hit"])
+
+                        camera = page.evaluate("() => { const map = document.querySelector('#ukMap')._lucidumMap; return [map.getCenter(), map.getZoom(), map.getBearing()]; }")
+                        request_count = len(requests)
+                        low.click()
+                        self.assertEqual(page.evaluate("() => window.binarySnapshot().selected"), [0, 2, 4])
+                        all_values.click()
+                        self.assertIsNone(page.evaluate("() => window.binarySnapshot().selected"))
+                        high.click()
+                        self.assertEqual(len(requests), request_count)
+                        self.assertEqual(page.evaluate("() => { const map = document.querySelector('#ukMap')._lucidumMap; return [map.getCenter(), map.getZoom(), map.getBearing()]; }"), camera)
+
+                        self.click_sidebar_favourite_action(page, "#sidebarFavouriteAddBtn")
+                        page.locator("#sidebarFavouriteNameInput").fill("Binary high")
+                        page.locator('[data-favourite-action="save-add"]').click()
+                        favourite = page.locator(".saved-favourite-option", has_text="Binary high")
+                        page.wait_for_function("() => document.querySelector('.saved-favourite-option.active') !== null")
+                        saved = json.loads(favourites_path.read_text(encoding="utf-8"))
+                        self.assertEqual(saved["favourites"][0]["view"]["map"]["hotspots"], 9)
+                        low.click()
+                        self.assertEqual(page.locator(".saved-favourite-option.active").count(), 0)
+                        favourite.click()
+                        page.wait_for_function("() => document.querySelector('[data-map-binary-extreme=\"9\"]')?.getAttribute('aria-pressed') === 'true'")
+                        self.assertEqual(page.evaluate("() => window.binarySnapshot().selected"), [1])
+
+                        level("area")
+                        self.assertTrue(page.locator("#mapHotspots").is_visible())
+                        self.assertEqual(page.locator("#mapHotspotsValue").text_content(), "T10")
+                        level("sector")
+                        page.locator("#mapBinaryExtremes").wait_for(state="visible")
+                        # Unmatched ZZ=2 must not prevent binary detection; missing EH is no data.
+                        fills = page.evaluate("""() => {
+                          const fills = {};
+                          for (const layer of Object.values(document.querySelector('#ukMap')._lucidumMap._layers)) {
+                            layer.eachLayer?.(feature => { if (feature.feature?.properties?.PostcodeSector)
+                              fills[feature.feature.properties.PostcodeSector] = feature.options.fillColor; });
+                          }
+                          return fills;
+                        }""")
+                        self.assertEqual(fills["AB10 1"], "#cbd5e1")
+                        self.assertEqual(fills["AB10 6"], "#67001f")
+                        self.assertEqual(fills["EH1 1"], "#e5e7eb")
+
+                        level("unit")
+                        # KPI-only response reuses geometry but must reclassify and recolour.
+                        page.locator("#actualNumerator").select_option("other")
+                        page.wait_for_function("() => window.binaryLayer()?.metricPoints.value[0] === 1")
+                        self.assertEqual(page.evaluate("() => window.binarySnapshot().selected"), [0, 2, 4])
+                        self.assertEqual(page.evaluate("() => window.binarySnapshot().palette"), snapshot["palette"])
+
+                        def apply_filter(expression: str) -> None:
+                            page.locator("#filterInput").evaluate(
+                                "(input, expression) => { input.value = expression; input.dispatchEvent(new Event('input', {bubbles:true})); }", expression
+                            )
+                            with page.expect_response(lambda response: response.url.endswith("/api/uk-map/summary") and response.status == 200):
+                                page.locator("#filterApplyBtn").evaluate("button => button.click()")
+
+                        apply_filter("other = 0")
+                        page.wait_for_function("() => window.binaryLayer()?.metricPoints.value.length === 1")
+                        self.assertEqual(high.get_attribute("aria-pressed"), "true")
+                        self.assertEqual(page.evaluate("() => window.binarySnapshot().selected"), [])
+                        self.assertEqual(page.evaluate("() => window.binarySnapshot().zero"), "#00441b")
+                        apply_filter("other IS NULL")
+                        page.wait_for_function("() => document.querySelector('#mapHotspots')?.disabled === true")
+                        self.assertEqual(page.locator("#mapHotspots").input_value(), "9")
+                        apply_filter("other = 1")
+                        page.wait_for_function("() => !document.querySelector('#mapBinaryExtremes')?.hidden && !document.querySelector('[data-map-binary-extreme=\"9\"]')?.disabled")
+                        self.assertEqual(high.get_attribute("aria-pressed"), "true")
+                        self.assertEqual(page.evaluate("() => window.binarySnapshot().one"), "#67001f")
+                        self.assertFalse(errors)
+                    finally:
+                        browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_uk_map_unit_geometry_survives_metric_changes_and_camera_moves(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "unit_full_layer.csv"

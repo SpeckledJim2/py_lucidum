@@ -478,10 +478,15 @@
                   <button id="mapStrengthSolid" class="active" type="button" data-map-opacity="1" data-stable-label="Solid" aria-pressed="true">Solid</button>
                 </div>
               </div>
-              <label id="mapHotspotsControl" class="control map-strip-slider-control">
+              <div id="mapHotspotsControl" class="control map-strip-slider-control">
                 <h3>Extremes <span id="mapHotspotsValue">All</span></h3>
-                <span class="map-strip-slider-row"><b id="mapHotspotsMinLabel">Low</b><input id="mapHotspots" type="range" min="-9" max="9" step="1" value="0" /><b id="mapHotspotsMaxLabel">High</b></span>
-              </label>
+                <span id="mapHotspotsSliderRow" class="map-strip-slider-row"><b id="mapHotspotsMinLabel">Low</b><input id="mapHotspots" type="range" min="-9" max="9" step="1" value="0" aria-label="Map extremes percentage" /><b id="mapHotspotsMaxLabel">High</b></span>
+                <div id="mapBinaryExtremes" class="segmented" role="group" aria-label="Map binary extremes" hidden>
+                  <button type="button" data-map-binary-extreme="-9" data-stable-label="Low" aria-pressed="false" title="Highlight all zeros">Low</button>
+                  <button type="button" data-map-binary-extreme="0" data-stable-label="All" aria-pressed="true" class="active" title="Highlight zeros and ones">All</button>
+                  <button type="button" data-map-binary-extreme="9" data-stable-label="High" aria-pressed="false" title="Highlight all ones">High</button>
+                </div>
+              </div>
               <div class="control map-strip-postcode-control">
                 <h3>Search</h3>
                 <div class="postcode-search">

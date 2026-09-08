@@ -1,5 +1,29 @@
 import { bindSettingsStripOverflowCue } from "./shared/settings-strip.js";
 
+export function ukMapFiniteNumber(value) {
+  if (value === null || value === undefined || (typeof value === "string" && !value.trim())) return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+export function ukMapMetricClassification(values) {
+  let count = 0;
+  let binary = true;
+  for (const rawValue of values) {
+    const value = ukMapFiniteNumber(rawValue);
+    if (value === null) continue;
+    count += 1;
+    if (value !== 0 && value !== 1) binary = false;
+  }
+  return { count, binary: count > 0 && binary };
+}
+
+export function ukMapBinarySelected(value, hotspots) {
+  const number = ukMapFiniteNumber(value);
+  return (number === 0 || number === 1)
+    && (hotspots === 0 || number === (hotspots < 0 ? 0 : 1));
+}
+
 const MAP_LEVELS = {
   area: {
     label: "areas",
@@ -643,6 +667,18 @@ export function createUkMapTool({
   };
 
   let ukMap = null;
+  const metricClassifications = new WeakMap();
+  let activeMetricClassification = { count: 0, binary: false };
+
+  function classifyMapMetric(data, values, geometry = null) {
+    let cached = metricClassifications.get(data);
+    if (!cached || cached.geometry !== geometry) {
+      cached = { geometry, classification: ukMapMetricClassification(values) };
+      metricClassifications.set(data, cached);
+    }
+    activeMetricClassification = cached.classification;
+    return activeMetricClassification;
+  }
   let ukMapLayer = null;
   let ukMapPointLayer = null;
   let ukMapLabelLayer = null;
@@ -930,6 +966,7 @@ export function createUkMapTool({
 
   function clearRenderedMap() {
     state.lastMapData = null;
+    activeMetricClassification = { count: 0, binary: false };
     state.renderedMapLevel = null;
     state.mapPolygonRenderContext = null;
     if (ukMapLayer && ukMap) {
@@ -2143,6 +2180,10 @@ export function createUkMapTool({
   function mapHotspotKeys(rows) {
     const selection = mapHotspotSelection();
     if (!selection) return null;
+    if (activeMetricClassification.binary) {
+      return new Set(rows.filter((row) => ukMapBinarySelected(row.value, state.mapHotspots))
+        .map((row) => String(row.key)));
+    }
     const validRows = rows
       .map((row, index) => ({ row, index, value: finiteNumber(row.value) }))
       .filter(({ row, value }) => row.key !== null && row.key !== undefined && value !== null);
@@ -2456,6 +2497,7 @@ export function createUkMapTool({
   function makeUnitPointScale(data) {
     const points = normaliseUnitPointColumns(data);
     const rawValues = points.value || [];
+    if (activeMetricClassification.binary) return makeBinaryMapScale();
     const sampleCapacity = Math.min(rawValues.length, MAP_UNIT_QUANTILE_SAMPLE_SIZE);
     const values = new Float64Array(sampleCapacity);
     const stride = rawValues.length > sampleCapacity ? rawValues.length / sampleCapacity : 1;
@@ -2488,6 +2530,13 @@ export function createUkMapTool({
     const points = normaliseUnitPointColumns(data);
     const selection = mapHotspotSelection();
     if (!selection) return null;
+    if (activeMetricClassification.binary) {
+      const indexes = new Set();
+      for (let index = 0; index < points.value.length; index += 1) {
+        if (ukMapBinarySelected(points.value[index], state.mapHotspots)) indexes.add(index);
+      }
+      return indexes;
+    }
     const validRows = [];
     for (let index = 0; index < (points.value || []).length; index += 1) {
       const value = finiteNumber(points.value?.[index]);
@@ -3109,7 +3158,6 @@ export function createUkMapTool({
     state.lastMapData = data;
     state.renderedMapLevel = data.level;
     if (!ukMap) await initMap();
-    syncFloatingMapControl();
     const levelConfig = MAP_LEVELS[data.level] || MAP_LEVELS.area;
     const summaries = new Map((data.rows || []).map((row) => [String(row.key), row]));
     const cachedPolygonLayer = cachedMapPolygonLayer(data.level, geoJson);
@@ -3119,6 +3167,8 @@ export function createUkMapTool({
       filteredRowCount: data.filtered_row_count,
       shapeKeys: cachedPolygonLayer.shapeKeys,
     });
+    classifyMapMetric(data, matchSummary.matchedRows.map((row) => row.value), geoJson);
+    syncFloatingMapControl();
     const scale = makeQuantileScale(matchSummary.matchedRows);
     const hotspotKeys = mapHotspotKeys(matchSummary.matchedRows);
     state.mapPolygonRenderContext = {
@@ -3187,6 +3237,7 @@ export function createUkMapTool({
     state.lastMapData = data;
     state.renderedMapLevel = data.level;
     if (!ukMap) await initMap();
+    classifyMapMetric(data, normaliseUnitPointColumns(data).value, data.unit_points || data.rows);
     syncFloatingMapControl();
     const scale = makeUnitPointScale(data);
     const hotspotIndexes = mapUnitHotspotIndexes(data);
@@ -3414,6 +3465,19 @@ export function createUkMapTool({
       button.classList.toggle("active", button.dataset.palette === state.mapPalette);
     });
     const unitMode = state.mapLevel === "unit";
+    const binaryMode = activeMetricClassification.binary;
+    const extremesDisabled = activeMetricClassification.count === 0;
+    el("mapHotspotsControl").classList.toggle("map-strip-mode-control", binaryMode);
+    el("mapHotspotsSliderRow").hidden = binaryMode;
+    el("mapBinaryExtremes").hidden = !binaryMode;
+    el("mapHotspotsValue").hidden = binaryMode;
+    el("mapHotspots").disabled = extremesDisabled;
+    document.querySelectorAll("[data-map-binary-extreme]").forEach((button) => {
+      const active = Math.sign(Number(button.dataset.mapBinaryExtreme)) === Math.sign(Number(state.mapHotspots));
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", String(active));
+      button.disabled = extremesDisabled;
+    });
     el("mapHotspots").value = String(state.mapHotspots);
     el("mapHotspotsValue").textContent = formatHotspotSliderValue(state.mapHotspots);
     document.querySelectorAll("[data-map-opacity]").forEach((button) => {
@@ -3553,11 +3617,23 @@ export function createUkMapTool({
   }
 
   function finiteNumber(value) {
-    const number = Number(value);
-    return Number.isFinite(number) ? number : null;
+    return ukMapFiniteNumber(value);
+  }
+
+  function makeBinaryMapScale() {
+    const colors = activeMapPalette();
+    const palette = [colors[0], colors[colors.length - 1]];
+    return {
+      binary: true,
+      palette,
+      values: [0, 1],
+      bucket: (value) => Number(value) === 1 ? 1 : 0,
+      color: (value) => finiteNumber(value) === null ? MAP_MISSING_COLOR : palette[Number(value) === 1 ? 1 : 0],
+    };
   }
 
   function makeQuantileScale(rows) {
+    if (activeMetricClassification.binary) return makeBinaryMapScale();
     const values = rows
       .map((row) => finiteNumber(row.value))
       .filter((value) => value !== null);
@@ -3602,14 +3678,19 @@ export function createUkMapTool({
     }
     const rows = [];
     let lower = null;
-    for (let index = 0; index < scale.legendPalette.length; index += 1) {
+    if (scale.binary) {
+      for (const value of [0, 1]) {
+        rows.push(`<div class="map-legend-row"><span class="map-swatch" style="background:${scale.color(value)}"></span><span>${escapeHtml(formatLineValue(value))}</span></div>`);
+      }
+    }
+    for (let index = 0; index < (scale.legendPalette?.length || 0); index += 1) {
       const upper = scale.legendThresholds[index] ?? null;
       const label = mapLegendLabel(lower, upper, index === scale.legendPalette.length - 1);
       rows.push(`<div class="map-legend-row"><span class="map-swatch" style="background:${scale.legendPalette[index]}"></span><span>${escapeHtml(label)}</span></div>`);
       lower = upper;
     }
     if (mapHotspotSelection()) {
-      rows.push(`<div class="map-legend-row"><span class="map-swatch" style="background:${MAP_MUTED_COLOR}"></span><span>Hidden</span></div>`);
+      rows.push(`<div class="map-legend-row"><span class="map-swatch" style="background:${MAP_MUTED_COLOR}"></span><span>Unhighlighted</span></div>`);
     }
     rows.push(`<div class="map-legend-row"><span class="map-swatch" style="background:${MAP_MISSING_COLOR}"></span><span>No data</span></div>`);
     legendBody.innerHTML = rows.join("");
@@ -3747,6 +3828,13 @@ export function createUkMapTool({
         state.mapOpacity = opacity;
         clearActiveMapFavourite({ force: true });
         syncFloatingMapControl();
+        redrawMapInPlace();
+      });
+    });
+    document.querySelectorAll("[data-map-binary-extreme]").forEach((button) => {
+      button.addEventListener("click", () => {
+        state.mapHotspots = Number(button.dataset.mapBinaryExtreme);
+        clearActiveMapFavourite({ force: true });
         redrawMapInPlace();
       });
     });

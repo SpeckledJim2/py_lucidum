@@ -1390,6 +1390,40 @@ if (preferredStartupSource(schema.data_sources, "") !== "dataset") throw new Err
 
 
 
+    def test_uk_map_binary_classification_and_selection(self) -> None:
+        module = Path("src/py_lucidum/static/app/uk-map-tool.js").resolve().as_uri()
+        self.run_node_script(f"""
+import {{ ukMapMetricClassification as classify, ukMapBinarySelected as selected,
+  ukMapFiniteNumber as finite }} from "{module}";
+import assert from 'node:assert/strict';
+for (const values of [[0, 1], [false, true], [0, 0, 0, 1], [1, 1, 1, 0], [0], [1]]) {{
+  assert.deepEqual(classify(values), {{count: values.length, binary: true}});
+  for (const direction of [-9, -1, 0, 1, 9]) {{
+    const expected = values.filter(v => direction === 0 || Number(v) === (direction < 0 ? 0 : 1));
+    assert.deepEqual(values.filter(v => selected(v, direction)), expected);
+    assert.deepEqual([...values].reverse().filter(v => selected(v, direction)), [...expected].reverse());
+  }}
+}}
+for (const value of [null, undefined, '', ' ', NaN, Infinity, -Infinity]) {{
+  assert.equal(finite(value), null);
+  assert.equal(selected(value, 0), false);
+  assert.deepEqual(classify([value, 0, 1]), {{count: 2, binary: true}});
+}}
+for (const values of [[], [null, NaN, undefined]]) {{
+  assert.deepEqual(classify(values), {{count: 0, binary: false}});
+}}
+for (const values of [[0, 0.5, 1], [1, 2], [-1, 1], [0, 1 + Number.EPSILON]]) {{
+  assert.equal(classify(values).binary, false);
+}}
+assert.equal(selected(0, 9), false);
+assert.equal(selected(1, -9), false);
+const large = new Array(200_003).fill(0);
+large[100_001] = 0.25;
+assert.equal(classify(large).binary, false);
+large[100_001] = 1;
+assert.deepEqual(classify(large), {{count: large.length, binary: true}});
+""")
+
     def test_uk_map_shapefile_match_summary_helper(self) -> None:
         module = Path("src/py_lucidum/static/app/uk-map-tool.js").resolve().as_uri()
         script = f"""

@@ -637,6 +637,26 @@ Rows with blank postcodes and nonblank postcodes absent from the bundled geometr
 are reported separately. Map legends and hotspot choices use only values attached to
 geometry that can be drawn.
 
+When the plotted metric contains only **0/1** (including false/true), **Extremes**
+offers **Low / All / High** instead of percentages. Low highlights every zero;
+High highlights every one; All colours both classes. Unhighlighted postcodes stay
+faint grey and retain their hover information. Selecting High therefore highlights
+all ones even when they account for less than 10% of the map, without filling the
+remaining places with zeros.
+
+Binary colours use the palette's fixed low and high endpoints (green and red in
+Split), with explicit zero/one legend entries in the active KPI format. The rule
+uses all drawable values after filtering, aggregation, and smoothing, including in
+Units mode. Averaging a binary source column into fractional area or sector rates
+restores the percentage slider. Results containing only zeros or only ones still
+use Low / All / High; selecting the absent class leaves everything faint grey.
+Missing values remain separate from zeros. With no valid values, Extremes is disabled.
+
+Saved map views retain their Extremes direction: existing bottom-percentage views
+select Low and top-percentage views select High on binary maps. The centre selects
+All. New Low and High selections correspond to B10 and T10 when returning to a
+non-binary metric.
+
 ![Lucidum UK Postcode Area map](https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/postcode_area.png)
 
 ![Lucidum UK Postcode Sector map](https://github.com/SpeckledJim2/py_lucidum/raw/main/docs/assets/postcode_sector_light.png)
