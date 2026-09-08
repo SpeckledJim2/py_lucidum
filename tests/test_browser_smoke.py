@@ -13787,7 +13787,7 @@ COPY (
                     page.locator('[data-spec-kind="kpi"]').click()
                     page.locator("#specFilePath", has_text="kpi_spec.csv (new file)").wait_for(timeout=10_000)
                     page.locator("#specNotice", has_text="Valid KPI spec").wait_for(timeout=10_000)
-                    page.locator(".spec-cell-placeholder", has_text="Numeric column").wait_for(timeout=10_000)
+                    page.locator(".spec-cell-placeholder", has_text="Numeric or Boolean column").wait_for(timeout=10_000)
                     assert_spec_full_bleed_layout("Group", "actual")
                     wait_for_save_button_state({"disabled": False, "dirty": False, "pending": True})
                     page.locator("#specSaveBtn").click()
@@ -13851,7 +13851,7 @@ COPY (
 
             saved_text = kpis_path.read_text(encoding="utf-8")
             self.assertIn("group,name,actual,denominator,decimals,format", saved_text)
-            self.assertNotIn("Numeric column", saved_text)
+            self.assertNotIn("Numeric or Boolean column", saved_text)
             self.assertNotIn("number, currency, or percent", saved_text)
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
