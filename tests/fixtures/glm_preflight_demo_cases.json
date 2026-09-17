@@ -1,0 +1,803 @@
+[
+  {
+    "id": 1,
+    "category": "Zero columns",
+    "formula": "ifelse(DRIVER_AGE < 17, CAR_VALUE, 0)",
+    "cause": "Condition is false on every row",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 2,
+    "category": "Zero columns",
+    "formula": "I(DRIVER_AGE - DRIVER_AGE)",
+    "cause": "Identical quantities subtract to zero",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 3,
+    "category": "Zero columns",
+    "formula": "pmin(VEHICLE_AGE, 0)",
+    "cause": "Nonnegative age clamped to zero",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 4,
+    "category": "Zero columns",
+    "formula": "I(PRIOR_CLAIMS * 0)",
+    "cause": "Multiplication by zero",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 5,
+    "category": "Zero columns",
+    "formula": "ifelse(FUEL_TYPE == \"Electric\", 1, 0)",
+    "cause": "Absent fuel category",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 6,
+    "category": "Zero columns",
+    "formula": "ifelse(DRIVER_AGE > 0, ifelse(VEHICLE_AGE < 0, 1, 0), 1)",
+    "cause": "Nested condition always zero",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 7,
+    "category": "Zero columns",
+    "formula": "I(np.floor(PRIOR_CLAIMS / 3))",
+    "cause": "All claim counts less than three",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 8,
+    "category": "Zero columns",
+    "formula": "I(np.sin(np.pi * 0 * DRIVER_AGE))",
+    "cause": "Sine of zero",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 9,
+    "category": "Zero columns",
+    "formula": "0 + I(VEHICLE_AGE ** 2 - VEHICLE_AGE * VEHICLE_AGE)",
+    "cause": "Equivalent powers cancel without intercept",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 10,
+    "category": "Zero columns",
+    "formula": "I(ifelse(FUEL_TYPE == \"Diesel\", 1, 0) * ifelse(FUEL_TYPE == \"Petrol\", 1, 0))",
+    "cause": "Mutually exclusive indicators multiply to zero",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 11,
+    "category": "Constant columns",
+    "formula": "ifelse(DRIVER_AGE >= 17, 1, 0)",
+    "cause": "Always true duplicates intercept",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 12,
+    "category": "Constant columns",
+    "formula": "pmax(DRIVER_AGE, 100)",
+    "cause": "Every age clamped to 100",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 13,
+    "category": "Constant columns",
+    "formula": "I(CAR_VALUE / CAR_VALUE)",
+    "cause": "Self ratio equals one",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 14,
+    "category": "Constant columns",
+    "formula": "I(VEHICLE_AGE ** 0)",
+    "cause": "Zeroth power equals one",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 15,
+    "category": "Constant columns",
+    "formula": "I(np.sign(DRIVER_AGE))",
+    "cause": "All driver ages positive",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 16,
+    "category": "Constant columns",
+    "formula": "I(np.cos(DRIVER_AGE * 0))",
+    "cause": "Cosine of zero equals one",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 17,
+    "category": "Constant columns",
+    "formula": "ifelse(PRIOR_CLAIMS >= 0, -7, 3)",
+    "cause": "Constant negative contribution",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 18,
+    "category": "Constant columns",
+    "formula": "I(np.clip(VEHICLE_AGE, 25, 25))",
+    "cause": "Collapsed clipping interval",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 19,
+    "category": "Constant columns",
+    "formula": "0 + ifelse(DRIVER_AGE > 0, 1, 0) + ifelse(CAR_VALUE > 0, 2, 0)",
+    "cause": "Two nonzero constants without intercept",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 20,
+    "category": "Constant columns",
+    "formula": "I(ifelse(FUEL_TYPE == \"Diesel\", 1, 0) + ifelse(FUEL_TYPE == \"Petrol\", 1, 0))",
+    "cause": "Exhaustive indicators sum to one",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 21,
+    "category": "Exact duplicate columns",
+    "formula": "DRIVER_AGE + I(DRIVER_AGE)",
+    "cause": "Identity transform",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 22,
+    "category": "Exact duplicate columns",
+    "formula": "VEHICLE_AGE + ifelse(DRIVER_AGE >= 17, VEHICLE_AGE, 0)",
+    "cause": "Always true gate returns original",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 23,
+    "category": "Exact duplicate columns",
+    "formula": "CAR_VALUE + abs(CAR_VALUE)",
+    "cause": "Absolute value leaves positives unchanged",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 24,
+    "category": "Exact duplicate columns",
+    "formula": "DRIVER_AGE + pmin(DRIVER_AGE, 100)",
+    "cause": "Upper clamp never binds",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 25,
+    "category": "Exact duplicate columns",
+    "formula": "VEHICLE_AGE + pmax(VEHICLE_AGE, 0)",
+    "cause": "Lower clamp never binds",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 26,
+    "category": "Exact duplicate columns",
+    "formula": "PRIOR_CLAIMS + I(np.round(PRIOR_CLAIMS))",
+    "cause": "Rounding integer predictor",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 27,
+    "category": "Exact duplicate columns",
+    "formula": "ANNUAL_MILEAGE + I(np.floor(ANNUAL_MILEAGE))",
+    "cause": "Floor of integers",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 28,
+    "category": "Exact duplicate columns",
+    "formula": "NCD_YEARS + I(NCD_YEARS ** 1)",
+    "cause": "First power",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 29,
+    "category": "Exact duplicate columns",
+    "formula": "DRIVER_AGE + I(np.sqrt(DRIVER_AGE ** 2))",
+    "cause": "Positive square root of square",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 30,
+    "category": "Exact duplicate columns",
+    "formula": "ifelse(FUEL_TYPE == \"Diesel\", DRIVER_AGE, VEHICLE_AGE) + ifelse(FUEL_TYPE == \"Petrol\", VEHICLE_AGE, DRIVER_AGE)",
+    "cause": "Equivalent conditional branches",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 31,
+    "category": "Linear combinations",
+    "formula": "DRIVER_AGE + I(2 * DRIVER_AGE)",
+    "cause": "Positive proportional columns",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 32,
+    "category": "Linear combinations",
+    "formula": "VEHICLE_AGE + I(-3 * VEHICLE_AGE)",
+    "cause": "Negative proportional columns",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 33,
+    "category": "Linear combinations",
+    "formula": "ANNUAL_MILEAGE + I(ANNUAL_MILEAGE / 1000)",
+    "cause": "Change of units",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 34,
+    "category": "Linear combinations",
+    "formula": "DRIVER_AGE + I(DRIVER_AGE + 5)",
+    "cause": "Affine shift conflicts with intercept",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 35,
+    "category": "Linear combinations",
+    "formula": "DRIVER_AGE + VEHICLE_AGE + I(DRIVER_AGE + VEHICLE_AGE)",
+    "cause": "Sum of two predictors",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 36,
+    "category": "Linear combinations",
+    "formula": "CAR_VALUE + ANNUAL_MILEAGE + I(CAR_VALUE - 2 * ANNUAL_MILEAGE)",
+    "cause": "Weighted difference",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 37,
+    "category": "Linear combinations",
+    "formula": "DRIVER_AGE + VEHICLE_AGE + NCD_YEARS + I(2 * DRIVER_AGE - 3 * VEHICLE_AGE + 7 * NCD_YEARS)",
+    "cause": "Three predictor combination",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 38,
+    "category": "Linear combinations",
+    "formula": "0 + DRIVER_AGE + VEHICLE_AGE + I(DRIVER_AGE - VEHICLE_AGE)",
+    "cause": "Dependency without intercept",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 39,
+    "category": "Linear combinations",
+    "formula": "DRIVER_AGE + I(100 - DRIVER_AGE)",
+    "cause": "Complement to constant",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 40,
+    "category": "Linear combinations",
+    "formula": "I(DRIVER_AGE + VEHICLE_AGE) + I(DRIVER_AGE - VEHICLE_AGE) + I(2 * DRIVER_AGE)",
+    "cause": "Dependency with no untransformed predictors",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 41,
+    "category": "Categorical dependencies",
+    "formula": "ifelse(FUEL_TYPE == \"Diesel\", 1, 0) + ifelse(FUEL_TYPE == \"Petrol\", 1, 0)",
+    "cause": "Exhaustive binary dummy trap",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 42,
+    "category": "Categorical dependencies",
+    "formula": "C(FUEL_TYPE) + ifelse(FUEL_TYPE == \"Petrol\", 1, 0)",
+    "cause": "Manual indicator duplicates encoded level",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 43,
+    "category": "Categorical dependencies",
+    "formula": "C(PRIOR_CLAIMS) + PRIOR_CLAIMS",
+    "cause": "Numeric score spanned by its factor",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 44,
+    "category": "Categorical dependencies",
+    "formula": "C(VEHICLE_AGE) + I(VEHICLE_AGE ** 2)",
+    "cause": "Quadratic spanned by age indicators",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 45,
+    "category": "Categorical dependencies",
+    "formula": "C(FUEL_TYPE) + C(ifelse(FUEL_TYPE == \"Petrol\", 1, 0))",
+    "cause": "Same factor encoded twice; encoder currently cannot handle transformed arrays",
+    "scope": "all",
+    "hard": true
+  },
+  {
+    "id": 46,
+    "category": "Categorical dependencies",
+    "formula": "C(VEHICLE_USAGE) + ifelse(VEHICLE_USAGE == \"Business use\", 1, 0)",
+    "cause": "One redundant level among three",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 47,
+    "category": "Categorical dependencies",
+    "formula": "C(OVERNIGHT_LOCATION) + ifelse(OVERNIGHT_LOCATION != \"Garage\", 1, 0)",
+    "cause": "Complement of categorical level",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 48,
+    "category": "Categorical dependencies",
+    "formula": "C(PRIOR_CLAIMS) + C(ifelse(PRIOR_CLAIMS > 0, 1, 0))",
+    "cause": "Coarsened factor nested in original; encoder currently cannot handle transformed arrays",
+    "scope": "all",
+    "hard": true
+  },
+  {
+    "id": 49,
+    "category": "Categorical dependencies",
+    "formula": "C(FUEL_TYPE):C(LICENCE_TYPE) + ifelse(FUEL_TYPE == \"Petrol\", 1, 0)",
+    "cause": "Main effect spanned by joint category cells",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 50,
+    "category": "Categorical dependencies",
+    "formula": "C(POSTCODE_CATEGORY) + POSTCODE_CATEGORY",
+    "cause": "Numeric score spanned by fifty levels",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 51,
+    "category": "Interaction dependencies",
+    "formula": "DRIVER_AGE + DRIVER_AGE:ifelse(VEHICLE_AGE >= 0, 1, 0)",
+    "cause": "Interaction with unit constant",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 52,
+    "category": "Interaction dependencies",
+    "formula": "DRIVER_AGE:VEHICLE_AGE + I(DRIVER_AGE * VEHICLE_AGE)",
+    "cause": "Product duplicated outside formula interaction",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 53,
+    "category": "Interaction dependencies",
+    "formula": "C(FUEL_TYPE):DRIVER_AGE + ifelse(FUEL_TYPE == \"Diesel\", DRIVER_AGE, 0)",
+    "cause": "Manual gated slope duplicates factor slope",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 54,
+    "category": "Interaction dependencies",
+    "formula": "DRIVER_AGE + ifelse(FUEL_TYPE == \"Diesel\", DRIVER_AGE, 0) + ifelse(FUEL_TYPE == \"Petrol\", DRIVER_AGE, 0)",
+    "cause": "Complementary gated slopes sum to age",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 55,
+    "category": "Interaction dependencies",
+    "formula": "ifelse(VEHICLE_AGE < 5, 1, 0):ifelse(VEHICLE_AGE >= 5, 1, 0)",
+    "cause": "Disjoint age groups have empty interaction",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 56,
+    "category": "Interaction dependencies",
+    "formula": "DRIVER_AGE:C(PRIOR_CLAIMS) + I(DRIVER_AGE * PRIOR_CLAIMS)",
+    "cause": "Score interaction spanned by group slopes",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 57,
+    "category": "Interaction dependencies",
+    "formula": "DRIVER_AGE:VEHICLE_AGE + DRIVER_AGE:I(2 * VEHICLE_AGE)",
+    "cause": "Proportional interactions",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 58,
+    "category": "Interaction dependencies",
+    "formula": "C(FUEL_TYPE):ifelse(FUEL_TYPE == \"Diesel\", 1, 0)",
+    "cause": "Factor crossed with own indicator has empty cell",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 59,
+    "category": "Interaction dependencies",
+    "formula": "DRIVER_AGE:VEHICLE_AGE:PRIOR_CLAIMS + I(DRIVER_AGE * VEHICLE_AGE * PRIOR_CLAIMS)",
+    "cause": "Three way product duplication",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 60,
+    "category": "Interaction dependencies",
+    "formula": "DRIVER_AGE:ifelse(FUEL_TYPE == \"Electric\", 1, 0)",
+    "cause": "All zero gated numeric interaction",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 61,
+    "category": "Spline and polynomial bases",
+    "formula": "ns(DRIVER_AGE, df=4)",
+    "cause": "Unconstrained natural spline spans intercept",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 62,
+    "category": "Spline and polynomial bases",
+    "formula": "cs(DRIVER_AGE, df=4)",
+    "cause": "Unconstrained cyclic spline spans intercept",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 63,
+    "category": "Spline and polynomial bases",
+    "formula": "DRIVER_AGE + bs(DRIVER_AGE, df=4)",
+    "cause": "B spline overlaps numeric slope",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 64,
+    "category": "Spline and polynomial bases",
+    "formula": "DRIVER_AGE + ns(DRIVER_AGE, df=4, constraints=\"center\")",
+    "cause": "Centered natural spline overlaps numeric slope",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 65,
+    "category": "Spline and polynomial bases",
+    "formula": "bs(DRIVER_AGE, df=4) + bs(DRIVER_AGE, df=5)",
+    "cause": "Spline spaces share lower degree polynomial components",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 66,
+    "category": "Spline and polynomial bases",
+    "formula": "poly(DRIVER_AGE, degree=2) + poly(DRIVER_AGE, degree=3)",
+    "cause": "Orthogonal polynomial bases overlap",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 67,
+    "category": "Spline and polynomial bases",
+    "formula": "DRIVER_AGE + poly(DRIVER_AGE, degree=3, raw=True)",
+    "cause": "Raw polynomial duplicates numeric slope",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 68,
+    "category": "Spline and polynomial bases",
+    "formula": "bs(pmin(DRIVER_AGE, 0), df=4)",
+    "cause": "Constant spline input",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 69,
+    "category": "Spline and polynomial bases",
+    "formula": "ns(PRIOR_CLAIMS, df=8, constraints=\"center\")",
+    "cause": "Insufficient distinct values for spline dimension",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 70,
+    "category": "Spline and polynomial bases",
+    "formula": "C(PRIOR_CLAIMS) + poly(PRIOR_CLAIMS, degree=2, raw=True)",
+    "cause": "Polynomial spanned by three level factor",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 71,
+    "category": "Invalid evaluated values",
+    "formula": "I(1 / VEHICLE_AGE)",
+    "cause": "Zero age denominator",
+    "scope": "all",
+    "hard": true
+  },
+  {
+    "id": 72,
+    "category": "Invalid evaluated values",
+    "formula": "sqrt(-DRIVER_AGE)",
+    "cause": "Negative square root domain",
+    "scope": "all",
+    "hard": true
+  },
+  {
+    "id": 73,
+    "category": "Invalid evaluated values",
+    "formula": "log(pmin(DRIVER_AGE, 0))",
+    "cause": "Logarithm of zero",
+    "scope": "all",
+    "hard": true
+  },
+  {
+    "id": 74,
+    "category": "Invalid evaluated values",
+    "formula": "exp(CAR_VALUE)",
+    "cause": "Exponential overflow",
+    "scope": "all",
+    "hard": true
+  },
+  {
+    "id": 75,
+    "category": "Invalid evaluated values",
+    "formula": "I(VEHICLE_AGE / VEHICLE_AGE)",
+    "cause": "Zero divided by zero on some rows",
+    "scope": "all",
+    "hard": true
+  },
+  {
+    "id": 76,
+    "category": "Invalid evaluated values",
+    "formula": "I(np.arccos(DRIVER_AGE))",
+    "cause": "Arccosine argument outside [-1,1]",
+    "scope": "all",
+    "hard": true
+  },
+  {
+    "id": 77,
+    "category": "Invalid evaluated values",
+    "formula": "I(np.log1p(-DRIVER_AGE))",
+    "cause": "Log1p domain violation",
+    "scope": "all",
+    "hard": true
+  },
+  {
+    "id": 78,
+    "category": "Invalid evaluated values",
+    "formula": "poly(pmin(DRIVER_AGE, 0), degree=2)",
+    "cause": "Orthogonal polynomial normalization of constant",
+    "scope": "all",
+    "hard": true
+  },
+  {
+    "id": 79,
+    "category": "Invalid evaluated values",
+    "formula": "ns(pmin(DRIVER_AGE, 0), df=4)",
+    "cause": "Natural spline cannot construct distinct knots",
+    "scope": "all",
+    "hard": true
+  },
+  {
+    "id": 80,
+    "category": "Invalid evaluated values",
+    "formula": "ifelse(VEHICLE_AGE == 0, np.nan, DRIVER_AGE)",
+    "cause": "Conditional missing predictor",
+    "scope": "all",
+    "hard": true
+  },
+  {
+    "id": 81,
+    "category": "Numerical conditioning",
+    "formula": "I(DRIVER_AGE * 1e-14)",
+    "cause": "Tiny predictor against intercept",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 82,
+    "category": "Numerical conditioning",
+    "formula": "I(CAR_VALUE * 1e12)",
+    "cause": "Huge predictor against intercept",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 83,
+    "category": "Numerical conditioning",
+    "formula": "DRIVER_AGE + I(DRIVER_AGE + 1e-12 * VEHICLE_AGE)",
+    "cause": "Near proportional columns below numerical rank tolerance",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 84,
+    "category": "Numerical conditioning",
+    "formula": "DRIVER_AGE + VEHICLE_AGE + I(DRIVER_AGE + VEHICLE_AGE + 1e-12 * PRIOR_CLAIMS)",
+    "cause": "Near linear combination",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 85,
+    "category": "Numerical conditioning",
+    "formula": "I(1e15 + DRIVER_AGE)",
+    "cause": "Large translation nearly constant",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 86,
+    "category": "Numerical conditioning",
+    "formula": "I(DRIVER_AGE * 1e-300)",
+    "cause": "Extremely small finite scale",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 87,
+    "category": "Numerical conditioning",
+    "formula": "I(DRIVER_AGE * 1e300)",
+    "cause": "Extremely large finite scale",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 88,
+    "category": "Numerical conditioning",
+    "formula": "I(DRIVER_AGE * 1e305)",
+    "cause": "Finite inputs whose column norm overflows",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 89,
+    "category": "Numerical conditioning",
+    "formula": "I(DRIVER_AGE * 1e-320)",
+    "cause": "Subnormal finite scale",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 90,
+    "category": "Numerical conditioning",
+    "formula": "DRIVER_AGE + I(DRIVER_AGE * (1 + 1e-13))",
+    "cause": "Rounding-sensitive proportional columns",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 91,
+    "category": "Fitting scope and offsets",
+    "formula": "ifelse(SAMPLE == \"training\", 1, 0)",
+    "cause": "Constant only in training",
+    "scope": "training",
+    "hard": false
+  },
+  {
+    "id": 92,
+    "category": "Fitting scope and offsets",
+    "formula": "ifelse(SAMPLE == \"test\", DRIVER_AGE, 0)",
+    "cause": "Zero only in training",
+    "scope": "training",
+    "hard": false
+  },
+  {
+    "id": 93,
+    "category": "Fitting scope and offsets",
+    "formula": "DRIVER_AGE + ifelse(SAMPLE == \"training\", DRIVER_AGE, 0)",
+    "cause": "Duplicate only in training",
+    "scope": "training",
+    "hard": false
+  },
+  {
+    "id": 94,
+    "category": "Fitting scope and offsets",
+    "formula": "ifelse(SAMPLE == \"validation\", 0, 1)",
+    "cause": "Constant in training plus test",
+    "scope": "training_test",
+    "hard": false
+  },
+  {
+    "id": 95,
+    "category": "Fitting scope and offsets",
+    "formula": "ifelse(SAMPLE == \"validation\", DRIVER_AGE, 0)",
+    "cause": "Zero in training plus test",
+    "scope": "training_test",
+    "hard": false
+  },
+  {
+    "id": 96,
+    "category": "Fitting scope and offsets",
+    "formula": "DRIVER_AGE + ifelse(SAMPLE != \"validation\", DRIVER_AGE, 0)",
+    "cause": "Duplicate in training plus test",
+    "scope": "training_test",
+    "hard": false
+  },
+  {
+    "id": 97,
+    "category": "Fitting scope and offsets",
+    "formula": "C(SAMPLE)",
+    "cause": "Single level factor encodes no columns",
+    "scope": "training",
+    "hard": false,
+    "warning_only": true
+  },
+  {
+    "id": 98,
+    "category": "Fitting scope and offsets",
+    "formula": "DRIVER_AGE + I(DRIVER_AGE) + offset(VEHICLE_AGE)",
+    "cause": "Offset cannot resolve duplicate predictors",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 99,
+    "category": "Fitting scope and offsets",
+    "formula": "ifelse(DRIVER_AGE > 0, 2, 0) + offset(DRIVER_AGE)",
+    "cause": "Varying offset cannot resolve constant predictor",
+    "scope": "all",
+    "hard": false
+  },
+  {
+    "id": 100,
+    "category": "Fitting scope and offsets",
+    "formula": "I(VEHICLE_AGE - VEHICLE_AGE) + offset(ifelse(DRIVER_AGE > 0, 1, 0))",
+    "cause": "Constant offset excluded; predictor still zero",
+    "scope": "all",
+    "hard": false
+  }
+]

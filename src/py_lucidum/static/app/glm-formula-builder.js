@@ -59,6 +59,7 @@ export function createGlmFormulaBuilder({
   getDenominator = () => "",
   getFamilies = () => [],
   onBuildModel = () => {},
+  onSettingsChange = () => {},
   onCoefficientSearch = () => {},
   onCopyCoefficients = () => {},
   onCopyFormula = () => {},
@@ -619,6 +620,7 @@ export function createGlmFormulaBuilder({
     fallback.selectionStart = fallback.selectionEnd = start + String(text).length;
     formulaDraft = fallback.value;
     localStorage.setItem("py_lucidum_glm_formula", formulaDraft);
+    onSettingsChange();
   }
 
   function levelCacheKey(column, search) {
@@ -701,6 +703,10 @@ export function createGlmFormulaBuilder({
       if (!["all", "training", "training_test"].includes(scope)) return;
       selectedTrainingScope = scope;
       localStorage.setItem("py_lucidum_glm_training_scope", selectedTrainingScope);
+    });
+    ["glmFamilySelect", "glmFamilyParameter", "glmRegularizationMode", "glmRegularizationMix", "glmRegularizationAlpha", "glmTrainingScope"].forEach((id) => {
+      el(id)?.addEventListener("input", onSettingsChange);
+      el(id)?.addEventListener("change", onSettingsChange);
     });
     el("glmClearFormulaBtn")?.addEventListener("click", () => setFormulaText(""));
     el("glmFormulaAssistBtn")?.addEventListener("click", () => toggleBuilderPanel("formula"));
@@ -973,6 +979,7 @@ export function createGlmFormulaBuilder({
         formulaDraft = aceEditor.getValue();
         localStorage.setItem("py_lucidum_glm_formula", formulaDraft);
         syncAceGutterWidth();
+        onSettingsChange();
       });
       bindAutocomplete();
       fallback.classList.add("hidden");
@@ -983,6 +990,7 @@ export function createGlmFormulaBuilder({
       fallback.addEventListener("input", () => {
         formulaDraft = fallback.value;
         localStorage.setItem("py_lucidum_glm_formula", formulaDraft);
+        onSettingsChange();
       });
     }
   }
@@ -1015,6 +1023,7 @@ export function createGlmFormulaBuilder({
       syncAceGutterWidth();
     }
     if (el("glmFormulaText")) el("glmFormulaText").value = formulaDraft;
+    onSettingsChange();
   }
 
   function adjustFontSize(delta) {

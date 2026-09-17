@@ -1758,6 +1758,186 @@ FROM {dataset.relation_sql_for_source(source_id)}
         self.assertIn("0 + ns", warnings_text)
         self.assertIn("rank-deficient", warnings_text)
         self.assertNotIn("warnings", manifest)
+        report = store.model_diagnostics(result["model_id"])["term_check"]
+        self.assertTrue(report["ok"])
+        self.assertTrue(report["issues"])
+        self.assertTrue(all(issue["severity"] == "warning" for issue in report["issues"]))
+
+    def test_preflight_uses_eligible_fit_rows_and_blocks_before_estimator_fit(self) -> None:
+        self.require_glm_dependencies()
+        from glum import GeneralizedLinearRegressor, GeneralizedLinearRegressorCV
+        from py_lucidum.tools.glm.training import _train_model_impl
+
+        path = self.root / "preflight_rows.csv"
+        path.write_text(
+            "y,w,x,off,SAMPLE\n"
+            "1,1,1,0,training\n2,1,1,0, Training \n3,1,1,0,TEST\n"
+            "4,1,2,0,validation\n,1,3,0,training\n5,0,4,0,training\n6,1,5,,training\n",
+            encoding="utf-8",
+        )
+        dataset = Dataset(path)
+        store = GlmModelStore(path)
+        payload = {"formula": "x + offset(off)", "response_column": "y", "denominator_column": "w", "family": "normal"}
+        baseline = train_model(dataset, store, payload)
+        self.assertEqual(baseline["diagnostics"]["term_check"]["rows"], 4)
+        self.assertEqual(baseline["diagnostics"]["term_check"]["rank"], 2)
+        for scope, expected_rows in (("training", 2), ("training_test", 3)):
+            with self.subTest(scope=scope):
+                updates = []
+                with patch.object(GeneralizedLinearRegressor, "fit") as fit, patch.object(GeneralizedLinearRegressorCV, "fit") as cv_fit:
+                    with self.assertRaisesRegex(ValueError, "fitting has not started.*`x`"):
+                        _train_model_impl(dataset, store, {**payload, "training_scope": scope}, progress_callback=updates.append)
+                fit.assert_not_called()
+                cv_fit.assert_not_called()
+                report = updates[-1]["term_check"]
+                self.assertEqual(report["rows"], expected_rows)
+                self.assertEqual(report["training_scope"], scope)
+                self.assertEqual(report["issues"][0]["code"], "constant")
+                self.assertNotIn("fitting", [item["phase"] for item in updates])
+                self.assertEqual(store.active_model_id(), baseline["model_id"])
+                self.assertEqual(len(store.list_models()), 1)
+
+    def test_preflight_failure_report_survives_both_worker_modes_and_job_failure(self) -> None:
+        self.require_glm_dependencies()
+        dataset = Dataset(self.data_path)
+        store = GlmModelStore(self.data_path)
+        payload = {"formula": "Age + ifelse(Age > 0, 1, 0)", "response_column": "actualNumerator", "family": "normal"}
+        for one_shot in ("1", ""):
+            with self.subTest(one_shot=one_shot):
+                updates = []
+                with patch.dict(os.environ, {"PY_LUCIDUM_GLM_FIT_ONE_SHOT": one_shot}):
+                    with self.assertRaisesRegex(Exception, "fitting has not started.*ifelse"):
+                        train_model_in_subprocess(dataset, store, payload, progress_callback=updates.append)
+                reports = [update["term_check"] for update in updates if "term_check" in update]
+                self.assertTrue(reports)
+                self.assertFalse(reports[-1]["ok"])
+                self.assertEqual(reports[-1]["issues"][0]["terms"], ["ifelse(Age > 0, 1, 0)"])
+                self.assertNotIn("fitting", [item["phase"] for item in updates])
+        manager = GlmJobManager()
+        with patch("py_lucidum.tools.glm.training.should_isolate_glm_fit", return_value=False):
+            job = manager.start(dataset, store, payload)
+            deadline = time.monotonic() + 10
+            while job.status in {"queued", "running"} and time.monotonic() < deadline:
+                time.sleep(0.01)
+        self.assertEqual(job.status, "failed")
+        self.assertFalse(job.as_payload()["progress"]["term_check"]["ok"])
+        self.assertEqual(store.list_models(), [])
+
+    def test_preflight_non_finite_blocks_before_regularized_fit_or_cross_validation(self) -> None:
+        self.require_glm_dependencies()
+        from glum import GeneralizedLinearRegressor, GeneralizedLinearRegressorCV
+        from py_lucidum.tools.glm.training import _train_model_impl
+
+        dataset = Dataset(self.data_path)
+        store = GlmModelStore(self.data_path)
+        for regularization in ({"mode": "none"}, {"mode": "manual", "alpha": 0.1, "l1_ratio": 0}, {"mode": "auto"}):
+            with self.subTest(regularization=regularization):
+                with patch.object(GeneralizedLinearRegressor, "fit") as fit, patch.object(GeneralizedLinearRegressorCV, "fit") as cv_fit:
+                    with self.assertRaisesRegex(ValueError, "fitting has not started.*np.log\\(-Age\\)"):
+                        _train_model_impl(dataset, store, {
+                            "formula": "np.log(-Age)", "response_column": "actualNumerator",
+                            "family": "normal", "regularization": regularization,
+                        })
+                fit.assert_not_called()
+                cv_fit.assert_not_called()
+        self.assertEqual(store.list_models(), [])
+
+    def test_demo_100_problem_formulas_before_fit_in_all_regularization_modes(self) -> None:
+        self.require_glm_dependencies()
+        from glum import GeneralizedLinearRegressor, GeneralizedLinearRegressorCV
+        from py_lucidum.tools.glm.training import _train_model_impl
+
+        cases = json.loads((Path(__file__).parent / "fixtures" / "glm_preflight_demo_cases.json").read_text())
+        self.assertEqual(len(cases), 100)
+        self.assertEqual(len({(case["formula"], case["scope"]) for case in cases}), 100)
+        path = self.demo_dataset_copy_path()
+        dataset, store = Dataset(path), GlmModelStore(path)
+
+        class FitReached(Exception):
+            pass
+
+        for mode in ("none", "manual", "auto"):
+            for case in cases:
+                with self.subTest(case=case["id"], cause=case["cause"], mode=mode):
+                    allowed = not case["hard"] and (mode != "none" or case.get("warning_only"))
+                    payload = {
+                        "formula": case["formula"], "response_column": "PREMIUM", "family": "normal",
+                        "training_scope": case["scope"],
+                        "regularization": {"mode": mode, **({"alpha": 0.1, "l1_ratio": 0} if mode == "manual" else {})},
+                    }
+                    updates = []
+                    with patch.object(GeneralizedLinearRegressor, "fit", side_effect=FitReached) as fit, patch.object(
+                        GeneralizedLinearRegressorCV, "fit", side_effect=FitReached,
+                    ) as cv_fit:
+                        if allowed:
+                            with self.assertRaises(FitReached):
+                                _train_model_impl(dataset, store, payload, progress_callback=updates.append)
+                            self.assertEqual(fit.call_count + cv_fit.call_count, 1)
+                        else:
+                            with self.assertRaisesRegex(ValueError, "GLM check found problems; fitting has not started"):
+                                _train_model_impl(dataset, store, payload, progress_callback=updates.append)
+                            fit.assert_not_called()
+                            cv_fit.assert_not_called()
+                            self.assertNotIn("fitting", [update["phase"] for update in updates])
+                    report = updates[-1]["term_check"]
+                    self.assertEqual(report["rows"], {"all": 50_000, "training": 30_000, "training_test": 40_000}[case["scope"]])
+                    self.assertEqual(report["ok"], bool(allowed))
+                    self.assertTrue(report["issues"])
+                    for issue in report["issues"]:
+                        self.assertTrue(issue["terms"])
+                        self.assertNotEqual(issue["terms"], ["Formula"])
+                        self.assertTrue(issue["reason"])
+                        self.assertTrue(issue["suggestion"])
+                        self.assertEqual(issue["severity"], "warning" if allowed else "error")
+                    if case["hard"]:
+                        self.assertTrue({issue["code"] for issue in report["issues"]} & {"non_finite", "evaluation"})
+                    elif not case.get("warning_only"):
+                        self.assertTrue(report["rank"] < report["columns"] or any(
+                            issue["code"] == "ill_conditioned" for issue in report["issues"]
+                        ))
+                    self.assertEqual(store.list_models(), [])
+                    self.assertIsNone(store.active_model_id())
+
+    def test_demo_single_level_categorical_fits_and_tabulates_as_intercept_only(self) -> None:
+        self.require_glm_dependencies()
+        path = self.demo_dataset_copy_path()
+        dataset = Dataset(path)
+        store = GlmModelStore(path)
+        result = train_model(dataset, store, {
+            "formula": "C(SAMPLE)", "response_column": "PREMIUM", "family": "normal",
+            "training_scope": "training",
+        })
+        report = result["diagnostics"]["term_check"]
+        self.assertTrue(report["ok"])
+        self.assertTrue(report["intercept_only"])
+        self.assertEqual(report["rows"], 30_000)
+        self.assertEqual(report["issues"][0]["code"], "empty_term")
+        self.assertEqual(report["issues"][0]["severity"], "warning")
+        self.assertEqual(len(result["coefficients"]), 1)
+        self.assertEqual(result["coefficients"][0]["term"], "(Intercept)")
+        model_id = result["model_id"]
+        self.assertTrue(store.manifest(model_id)["formula"]["intercept_only"])
+        expected = dataset.con.execute(f"SELECT avg(PREMIUM) FROM {dataset.relation_sql()} WHERE SAMPLE = 'training'").fetchone()[0]
+        predictions = store.read_parquet_records(store.artifact_path(model_id, "predictions"))
+        self.assertEqual(len(predictions), 50_000)
+        for row in predictions:
+            self.assertAlmostEqual(row["glm_prediction"], expected, places=7)
+        built = build_tabulations(dataset, store, {"model_ids": [model_id]}, {"rows": []})
+        self.assertEqual(built["models"][0]["status"], "tabulated")
+        tabulated = store.read_parquet_records(store.artifact_path(model_id, "tabulated_predictions"))
+        self.assertEqual(len(tabulated), 50_000)
+        for row in tabulated:
+            self.assertAlmostEqual(row["glm_tabulated_prediction"], expected, places=7)
+
+    def test_ifelse_assignment_syntax_error_names_expression_and_explains_comparison(self) -> None:
+        self.require_glm_dependencies()
+        dataset = Dataset(self.data_path)
+        formula = "ifelse(SAMPLE = 'training', Age, 0)"
+        validation = validate_request(dataset, {"formula": formula, "response_column": "actualNumerator"})
+        with self.assertRaises(ValueError) as raised:
+            required_training_columns(dataset, validation)
+        self.assertIn(formula, str(raised.exception))
+        self.assertIn("Use == to compare values", str(raised.exception))
 
     def test_intercept_only_demo_formula_fits_and_tabulates_constant_predictions(self) -> None:
         self.require_glm_dependencies()

@@ -46,6 +46,8 @@ function glmAutoModelTimeLabel(date = new Date()) {
 
 export function glmBuildReadyBadgeLabel(progress = null) {
   const phase = String(progress?.phase || "").trim().toLowerCase();
+  if (phase === "checking_terms") return "Checking GLM terms";
+  if (phase === "validating") return "Checking GLM settings";
   return phase === "scoring" || phase === "writing" || phase === "succeeded"
     ? "Scoring GLM"
     : "Training GLM";
@@ -164,6 +166,9 @@ export function createGlmTool({
   let tabulationElapsedStartedAt = null;
   let isExportingTabulations = false;
   let liveProgress = null;
+  let termCheck = null;
+  let termCheckSignature = "";
+  let buildSettingsSignature = "";
   let tabulationConfig = null;
   let tabulationModelTable = null;
   let tabulationCommonTable = null;
@@ -203,6 +208,7 @@ export function createGlmTool({
     getDenominator: () => el("denominator")?.value || "__none__",
     getFamilies: () => config?.families || [],
     onBuildModel: buildModel,
+    onSettingsChange: clearTermCheck,
     onCoefficientSearch: () => renderCoefficientTable(coefficientRows),
     onCopyCoefficients: copyCoefficients,
     onCopyFormula: copyFormula,
@@ -342,6 +348,7 @@ export function createGlmTool({
     syncSidebarModelChooser(modelRows, data.active_model_id);
     renderCoefficientTable(coefficientRowsForActiveModel(data.active_model_id));
     formulaBuilder.initEditor();
+    renderTermCheck();
     if (activeModelId) loadModelDetail(activeModelId);
     if (liveProgress) renderLiveProgress(liveProgress);
     if (activeTab === "tabulations") refreshTabulationConfig({ force: true });
@@ -419,6 +426,7 @@ export function createGlmTool({
                   </div>
                 </div>
               </div>
+              <div id="glmTermCheck" class="glm-term-check hidden" aria-live="polite"></div>
               <div class="glm-editor-shell">
                 <div id="glmFormulaEditor" class="glm-formula-editor"></div>
                 <textarea id="glmFormulaText" class="glm-formula-text" spellcheck="false">${escapeHtml(formulaBuilder.formulaDraft)}</textarea>
@@ -2484,6 +2492,51 @@ export function createGlmTool({
     return formulaBuilder.buildRegularizationPayload();
   }
 
+  function settingsSignature(payload = buildPayload()) {
+    const { label, ...settings } = payload;
+    return JSON.stringify(settings);
+  }
+
+  function clearTermCheck() {
+    termCheck = null;
+    termCheckSignature = "";
+    el("glmTermCheck")?.classList.add("hidden");
+    formulaBuilder.resize();
+    if (!isBuilding && liveProgress?.phase === "failed") {
+      liveProgress = null;
+      renderLiveProgress(null);
+    }
+  }
+
+  function acceptTermCheck(report, signature) {
+    if (!report || signature !== settingsSignature()) return;
+    if (signature === termCheckSignature && JSON.stringify(report) === JSON.stringify(termCheck)) return;
+    termCheck = report;
+    termCheckSignature = signature;
+    renderTermCheck();
+  }
+
+  function renderTermCheck() {
+    const panel = el("glmTermCheck");
+    if (!panel) return;
+    if (termCheck && termCheckSignature !== settingsSignature()) clearTermCheck();
+    const issues = termCheck?.issues || [];
+    panel.classList.toggle("hidden", !issues.length);
+    if (!issues.length) { panel.innerHTML = ""; return; }
+    const blocked = issues.some((issue) => issue.severity === "error");
+    panel.dataset.severity = blocked ? "error" : "warning";
+    panel.innerHTML = `<strong>${blocked ? "GLM check found problems; fitting has not started" : "GLM term warnings"}</strong>
+      <div>${issues.length} ${issues.length === 1 ? "issue" : "issues"} · ${Number(termCheck.rows || 0).toLocaleString()} fitting rows · ${escapeHtml({ all: "All", training: "Training", training_test: "Training + Test" }[termCheck.training_scope] || termCheck.training_scope || "")}</div>
+      <ul>${issues.map((issue) => `<li>
+        <strong>${escapeHtml((issue.terms || []).join(", "))}</strong>
+        ${(issue.columns || []).some((name) => !(issue.terms || []).includes(name)) ? `<div>Columns: ${escapeHtml(issue.columns.join(", "))}</div>` : ""}
+        <div>${escapeHtml(issue.reason || "")}</div>
+        ${issue.related_terms?.length ? `<div>Related terms: ${escapeHtml(issue.related_terms.join(", "))}</div>` : ""}
+        <div>${escapeHtml(issue.suggestion || "")}</div>
+      </li>`).join("")}</ul>`;
+    formulaBuilder.resize();
+  }
+
   async function buildModel() {
     if (isBuilding) return;
     if (getDenominatorSelection().metricKind === "prediction") {
@@ -2507,6 +2560,11 @@ export function createGlmTool({
       return;
     }
     buildOperationId = createOperationId("glm-build");
+    clearTermCheck();
+    buildSettingsSignature = settingsSignature(payload);
+    setBuildingState(true);
+    liveProgress = { phase: "validating", message: "Checking GLM settings" };
+    renderLiveProgress(liveProgress);
     try {
       const validation = await api("/api/glm/validate", {
         method: "POST",
@@ -2546,7 +2604,9 @@ export function createGlmTool({
     setAppReadyStatus("Ready");
     buildElapsedStartedAt = null;
     buildOperationId = "";
-    liveProgress = { phase: "failed", message: String(message || "GLM training did not save a model") };
+    liveProgress = { phase: "failed", message: termCheck?.ok === false
+      ? "GLM check found problems; fitting has not started"
+      : String(message || "GLM training did not save a model"), term_check: termCheck };
     renderLiveProgress(liveProgress);
     setGlmNotice("");
   }
@@ -2573,6 +2633,7 @@ export function createGlmTool({
           operationId: buildOperationId,
         });
         const progress = job.progress || { phase: job.status, message: job.status };
+        acceptTermCheck(progress.term_check, buildSettingsSignature);
         liveProgress = progress;
         renderLiveProgress(liveProgress);
         if (isModelJobPending(job.status)) {
@@ -2597,7 +2658,10 @@ export function createGlmTool({
           buildElapsedStartedAt = null;
           buildOperationId = "";
         } else {
-          setBuildFailure(job.error || progress.message || "GLM training did not save a model");
+          const settingsChanged = progress.term_check && buildSettingsSignature !== settingsSignature();
+          setBuildFailure(settingsChanged
+            ? "GLM check found problems in the submitted settings. Settings have changed; build again to check them."
+            : job.error || progress.message || "GLM training did not save a model");
         }
       } catch (error) {
         setBuildFailure(error.message);
@@ -2668,6 +2732,7 @@ export function createGlmTool({
   }
 
   function syncDenominatorBuildState() {
+    renderTermCheck();
     const blocked = getDenominatorSelection().metricKind === "prediction";
     const button = el("glmBuildBtn");
     if (button) button.disabled = isBuilding || blocked;
@@ -2766,6 +2831,10 @@ export function createGlmTool({
 
   function syncBuilderFromModelDetail(detail = {}, options = {}) {
     formulaBuilder.syncFromModelDetail(detail, options);
+    if (options.syncBuilderDraft !== false) {
+      clearTermCheck();
+      acceptTermCheck(detail.diagnostics?.term_check, settingsSignature());
+    }
   }
 
   function coefficientRowsForActiveModel(activeModelId) {

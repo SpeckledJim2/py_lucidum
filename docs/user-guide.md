@@ -892,6 +892,33 @@ The formula and model-parameter panels are mutually exclusive and can be collaps
 to enlarge the editor. Formula actions clear the editor, adjust its font size, or
 copy the live formula.
 
+**Build GLM** automatically checks the evaluated formula before fitting starts.
+The check uses every eligible row in the selected fitting scope, after excluding
+invalid response, denominator, and offset values. It reports the formula terms
+and generated columns responsible for zero or constant predictors, duplicate or
+dependent predictors, non-finite values, and numerical conditioning problems.
+The issue list explains related terms and suggests corrections; it never changes
+the formula for you. Editing the formula or model settings clears the old report.
+
+For example, if `x` is always `1`, `ifelse(x == 1, y, 0)` evaluates to `y`.
+That term is valid by itself but duplicates `y` if both appear as predictors.
+If its condition is always false, it instead produces an all-zero predictor.
+Checks also cover dependencies inside interactions, categorical levels, and
+spline expansions. A non-zero constant without an intercept can be valid;
+a single-level categorical term that generates no columns receives a warning.
+If only the intercept remains, Lucidum fits an intercept-only model.
+
+Redundancy and poor conditioning stop an unregularised build before the solver
+runs. With regularisation, these issues are warnings and fitting continues;
+the warnings remain available with the saved model. Invalid or non-finite
+formula evaluations block either kind of build. These checks cannot guarantee
+convergence or detect every problem that develops during fitting.
+
+If `C(ifelse(...))` cannot be encoded, the check names that expression and
+explains the workaround: use a binary `ifelse(...)` indicator directly, or create
+a categorical column in the dataset first. Very large or small finite predictors
+receive a scaling explanation rather than a numerical decomposition error.
+
 ### Families, regularisation, and training rows
 
 Supported families are:

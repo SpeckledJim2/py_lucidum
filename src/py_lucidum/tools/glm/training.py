@@ -24,6 +24,7 @@ import duckdb
 from py_lucidum.core import Dataset, quote_ident, sql_literal
 from py_lucidum.model_metrics import split_gini_metrics
 
+from .preflight import blocking_message, check_terms, formula_syntax_message, issue_message
 from .store import GlmModelStore, json_safe_number
 from .terms import column_tokens, model_matrix, term_groups
 from .validation import TARGET_COLUMN, physical_sample_column, training_scope_sample_values, validate_request
@@ -308,7 +309,7 @@ def train_model_in_subprocess_one_shot(
     worker_mode: str = "one_shot",
 ) -> dict[str, Any]:
     progress = progress_callback or (lambda _progress: None)
-    progress({"phase": "fitting", "message": "Running isolated GLM fit worker", "percent": 30, "worker_mode": worker_mode})
+    progress({"phase": "starting", "message": "Running isolated GLM fit worker", "percent": 2, "worker_mode": worker_mode})
     worker_started = time.perf_counter()
     with tempfile.TemporaryDirectory(prefix="lucidum-glm-worker-") as tmp_dir:
         tmp_path = Path(tmp_dir)
@@ -424,7 +425,7 @@ class PersistentGlmFitWorker:
         parent_dependency_ms: float = 0.0,
     ) -> tuple[dict[str, Any], bool]:
         progress = progress_callback or (lambda _progress: None)
-        progress({"phase": "fitting", "message": "Running isolated GLM fit worker", "percent": 30, "worker_mode": "persistent"})
+        progress({"phase": "starting", "message": "Running isolated GLM fit worker", "percent": 2, "worker_mode": "persistent"})
         request_path: Path | None = None
         response_path: Path | None = None
         with self._lock:
@@ -708,15 +709,18 @@ def formula_source_columns(formula: str, source_columns: list[str]) -> list[str]
     from formulaic.parser import DefaultFormulaParser  # type: ignore[import-not-found]
 
     formula_text = str(formula or "1")
-    parsed = Formula(
-        formula_text,
-        _parser=DefaultFormulaParser(include_intercept=False),
-        _context={
-            "__formulaic_variables_available__": source_columns,
-            "__formulaic_variables_used_lhs__": [],
-        },
-    )
-    required = {str(variable) for variable in parsed.required_variables}
+    try:
+        parsed = Formula(
+            formula_text,
+            _parser=DefaultFormulaParser(include_intercept=False),
+            _context={
+                "__formulaic_variables_available__": source_columns,
+                "__formulaic_variables_used_lhs__": [],
+            },
+        )
+        required = {str(variable) for variable in parsed.required_variables}
+    except SyntaxError as exc:
+        raise ValueError(formula_syntax_message(exc)) from exc
     # Formulaic can omit data arguments to stateful transforms such as bs, cs, and poly.
     required.update(column_tokens(formula_text, source_columns))
     return [column for column in source_columns if column in required]
@@ -1437,7 +1441,6 @@ def _train_model_impl(
     fit_weight_values = np.asarray(fit_weight[fit_mask], dtype=float) if fit_weight is not None else None
     fit_offset_values = np.asarray(offset_values[fit_mask], dtype=float) if offset_values is not None else None
 
-    progress({"phase": "fitting", "message": "Fitting GLM", "percent": 35, "training_rows": int(fit_mask.sum())})
     estimator_kwargs = {
         "family": glum_family(glum, family, float(family_param) if family_param is not None else None),
         "link": "auto",
@@ -1468,6 +1471,38 @@ def _train_model_impl(
             alpha=0,
             **estimator_kwargs,
         )
+    progress({"phase": "checking_terms", "message": "Checking GLM terms", "percent": 20, "training_rows": int(fit_mask.sum())})
+    check_started = time.perf_counter()
+    with _capture_glm_warnings():
+        term_check = check_terms(
+            estimator_fitted_formula, fit_frame, formula_context(np),
+            estimator=estimator, training_scope=training_scope, penalized=is_penalized,
+            condition_limit=GLM_DESIGN_CONDITION_LIMIT,
+            internal_intercept_column=internal_intercept_column,
+        )
+    timings["term_check_ms"] = _elapsed_ms(check_started)
+    # Include the report in every later update: one-shot workers keep only the
+    # latest progress file, and a fast phase can finish between polling ticks.
+    original_progress = progress
+    progress = lambda update: original_progress({**update, "term_check": term_check})
+    progress({"phase": "checking_terms", "message": "GLM terms checked", "percent": 30})
+    if not term_check["ok"]:
+        raise ValueError(blocking_message(term_check))
+    if term_check.get("intercept_only") and not internal_intercept_column:
+        # Terms such as C(SAMPLE) can encode to no columns on the selected rows.
+        # Glum cannot fit that empty predictor matrix; use the same explicit,
+        # unpenalised constant as an intentionally intercept-only formula.
+        intercept_only = True
+        internal_intercept_column = internal_intercept_column_name(list(frame.columns))
+        frame = frame.with_columns(pl.lit(1.0).alias(internal_intercept_column))
+        fit_frame = fit_frame.with_columns(pl.lit(1.0).alias(internal_intercept_column))
+        estimator_fitted_formula = f"{TARGET_COLUMN} ~ 0 + `{internal_intercept_column}`"
+        estimator_fit_intercept = False
+        estimator.set_params(
+            formula=estimator_fitted_formula, fit_intercept=False,
+            P1=np.zeros(1), P2=np.zeros((1, 1)),
+        )
+    progress({"phase": "fitting", "message": "Fitting GLM", "percent": 35, "training_rows": int(fit_mask.sum())})
     timings["prep_ms"] = _elapsed_ms(prep_started)
     fit_started = time.perf_counter()
     numerical_warnings: list[str] = []
@@ -1606,6 +1641,7 @@ def _train_model_impl(
     model_warnings = _dedupe_warnings(
         [
             *validation_warnings,
+            *(issue_message(issue) for issue in term_check["issues"]),
             *design_warnings,
             *numerical_warnings,
             *_coefficient_inference_warnings(coefficients, include_inference=not is_penalized),
@@ -1646,6 +1682,7 @@ def _train_model_impl(
             "nonzero_coefficients": regularization.get("nonzero_coefficients"),
             **gini_metrics,
             "design_matrix": design_diagnostics,
+            "term_check": term_check,
             "warnings": model_warnings,
         }
     )

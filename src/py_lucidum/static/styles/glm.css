@@ -1890,3 +1890,22 @@
           flex-wrap: wrap;
         }
       }
+      .glm-term-check {
+        flex: 0 1 auto;
+        max-height: 220px;
+        overflow: auto;
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--line);
+        background: var(--sidebar-bg);
+        color: var(--text);
+        font-size: 12px;
+        line-height: 1.45;
+        overflow-wrap: anywhere;
+      }
+
+      .glm-term-check[data-severity="error"] > strong {
+        color: var(--danger);
+      }
+
+      .glm-term-check ul { margin: 8px 0 0; padding-left: 18px; }
+      .glm-term-check li + li { margin-top: 10px; }

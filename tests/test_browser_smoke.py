@@ -16666,6 +16666,182 @@ COPY (
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_glm_preflight_issues_correction_and_regularized_warnings(self) -> None:
+        from py_lucidum.tools.glm.training import MissingGlmDependency, glm_training_dependencies, stop_persistent_glm_fit_worker
+        try:
+            glm_training_dependencies()
+        except MissingGlmDependency as exc:
+            self.skipTest(str(exc))
+        self.addCleanup(stop_persistent_glm_fit_worker)
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "glm_checks.csv"
+            data_path.write_text(
+                "y,Age,gate,SAMPLE\n" + "".join(f"{2*i+i%3},{i},1,training\n" for i in range(1, 25)),
+                encoding="utf-8",
+            )
+            base_url, server, thread = self.start_app(
+                data_path, tools=["line_bar", "glm"],
+                defaults={"x": "Age", "actual": "y", "denominator": "__none__"},
+            )
+            try:
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1280, "height": 900})
+                    errors = []
+                    page.on("pageerror", lambda error: errors.append(str(error)))
+                    try:
+                        page.goto(f"{base_url}/?tool=glm", wait_until="domcontentloaded")
+                        page.wait_for_function("() => Boolean(document.querySelector('#glmFormulaEditor')?.env?.editor)")
+
+                        def set_formula(formula):
+                            page.evaluate("formula => document.querySelector('#glmFormulaEditor').env.editor.setValue(formula, -1)", formula)
+
+                        def wait_ready():
+                            page.wait_for_function("() => document.querySelector('#glmBuildBtn')?.disabled === false", timeout=30_000)
+
+                        set_formula("Age + ifelse(gate == 1, Age, 0)")
+                        builds = []
+                        page.on("request", lambda request: builds.append(request.url) if request.url.endswith("/api/glm/build") else None)
+                        page.evaluate("() => { const button = document.querySelector('#glmBuildBtn'); button.click(); button.click(); }")
+                        panel = page.locator("#glmTermCheck")
+                        panel.wait_for(state="visible", timeout=30_000)
+                        wait_ready()
+                        self.assertEqual(len(builds), 1)
+                        self.assertEqual(panel.get_attribute("data-severity"), "error")
+                        self.assertIn("fitting has not started", panel.inner_text())
+                        self.assertIn("ifelse(gate == 1, Age, 0)", panel.inner_text())
+                        self.assertIn("duplicates", panel.inner_text())
+                        self.assertIn("Related terms", panel.inner_text())
+                        self.assertEqual(GlmModelStore(data_path).list_models(), [])
+
+                        # Changing a setting clears both the report and failed status.
+                        page.select_option("#glmTrainingScope", "training")
+                        panel.wait_for(state="hidden")
+                        self.assertFalse(page.locator("#glmBuildStatus").is_visible())
+
+                        # A report arriving after an edit belongs to the submitted
+                        # draft, not the current editor contents.
+                        def queued_job(route):
+                            route.fulfill(json={"status": "running", "progress": {"phase": "checking_terms", "message": "Checking GLM terms"}})
+
+                        page.route("**/api/glm/jobs/*", queued_job)
+                        with page.expect_response("**/api/glm/jobs/*"):
+                            page.click("#glmBuildBtn")
+                        set_formula("Age")
+                        page.unroute("**/api/glm/jobs/*", queued_job)
+                        wait_ready()
+                        self.assertFalse(panel.is_visible())
+                        self.assertIn("Settings have changed", page.locator("#glmBuildStatus").inner_text())
+                        with page.expect_response("**/api/glm/build"):
+                            page.click("#glmBuildBtn")
+                        wait_ready()
+                        self.assertEqual(len(GlmModelStore(data_path).list_models()), 1)
+                        self.assertFalse(panel.is_visible())
+
+                        set_formula("Age + ifelse(gate == 2, Age, 0)")
+                        page.select_option("#glmRegularizationMode", "manual")
+                        page.select_option("#glmRegularizationMix", "0")
+                        page.fill("#glmRegularizationAlpha", "0.01")
+                        with page.expect_response("**/api/glm/build"):
+                            page.click("#glmBuildBtn")
+                        panel.wait_for(state="visible", timeout=30_000)
+                        self.assertEqual(panel.get_attribute("data-severity"), "warning")
+                        wait_ready()
+                        self.assertEqual(len(GlmModelStore(data_path).list_models()), 2)
+                        self.assertIn("zero on all 24 fitting rows", panel.inner_text())
+                        page.reload(wait_until="domcontentloaded")
+                        panel.wait_for(state="visible", timeout=10_000)
+                        self.assertIn("zero on all 24 fitting rows", panel.inner_text())
+                        page.select_option("#actualNumerator", "Age")
+                        panel.wait_for(state="hidden")
+                        self.assertEqual(errors, [])
+                    finally:
+                        browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_glm_demo_preflight_messages_and_empty_categorical_fit(self) -> None:
+        from py_lucidum import demo_dataset_path
+        from py_lucidum.tools.glm.training import MissingGlmDependency, glm_training_dependencies
+        try:
+            glm_training_dependencies()
+        except MissingGlmDependency as exc:
+            self.skipTest(str(exc))
+        self.addCleanup(stop_persistent_glm_fit_worker)
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "motor_premiums.parquet"
+            shutil.copy2(demo_dataset_path(), data_path)
+            base_url, server, thread = self.start_app(
+                data_path, tools=["line_bar", "glm"],
+                defaults={"x": "DRIVER_AGE", "actual": "PREMIUM", "denominator": "__none__"},
+            )
+            try:
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page(viewport={"width": 1440, "height": 1000})
+                    errors = []
+                    page.on("pageerror", lambda error: errors.append(str(error)))
+                    try:
+                        page.goto(f"{base_url}/?tool=glm", wait_until="domcontentloaded")
+                        page.wait_for_function("() => Boolean(document.querySelector('#glmFormulaEditor')?.env?.editor)")
+
+                        def build_formula(formula):
+                            page.evaluate("formula => document.querySelector('#glmFormulaEditor').env.editor.setValue(formula, -1)", formula)
+                            with page.expect_response("**/api/glm/build"):
+                                page.click("#glmBuildBtn")
+                            page.wait_for_function("() => document.querySelector('#glmBuildBtn')?.disabled === false", timeout=30_000)
+
+                        cases = [
+                            ("ifelse(DRIVER_AGE > 0, 1, 0)", "constant (1)"),
+                            ("DRIVER_AGE + ifelse(DRIVER_AGE > 0, DRIVER_AGE, 0)", "duplicates"),
+                            ("DRIVER_AGE + VEHICLE_AGE + I(DRIVER_AGE + VEHICLE_AGE)", "numerically dependent"),
+                            ("ifelse(FUEL_TYPE == 'Diesel', 1, 0) + ifelse(FUEL_TYPE == 'Petrol', 1, 0)", "Related terms"),
+                            ("ifelse(FUEL_TYPE == 'Diesel', 1, 0):ifelse(FUEL_TYPE == 'Petrol', 1, 0)", "zero on all 50,000 fitting rows"),
+                            ("ns(DRIVER_AGE, df=4)", 'constraints="center"'),
+                            ("ns(pmin(DRIVER_AGE, 0), df=4)", "too few distinct values"),
+                            ("poly(pmin(DRIVER_AGE, 0), degree=2)", "input varies"),
+                            ("I(DRIVER_AGE * 1e-14)", "Rescale predictors"),
+                            ("I(DRIVER_AGE * 1e305)", "Rescale predictors"),
+                            ('C(FUEL_TYPE) + C(ifelse(FUEL_TYPE == "Petrol", 1, 0))', "without C(...)"),
+                            ("cs(DRIVER_AGE, df=4)", 'constraints="center"'),
+                            ("DRIVER_AGE + I(DRIVER_AGE) + ifelse(DRIVER_AGE > 0, 1, 0) + ifelse(DRIVER_AGE < 0, 1, 0)", "duplicates"),
+                        ]
+                        panel = page.locator("#glmTermCheck")
+                        for formula, expected in cases:
+                            with self.subTest(formula=formula):
+                                build_formula(formula)
+                                self.assertTrue(panel.is_visible())
+                                text = panel.inner_text()
+                                self.assertIn("fitting has not started", text)
+                                self.assertIn("50,000 fitting rows", text)
+                                self.assertIn(expected, text)
+                                self.assertEqual(panel.get_attribute("data-severity"), "error")
+                        self.assertEqual(panel.locator("li").count(), 3)
+                        artifact_dir = os.environ.get("PY_LUCIDUM_BROWSER_ARTIFACT_DIR")
+                        if artifact_dir:
+                            Path(artifact_dir).mkdir(parents=True, exist_ok=True)
+                            page.screenshot(path=str(Path(artifact_dir) / "demo-glm-term-checks.png"), full_page=True)
+                        build_formula("ifelse(SAMPLE = 'training', DRIVER_AGE, 0)")
+                        self.assertIn("Use == to compare values", page.locator("#glmBuildStatus").inner_text())
+                        self.assertEqual(GlmModelStore(data_path).list_models(), [])
+                        page.select_option("#glmTrainingScope", "training")
+                        build_formula("C(SAMPLE)")
+                        self.assertEqual(panel.get_attribute("data-severity"), "warning")
+                        self.assertIn("30,000 fitting rows", panel.inner_text())
+                        self.assertIn("no predictor columns", panel.inner_text())
+                        self.assertEqual(len(GlmModelStore(data_path).list_models()), 1)
+                        self.assertEqual(errors, [])
+                    finally:
+                        browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_glm_builder_refreshes_after_activation_from_tabulations(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "glm_builder_tabulations.csv"

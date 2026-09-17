@@ -1724,6 +1724,7 @@
       }
 
       function refreshActiveToolForMetricChange() {
+        glmTool.syncDenominatorBuildState();
         if (toolUsesMetricControls()) refreshActiveTool();
       }
 
