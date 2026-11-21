@@ -68,17 +68,13 @@ def asgi_request(
     if payload is not None and not any(key == b"content-type" for key, _ in raw_headers):
         raw_headers.append((b"content-type", b"application/json"))
 
-    received = False
-
-    async def receive() -> dict[str, Any]:
-        nonlocal received
-        if received:
-            return {"type": "http.request", "body": b"", "more_body": False}
-        received = True
-        return {"type": "http.request", "body": body, "more_body": False}
+    incoming: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    incoming.put_nowait({"type": "http.request", "body": body, "more_body": False})
 
     async def send(message: dict[str, Any]) -> None:
         messages.append(message)
+        if message["type"] == "http.response.body" and not message.get("more_body"):
+            incoming.put_nowait({"type": "http.disconnect"})
 
     scope = {
         "type": "http",
@@ -93,7 +89,7 @@ def asgi_request(
         "client": client,
         "server": ("testserver", 80),
     }
-    asyncio.run(app(scope, receive, send))
+    asyncio.run(app(scope, incoming.get, send))
 
     start = next(message for message in messages if message["type"] == "http.response.start")
     response_body = b"".join(message.get("body", b"") for message in messages if message["type"] == "http.response.body")
