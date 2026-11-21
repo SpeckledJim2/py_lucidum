@@ -25,6 +25,8 @@ from py_lucidum.app import create_app
 from py_lucidum.app.telemetry import TelemetryStore
 from py_lucidum.core import Dataset, sql_literal
 from py_lucidum.core.features import load_features
+from py_lucidum.tools.gbm.store import GbmModelStore
+from py_lucidum.tools.gbm.training import train_model as train_gbm
 from py_lucidum.tools.glm import tabulation as glm_tabulation
 from py_lucidum.tools.glm import worker_progress
 from py_lucidum.tools.glm.jobs import GlmJobManager
@@ -1292,6 +1294,48 @@ if result.get("iteration") != 10:
         self.assertTrue(store.artifact_path(model_id, "feature_importance").exists())
         self.assertTrue(store.artifact_path(model_id, "predictions").exists())
         self.assertTrue(store.artifact_path(model_id, "manifest").exists())
+
+    def test_gbm_training_uses_saved_glm_predictions_by_row_id(self) -> None:
+        self.require_glm_and_gbm_dependencies()
+        dataset = Dataset(self.data_path)
+        self.addCleanup(dataset.con.close)
+        row_count = dataset.row_count()
+        glm_store = GlmModelStore(self.data_path)
+        glm = train_model(dataset, glm_store, {
+            "formula": "Age",
+            "response_column": "actualNumerator",
+            "denominator_column": "denominator",
+            "family": "poisson",
+            "training_scope": "all",
+        })
+        source = glm_store.source_id(glm["model_id"])
+        predictions = glm_store.read_parquet_records(glm_store.source_path(glm["model_id"], "predictions"))
+        expected = {row["__lucidum_row_id"]: row["glm_prediction"] for row in predictions}
+        self.assertEqual(len(expected), row_count)
+        self.assertGreater(len(set(expected.values())), 1)
+
+        gbm_store = GbmModelStore(self.data_path)
+        gbm = train_gbm(dataset, gbm_store, {
+            "response": "actualNumerator",
+            "offset": "denominator",
+            "features": [{"name": "Age", "include": True}],
+            "parameters": [
+                {"name": "objective", "value": "poisson"},
+                {"name": "init_score", "value": source},
+                {"name": "num_iterations", "value": 2},
+                {"name": "early_stopping_rounds", "value": 0},
+                {"name": "min_data_in_leaf", "value": 1},
+            ],
+            "shap_rows": "0",
+        })
+        model_id = gbm["model_id"]
+        self.assertEqual(gbm_store.manifest(model_id)["init_score"]["source_id"], source)
+        scores = gbm_store.read_parquet_records(gbm_store.artifact_path(model_id, "init_score"))
+        self.assertCountEqual([row["__lucidum_row_id"] for row in scores], list(expected))
+        for row in scores:
+            prediction = expected[row["__lucidum_row_id"]]
+            self.assertEqual(row["init_score_prediction"], prediction)
+            self.assertAlmostEqual(row["init_score"], math.log(prediction))
 
     def test_polars_training_preserves_fit_and_score_row_eligibility(self) -> None:
         self.require_glm_dependencies()

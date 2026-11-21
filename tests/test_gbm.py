@@ -4263,23 +4263,9 @@ FROM read_parquet({sql_literal(str(store.artifact_path(result['model_id'], 'tree
         dataset.record_invalid_column("BadText", "Invalid string encoding found in Parquet data.")
         features = feature_rows(dataset)
 
-        class GuardedConnection:
-            def __init__(self, inner: Any):
-                self.inner = inner
-                self.sql: list[str] = []
-
-            def execute(self, sql: str, *args: Any, **kwargs: Any) -> Any:
-                text = str(sql)
-                self.sql.append(text)
-                if "BadText" in text or "ROW_NUMBER() OVER () AS __lucidum_row_id,\n  *" in text:
-                    raise AssertionError(text)
-                return self.inner.execute(sql, *args, **kwargs)
-
-            def __getattr__(self, name: str) -> Any:
-                return getattr(self.inner, name)
-
-        guarded = GuardedConnection(dataset.con)
-        dataset.con = guarded  # type: ignore[assignment]
+        relation = f"(SELECT * REPLACE (error('unreadable BadText') AS BadText) FROM {dataset.relation_sql()})"
+        with self.assertRaisesRegex(duckdb.Error, "unreadable BadText"):
+            dataset.con.execute(f"SELECT * FROM {relation}").fetchall()
         parameters = default_parameters() + [
             {"name": "num_iterations", "value": 3},
             {"name": "early_stopping_rounds", "value": 0},
@@ -4287,24 +4273,25 @@ FROM read_parquet({sql_literal(str(store.artifact_path(result['model_id'], 'tree
         ]
         store = GbmModelStore(data_path)
 
-        result = train_model(
-            dataset,
-            store,
-            {
-                "label": "Invalid unused",
-                "response": "actualNumerator",
-                "offset": "denominator",
-                "features": features,
-                "parameters": parameters,
-                "sample_column": "SAMPLE",
-                "shap_rows": "0",
-            },
-        )
+        with patch.object(dataset, "relation_sql", return_value=relation):
+            result = train_model(
+                dataset,
+                store,
+                {
+                    "label": "Invalid unused",
+                    "response": "actualNumerator",
+                    "offset": "denominator",
+                    "features": features,
+                    "parameters": parameters,
+                    "sample_column": "SAMPLE",
+                    "shap_rows": "0",
+                },
+            )
 
         manifest = store.read_json(store.artifact_path(result["model_id"], "manifest"))
         self.assertNotIn("source_columns", manifest)
-        self.assertNotIn("BadText", "\n".join(guarded.sql))
-        self.assertTrue(any("__lucidum_row_id" in sql for sql in guarded.sql))
+        predictions = store.read_parquet_records(store.artifact_path(result["model_id"], "predictions"))
+        self.assertEqual(sorted(row["__lucidum_row_id"] for row in predictions), [1, 2, 3])
 
     def test_validation_metric_failure_returns_a_model_warning(self) -> None:
         class FakeLightGbm:

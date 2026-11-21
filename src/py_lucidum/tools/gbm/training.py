@@ -345,7 +345,7 @@ def attach_glm_init_score(work_frame: Any, dataset: Dataset, selected_init_score
     con = duckdb.connect(database=":memory:")
     try:
         con.register("score_rows", work_frame.select("__lucidum_row_id"))
-        init_frame = con.execute(
+        init_frame = con.sql(
             f"""
 SELECT score_rows.__lucidum_row_id, prediction.glm_prediction AS __lucidum_init_score_prediction
 FROM score_rows
@@ -680,7 +680,8 @@ def train_model(
             where_sql,
             generated_sample_path=generated_sample_path,
         )
-        score_frame = dataset.con.execute(select_sql).pl()
+        with dataset.con.cursor() as cursor:
+            score_frame = cursor.sql(select_sql).pl()
     timings["data_load_seconds"] = elapsed_seconds(data_load_started)
 
     if score_frame.is_empty():

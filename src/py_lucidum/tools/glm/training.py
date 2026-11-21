@@ -745,10 +745,9 @@ def required_training_columns(dataset: Dataset, validation: dict[str, Any]) -> l
 
 
 def data_frame_from_dataset(dataset: Dataset, columns: list[str]) -> Any:
-    with dataset.lock:
+    with dataset.lock, dataset.con.cursor() as cursor:
         projection = ",\n  ".join(["ROW_NUMBER() OVER () AS __lucidum_row_id", *[quote_ident(name) for name in columns]])
-        frame = dataset.con.execute(f"SELECT {projection} FROM {dataset.relation_sql()}").pl()
-    return frame
+        return cursor.sql(f"SELECT {projection} FROM {dataset.relation_sql()}").pl()
 
 
 def finite_mask(np: Any, values: Any) -> Any:
