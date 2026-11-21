@@ -23,11 +23,13 @@ def asgi_get(app: Any, path: str, headers: dict[str, str] | None = None) -> tupl
         for key, value in (headers or {}).items()
     ]
 
-    async def receive() -> dict[str, Any]:
-        return {"type": "http.request", "body": b"", "more_body": False}
+    incoming: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    incoming.put_nowait({"type": "http.request", "body": b"", "more_body": False})
 
     async def send(message: dict[str, Any]) -> None:
         messages.append(message)
+        if message["type"] == "http.response.body" and not message.get("more_body"):
+            incoming.put_nowait({"type": "http.disconnect"})
 
     scope = {
         "type": "http",
@@ -42,7 +44,7 @@ def asgi_get(app: Any, path: str, headers: dict[str, str] | None = None) -> tupl
         "client": ("127.0.0.1", 12345),
         "server": ("testserver", 80),
     }
-    asyncio.run(app(scope, receive, send))
+    asyncio.run(app(scope, incoming.get, send))
 
     start = next(message for message in messages if message["type"] == "http.response.start")
     body = b"".join(message.get("body", b"") for message in messages if message["type"] == "http.response.body")

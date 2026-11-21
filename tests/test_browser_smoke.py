@@ -315,19 +315,32 @@ class BrowserSmokeTests(unittest.TestCase):
         )
         page.locator(selector).click()
 
-    def assert_tool_button_tooltip_right_of_icon(self, page: Any, selector: str, text: str) -> None:
-        page.locator(selector).hover()
-        page.wait_for_timeout(250)
-        self.assertTrue(
-            page.evaluate(
-                """
-                () => {
+    def hover_and_check_tooltip_delay(self, page: Any, selector: str) -> None:
+        page.mouse.move(640, 400)
+        button = page.locator(selector)
+        sample = button.evaluate_handle(
+            """
+            button => {
+              const sample = { hidden: null };
+              button.addEventListener("pointerenter", () => {
+                setTimeout(() => {
                   const tooltip = document.querySelector("#toolButtonTooltip");
-                  return !tooltip || tooltip.hidden;
-                }
-                """
-            )
+                  sample.hidden = !tooltip || tooltip.hidden;
+                }, 250);
+              }, { once: true });
+              return sample;
+            }
+            """
         )
+        try:
+            button.hover()
+            page.wait_for_function("sample => sample.hidden !== null", arg=sample, timeout=2_000)
+            self.assertTrue(sample.json_value()["hidden"], "Tooltip appeared during the initial hover delay")
+        finally:
+            sample.dispose()
+
+    def assert_tool_button_tooltip_right_of_icon(self, page: Any, selector: str, text: str) -> None:
+        self.hover_and_check_tooltip_delay(page, selector)
         page.wait_for_function(
             """
             ({ selector, text }) => {
@@ -359,18 +372,7 @@ class BrowserSmokeTests(unittest.TestCase):
         )
 
     def assert_tool_button_tooltip_fronts_map(self, page: Any, selector: str, text: str) -> None:
-        page.locator(selector).hover()
-        page.wait_for_timeout(250)
-        self.assertTrue(
-            page.evaluate(
-                """
-                () => {
-                  const tooltip = document.querySelector("#toolButtonTooltip");
-                  return !tooltip || tooltip.hidden;
-                }
-                """
-            )
-        )
+        self.hover_and_check_tooltip_delay(page, selector)
         page.wait_for_function(
             """
             ({ selector, text }) => {
