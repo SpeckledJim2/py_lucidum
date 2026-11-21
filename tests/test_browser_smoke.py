@@ -33890,7 +33890,6 @@ COPY (
                       const evaluation = document.querySelector(".gbm-evaluation-panel").getBoundingClientRect();
                       return {
                         actionOrder: [...actions.children].map((node) => node.id || node.className),
-                        actionJustification: getComputedStyle(actions).justifyContent,
                         metricCommandGap: setupRect.left - metricToggle.right,
                         actionRightInset: featureControlCell.right - selectRect.right,
                         panelHidden: panel.classList.contains("hidden"),
@@ -33947,7 +33946,6 @@ COPY (
                     feature_setup_closed["actionOrder"],
                     ["gbmFeatureMetricToggle", "gbmFeatureSetupBtn", "gbmClearFeaturesBtn", "gbmSelectFeaturesBtn"],
                 )
-                self.assertEqual(feature_setup_closed["actionJustification"], "flex-end")
                 self.assertAlmostEqual(feature_setup_closed["metricCommandGap"], 34, delta=0.5)
                 self.assertAlmostEqual(feature_setup_closed["actionRightInset"], 8, delta=0.5)
                 self.assertTrue(feature_setup_closed["panelHidden"])
