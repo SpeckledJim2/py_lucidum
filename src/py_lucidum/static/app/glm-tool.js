@@ -306,7 +306,7 @@ export function createGlmTool({
     setChartMessage(presentation.chartMessage);
   }
 
-  function render(data = {}) {
+  function render(data = {}, { loadDetail = true } = {}) {
     formulaBuilder.captureDraft();
     config = data;
     modelRows = normaliseModels(data.models || []);
@@ -349,7 +349,7 @@ export function createGlmTool({
     renderCoefficientTable(coefficientRowsForActiveModel(data.active_model_id));
     formulaBuilder.initEditor();
     renderTermCheck();
-    if (activeModelId) loadModelDetail(activeModelId);
+    if (loadDetail && activeModelId) loadModelDetail(activeModelId);
     if (liveProgress) renderLiveProgress(liveProgress);
     if (activeTab === "tabulations") refreshTabulationConfig({ force: true });
     setDuckDbTiming(tool, data.timings || {});
@@ -3521,7 +3521,9 @@ export function createGlmTool({
       // The visible GLM Tabulations selection did not change, so keep the mounted table UI intact.
       await syncBuilderToActiveModel();
     } else if (state.tool === tool) {
-      measureToolRender(tool, () => render(nextConfig));
+      measureToolRender(tool, () => render(nextConfig, { loadDetail: false }));
+      const activeModelId = currentActiveModelId(nextConfig);
+      if (activeModelId) await loadModelDetail(activeModelId);
     } else if (preserveProfile) {
       config = nextConfig;
       syncSidebarModelChooser(nextConfig?.models || [], nextConfig?.active_model_id);

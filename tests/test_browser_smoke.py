@@ -6364,6 +6364,45 @@ COPY (
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_column_profile_clear_keeps_cached_summary_when_filtered_response_arrives(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_path = Path(tmp_dir) / "profile.csv"
+            data_path.write_text("age\n1\n2\n3\n4\n", encoding="utf-8")
+            base_url, server, thread = self.start_app(data_path, tools=["column_profile"])
+            try:
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page()
+                    try:
+                        page.goto(f"{base_url}/?tool=column_profile", wait_until="domcontentloaded")
+                        meta = page.locator("#profileGroupMeta")
+                        meta.filter(has_text="4 rows").wait_for()
+                        unfiltered = meta.inner_text()
+
+                        pending_summary = []
+                        summary_url = "**/api/column-profile/summary"
+                        page.route(summary_url, lambda route: pending_summary.append(route))
+                        page.locator("#filterFooterToggleBtn").click()
+                        page.locator("#filterInput").fill("age >= 2")
+                        with page.expect_request(summary_url):
+                            page.locator("#filterApplyBtn").click()
+                        page.locator("#profileFilterClearBtn").click()
+                        self.assertEqual(meta.inner_text(), unfiltered)
+                        self.assertEqual(len(pending_summary), 1)
+
+                        with page.expect_response(summary_url) as response:
+                            pending_summary.pop().continue_()
+                        self.assertIsNone(response.value.finished())
+                        self.wait_for_app_ready(page)
+                        self.assertEqual(meta.inner_text(), unfiltered)
+                    finally:
+                        browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_column_profile_preserves_table_scroll_on_filter_change(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "many_profile_columns.csv"
@@ -16732,8 +16771,13 @@ COPY (
                         wait_ready()
                         self.assertFalse(panel.is_visible())
                         self.assertIn("Settings have changed", page.locator("#glmBuildStatus").inner_text())
-                        with page.expect_response("**/api/glm/build"):
-                            page.click("#glmBuildBtn")
+                        pending_detail = []
+                        page.route("**/api/glm/models/*", lambda route: pending_detail.append(route), times=1)
+                        with page.expect_request("**/api/glm/models/*"):
+                            with page.expect_response("**/api/glm/build"):
+                                page.click("#glmBuildBtn")
+                        self.assertTrue(page.locator("#glmBuildBtn").is_disabled())
+                        pending_detail.pop().continue_()
                         wait_ready()
                         self.assertEqual(len(GlmModelStore(data_path).list_models()), 1)
                         self.assertFalse(panel.is_visible())
@@ -16937,6 +16981,7 @@ COPY (
                             """
                             () => document.querySelector("#glmModelSelectedMeta")?.textContent.includes("Builder GLM A")
                               && document.querySelector("#glmFamilySelect")?.value === "tweedie"
+                              && document.querySelector("#glmFormulaEditor .ace_text-layer")?.textContent.trim() === "1"
                               && document.querySelector("#glmCoefficientMeta")?.textContent.includes("AIC: 111.11")
                               && [...document.querySelectorAll("#glmCoefficientTable tbody tr")]
                                 .filter((row) => !row.querySelector(".glm-empty-cell")).length === 1
@@ -17215,8 +17260,12 @@ COPY (
                     page_errors: list[str] = []
                     page.on("pageerror", lambda error: page_errors.append(str(error)))
                     try:
+                        pending_script = []
+                        page.route("**/vendor/tabulator/tabulator.min.js", lambda route: pending_script.append(route), times=1)
                         page.goto(f"{base_url}/?tool=gbm", wait_until="domcontentloaded")
                         page.get_by_role("tab", name="Model navigator").click()
+                        page.locator('#gbmModelFallback [data-gbm-model-row="external-contract"]').wait_for(state="attached")
+                        pending_script.pop().continue_()
                         page.wait_for_function(
                             """
                             () => {
@@ -32048,7 +32097,7 @@ COPY (
                 self.assertEqual(profile_mode_geometry_after["meta"], profile_mode_geometry["meta"])
                 self.assertEqual(profile_mode_geometry_after["toolbarScrollWidth"], profile_mode_geometry["toolbarScrollWidth"])
                 page.locator("#profileDetailTitle").get_by_text("PostcodeArea").wait_for(timeout=10_000)
-                long_profile_filter = " AND ".join(["vehicle_age >= 1"] * 12)
+                long_profile_filter = " AND ".join(["vehicle_age >= 2"] * 12)
                 with page.expect_request(lambda request: request.url.endswith("/api/column-profile/summary"), timeout=10_000) as profile_filter_request_info:
                     page.evaluate(
                         """
@@ -32118,6 +32167,7 @@ COPY (
                 profile_auto_payload = json.loads(profile_auto_request_info.value.post_data or "{}")
                 self.assertEqual(profile_auto_payload["mode"], "auto")
                 page.locator('[data-profile-summary-mode="auto"][aria-pressed="true"]').wait_for(state="attached", timeout=10_000)
+                page.locator("#profileGroupMeta").filter(has_text="3 / 4 rows").wait_for()
                 page.locator("#profileDetailTitle").get_by_text("PostcodeArea").wait_for(timeout=10_000)
                 with page.expect_request(lambda request: request.url.endswith("/api/column-profile/summary"), timeout=10_000) as profile_clear_filter_request_info:
                     with page.expect_response(lambda response: response.url.endswith("/api/column-profile/summary") and response.status == 200, timeout=10_000):
@@ -36270,9 +36320,10 @@ COPY (
                 self.assertAlmostEqual(retained_tab_layout["sideWidth"], retained_side_width, delta=1)
                 page.locator("#lineBarTool").click()
                 page.locator("#chart:not(.hidden)").wait_for(timeout=10_000)
-                with page.expect_response(lambda response: "/api/gbm/models/" in response.url and "/shap/stacked" in response.url and response.request.method == "POST", timeout=10_000):
-                    page.locator("#gbmTool").click()
-                page.locator("#gbmStackedShapChart").wait_for(timeout=10_000)
+                cached_stacked_requests = stacked_shap_requests
+                page.locator("#gbmTool").click()
+                page.locator("#gbmStackedShapChart canvas").wait_for(timeout=10_000)
+                self.assertEqual(stacked_shap_requests, cached_stacked_requests)
                 retained_tool_layout = page.evaluate(
                     """
                     () => ({

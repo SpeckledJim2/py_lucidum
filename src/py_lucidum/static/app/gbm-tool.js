@@ -103,6 +103,7 @@ function formatEvaluationValue(value) {
 
 export function createGbmTool({
   api,
+  stableRequestKey,
   clearToolCaches,
   el,
   escapeHtml,
@@ -230,9 +231,7 @@ export function createGbmTool({
     try {
       const data = await api("/api/gbm/config", { method: "GET", clientTiming: true });
       if (requestSeq !== state.gbmRequestSeq || !modelStateIsCurrent(generation)) return null;
-      const cache = toolCache(tool);
-      cache.requestKey = requestKey;
-      cache.data = data;
+      cacheConfig(data, requestKey);
       syncGbmModelCountFromConfig(data);
       syncDuckDbTimingFromData(tool, data);
       syncClientTimingFromData(tool, data);
@@ -250,6 +249,12 @@ export function createGbmTool({
 
   function syncGbmModelCountFromConfig(data = {}) {
     setGbmModelCount(Array.isArray(data?.models) ? data.models.length : null);
+  }
+
+  function cacheConfig(data, requestKey = stableRequestKey(buildRequest())) {
+    const cache = toolCache(tool);
+    cache.requestKey = requestKey;
+    cache.data = data;
   }
 
   function useCached(cache) {
@@ -2175,6 +2180,7 @@ export function createGbmTool({
       const result = await api("/api/gbm/sample", { method: "POST", body: "{}", clientTiming: true });
       clearToolCaches();
       config = result.config;
+      cacheConfig(config);
       measureToolRender(tool, () => render(result.config));
     } catch (error) {
       button.disabled = false;
@@ -2454,6 +2460,7 @@ export function createGbmTool({
   }
 
   async function renderTables(data) {
+    const modelGrid = el("gbmModelGrid");
     featureTable = null;
     parameterTable = null;
     modelTable = null;
@@ -2463,11 +2470,12 @@ export function createGbmTool({
     const parameters = data.parameters || [];
     try {
       const Tabulator = await loadTabulator();
-      if (!config || data !== config) return;
-      const models = modelRows(config.models || data.models || []);
+      if (!modelGrid.isConnected) return;
+      const modelsAtBuild = config.models;
+      const models = modelRows(modelsAtBuild || []);
       const modelFallback = el("gbmModelFallback");
       if (modelFallback) modelFallback.innerHTML = "";
-      const renderedModelTable = new Tabulator("#gbmModelGrid", {
+      const renderedModelTable = new Tabulator(modelGrid, {
         data: models,
         height: "100%",
         layout: "fitDataStretch",
@@ -2505,8 +2513,9 @@ export function createGbmTool({
       modelTable = renderedModelTable;
       renderedModelTable.on("rowSelectionChanged", syncModelActionButtons);
       renderedModelTable.on("tableBuilt", () => {
-        if (modelTable !== renderedModelTable || config !== data) return;
+        if (modelTable !== renderedModelTable || !modelGrid.isConnected) return;
         modelTableReady = true;
+        if (config.models !== modelsAtBuild) refreshModelTableRows(modelRows(config.models || []));
         syncModelActionButtons();
       });
       syncModelActionButtons();
@@ -2545,6 +2554,7 @@ export function createGbmTool({
       });
       parameterTable.on("cellEdited", syncGridSampleControl);
     } catch (_) {
+      if (!modelGrid.isConnected) return;
       const failedModelTable = modelTable;
       modelTable = null;
       modelTableReady = false;
@@ -3465,8 +3475,7 @@ export function createGbmTool({
     config = applyFeatureDraftStateToData(payload);
     const models = Array.isArray(config?.models) ? config.models : [];
     syncGbmModelCountFromConfig({ models });
-    const cache = toolCache(tool);
-    if (cache) cache.data = config;
+    cacheConfig(config);
     syncSidebarModelChooser(models, activeModelId);
     if (activeTab === "models") {
       await refreshModelTableRows(modelRows(models));
@@ -3474,6 +3483,7 @@ export function createGbmTool({
   }
 
   async function refreshModelTableRows(rows) {
+    if (modelTable && !modelTableReady) return;
     const selectedIds = selectedModelIds();
     const availableIds = new Set(rows.map((row) => String(row?.model_id || "")).filter(Boolean));
     const preservedIds = selectedIds.filter((id) => availableIds.has(id));
@@ -3922,6 +3932,7 @@ export function createGbmTool({
     activeDetail = null;
     setGbmNotice("");
     if (state.tool === tool) {
+      cacheConfig(nextConfig);
       measureToolRender(tool, () => render(nextConfig));
     } else if (preserveProfile) {
       config = nextConfig;

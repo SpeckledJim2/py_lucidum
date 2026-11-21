@@ -102,6 +102,7 @@ export function createColumnProfileTool({
   }
 
   function useCachedProfileData(cache) {
+    state.profileRequestSeq += 1;
     state.lastProfileData = cache.data;
     measureToolRender("column_profile", () => {
       renderProfileData(cache.data);

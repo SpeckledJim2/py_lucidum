@@ -530,6 +530,7 @@
       });
       const gbmTool = createGbmTool({
         api,
+        stableRequestKey,
         clearToolCaches,
         el,
         escapeHtml,
