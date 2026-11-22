@@ -812,8 +812,9 @@ git push origin vX.Y.Z
    changes, Python compatibility, optional extras, and installation commands.
 8. Approve `pypi` only when the TestPyPI files and draft are correct. The
    workflow publishes the same artifacts to PyPI, verifies their hashes,
-   installs the exact release through pipx, exercises the launcher health
-   check, and finally publishes the immutable GitHub release.
+   and waits up to five minutes for pip to resolve the exact wheel from
+   PyPI’s Simple Index. It then installs the release through pipx, exercises
+   the launcher health check, and publishes the immutable GitHub release.
 9. Verify the public result and update consuming projects:
 
 ```bash

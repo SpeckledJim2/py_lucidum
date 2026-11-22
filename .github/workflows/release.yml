@@ -267,6 +267,10 @@ jobs:
       - publish-pypi
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      PIP_INDEX_URL: https://pypi.org/simple/
+      PIP_NO_CACHE_DIR: "1"
+      PY_LUCIDUM_PIPX_SPEC: py-lucidum==${{ needs.validate.outputs.version }}
     permissions:
       contents: read
 
@@ -294,10 +298,24 @@ jobs:
           --version "${{ needs.validate.outputs.version }}"
           --repository-url https://pypi.org/pypi
 
+      - name: Wait for pip to resolve the released wheel on PyPI
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          for attempt in {1..24}; do
+            echo "Checking $PY_LUCIDUM_PIPX_SPEC on $PIP_INDEX_URL (attempt $attempt/24)"
+            if python -m pip install --dry-run --ignore-installed --no-deps --only-binary=:all: \
+                --disable-pip-version-check --retries 0 --timeout 5 "$PY_LUCIDUM_PIPX_SPEC"; then
+              exit 0
+            fi
+            if (( attempt < 24 )); then sleep 10; fi
+          done
+          echo "::error::pip could not resolve $PY_LUCIDUM_PIPX_SPEC on $PIP_INDEX_URL after 24 attempts."
+          exit 1
+
       - name: Smoke-test installation from PyPI
         env:
           PY_LUCIDUM_EXPECTED_VERSION: ${{ needs.validate.outputs.version }}
-          PY_LUCIDUM_PIPX_SPEC: py-lucidum==${{ needs.validate.outputs.version }}
         run: |
           python -m pip install pipx
           python scripts/run_tests.py pipx
