@@ -292,13 +292,90 @@
       }
 
       .sidebar-version {
+        align-self: center;
+        flex: none;
         margin-top: auto;
-        color: var(--muted);
-        font-size: 10px;
-        line-height: 1.1;
-        padding-top: 2px;
-        text-align: center;
+        padding: 4px 8px;
+        min-height: 24px;
+        border: 0;
+        border-radius: 5px;
+        background: transparent;
+        color: var(--sidebar-muted);
+        font-size: 11px;
+        cursor: pointer;
         white-space: nowrap;
+      }
+
+      .sidebar-version:not([hidden]) {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+      }
+
+      .sidebar-version:hover,
+      .sidebar-version:focus-visible,
+      .sidebar-version[aria-expanded="true"] {
+        color: var(--text);
+        background: var(--panel-2);
+      }
+
+      .sidebar-versions-panel {
+        position: fixed;
+        inset: auto;
+        margin: 0;
+        width: min(232px, calc(100vw - 12px));
+        max-height: calc(100dvh - 12px);
+        overflow: auto;
+        overscroll-behavior: contain;
+        padding: 12px 14px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--panel);
+        color: var(--text);
+        box-shadow: 0 5px 22px rgb(15 23 42 / 20%);
+        -webkit-user-select: text;
+        user-select: text;
+      }
+
+      .sidebar-versions-panel h2 {
+        margin: 0 0 6px;
+        font-size: 14px;
+      }
+
+      .sidebar-versions-panel dl {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        margin: 0;
+        font-size: 12px;
+        line-height: 1.4;
+      }
+
+      .sidebar-versions-panel :is(dt, dd) {
+        margin: 0;
+        padding: 4px 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .sidebar-versions-panel :is(dt, dd):nth-last-child(-n+2) {
+        border-bottom: 0;
+      }
+
+      .sidebar-versions-panel dd {
+        text-align: right;
+        font-family: ui-monospace, monospace;
+        overflow-wrap: anywhere;
+      }
+
+      .sidebar-versions-panel dt:first-child,
+      .sidebar-versions-panel dt:first-child + dd {
+        font-weight: 600;
+        color: var(--accent);
+      }
+
+      @media (pointer: coarse) {
+        .sidebar-version {
+          min-height: 44px;
+        }
       }
 
       body.sidebar-collapsed .sidebar-version {

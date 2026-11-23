@@ -27,13 +27,14 @@ This file gives future coding agents the shortest reliable path into `py_lucidum
 - Frontend tool ownership is split by file: `dataset-viewer-tool.js`, `column-profile-tool.js`, `line-bar-tool.js`, `histogram-tool.js`, `uk-map-tool.js`, `glm-tool.js`, `glm-formula-builder.js`, `glm-model-navigator.js`, `glm-tabulations.js`, `gbm-tool.js`, `gbm-feature-parameter-controls.js`, `gbm-evaluation-chart.js`, `gbm-model-navigator.js`, `gbm-tab-orchestration.js`, `gbm-shap-tool.js`, `gbm-shap-chart.js`, `gbm-stacked-shap-tool.js`, `gbm-stacked-shap-chart.js`, `gbm-tree-viewer.js`, and `model-tool-shell.js`.
 - Import-safe shared frontend helpers live under `src/py_lucidum/static/app/shared/`: API calls, formatters, schema/source helpers, Tabulator lazy loading, and action timing.
 - `src/py_lucidum/static/app.css` is only the stable linked CSS manifest. Actual app styles live under `src/py_lucidum/static/styles/` by shell/tool boundary.
-- Vendored browser libraries live under `src/py_lucidum/static/vendor/`. ECharts and Leaflet load from `index.html` because default tools need them at startup; Ace, Tabulator, D3, and ECharts GL are lazy-loaded by the tools/views that need them.
+- Vendored browser libraries live under `src/py_lucidum/static/vendor/`. ECharts loads from `index.html`. UK Mapping loads MapLibre GL through `static/app/maplibre-adapter.js` when the map is needed. Ace, Tabulator, D3, and ECharts GL also load on demand.
 
 ## Read The Smallest Useful Surface
 
 Use this map before opening large files:
 
 - App boot, tool switching, shared sidebar/filter/KPI behavior: read `static/app/main.js`, `static/styles/shell.css`, and `static/styles/controls.css`.
+- For the sidebar package-version list, read `static/app/sidebar-versions.js` for interactions and `app/telemetry.py` for the packages included.
 - Shared API, formatting, schema/source helpers, or timing behavior: read the matching file in `static/app/shared/` first; only read tool modules if call-site behavior matters.
 - Dataset Viewer frontend: read `static/app/dataset-viewer-tool.js` and `static/styles/dataset-viewer.css`; backend behavior is under `tools/dataset_viewer/`.
 - Column Profile frontend: read `static/app/column-profile-tool.js` and `static/styles/column-profile.css`; backend behavior is under `tools/column_profile/`.

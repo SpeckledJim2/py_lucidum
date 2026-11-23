@@ -221,7 +221,16 @@
               </div>
             </section>
 
-            <div id="sidebarVersion" class="sidebar-version" aria-label="Lucidum version" hidden></div>
+            <button id="sidebarVersion" class="sidebar-version" type="button" aria-controls="sidebarVersionsPanel" aria-expanded="false" hidden>
+              <span id="sidebarVersionLabel"></span>
+              <svg aria-hidden="true" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+                <circle cx="8" cy="8" r="6.2"></circle><path d="M8 7v4M8 4.6v1.2"></path>
+              </svg>
+            </button>
+            <section id="sidebarVersionsPanel" class="sidebar-versions-panel" popover="manual" aria-labelledby="sidebarVersionsTitle" tabindex="0">
+              <h2 id="sidebarVersionsTitle">Package versions</h2>
+              <dl></dl>
+            </section>
           </div>
         </aside>
 

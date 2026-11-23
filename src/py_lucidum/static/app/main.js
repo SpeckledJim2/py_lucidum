@@ -1,3 +1,4 @@
+      import { bindSidebarVersions } from "./sidebar-versions.js";
       import { createColumnProfileTool } from "./column-profile-tool.js";
       import {
         createLineBarTool,
@@ -1843,12 +1844,16 @@
         return parts.join(" · ");
       }
 
+      let sidebarVersions;
+
       function renderSidebarVersion() {
         const target = el("sidebarVersion");
         const collapsedTarget = el("collapsedSidebarVersion");
         if (!target || !collapsedTarget) return;
         const version = String(state.schema?.app_version || "").trim();
-        target.textContent = version ? `lucidum v${version}` : "";
+        el("sidebarVersionLabel").textContent = version ? `lucidum v${version}` : "";
+        target.setAttribute("aria-label", `lucidum v${version}, package versions`);
+        sidebarVersions.render(state.schema?.package_versions);
         collapsedTarget.textContent = version ? `v${version}` : "";
         target.hidden = !version;
         collapsedTarget.hidden = !version;
@@ -2162,6 +2167,7 @@
 
       function setSidebarVisible(visible) {
         hideToolButtonTooltip();
+        if (!visible) sidebarVersions.close();
         state.sidebarVisible = Boolean(visible);
         document.body.classList.toggle("sidebar-collapsed", !state.sidebarVisible);
         el("appSidebar").removeAttribute("aria-hidden");
@@ -5421,6 +5427,7 @@
       }
 
       function bindControls() {
+        sidebarVersions = bindSidebarVersions(el("sidebarVersion"), el("sidebarVersionsPanel"));
         setupSidebarResize();
         setupChartControlsResize();
         setupChartControlHeightsResize();

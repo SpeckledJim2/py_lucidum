@@ -5721,6 +5721,71 @@ COPY (
 
     @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
     @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
+    def test_sidebar_package_versions(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "sample.csv"
+            path.write_text("group,price\nA,1\nB,2\n", encoding="utf-8")
+            base_url, server, thread = self.start_app(path, tools=["line_bar", "dataset_viewer"])
+            try:
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch()
+                    page = browser.new_page()
+                    page.goto(base_url)
+                    button = page.locator("#sidebarVersion")
+                    panel = page.get_by_role("region", name="Package versions")
+                    button.hover()
+                    self.assertEqual(panel.locator("dt").first.inner_text(), "DuckDB")
+                    self.assertEqual(panel.locator("dd").first.inner_text(), duckdb.__version__)
+                    panel.locator("dd").first.hover()
+                    self.assertEqual(button.get_attribute("aria-expanded"), "true")
+                    page.mouse.move(0, 0)
+                    panel.wait_for(state="hidden")
+                    button.click()
+                    page.mouse.move(0, 0)
+                    self.assertTrue(panel.is_visible())
+                    page.keyboard.press("Escape")
+                    self.assertEqual(button.get_attribute("aria-expanded"), "false")
+                    self.assertTrue(button.evaluate("el => el === document.activeElement"))
+                    for key in ("Enter", "Space"):
+                        button.press(key)
+                        panel.wait_for()
+                        button.press("Escape")
+                        panel.wait_for(state="hidden")
+                    button.click()
+                    page.locator("#sidebarToggleBtn").click()
+                    panel.wait_for(state="hidden")
+                    self.assertFalse(button.is_visible())
+                    browser.close()
+
+                    browser = playwright.webkit.launch()
+                    for width in (390, 820):
+                        page = browser.new_page(viewport={"width": width, "height": 844}, has_touch=True, is_mobile=True)
+                        page.goto(base_url)
+                        toggle = page.locator("#sidebarToggleBtn")
+                        page.wait_for_function("() => document.querySelector('#sidebarVersionLabel').textContent")
+                        if toggle.get_attribute("aria-expanded") == "false":
+                            toggle.tap()
+                        button = page.locator("#sidebarVersion")
+                        panel = page.get_by_role("region", name="Package versions")
+                        button.tap()
+                        panel.wait_for()
+                        bounds = panel.bounding_box()
+                        self.assertGreaterEqual(bounds["x"], 0)
+                        self.assertLessEqual(bounds["x"] + bounds["width"], width)
+                        self.assertLessEqual(bounds["y"] + bounds["height"], 844)
+                        button.tap()
+                        panel.wait_for(state="hidden")
+                        button.tap()
+                        page.touchscreen.tap(10, 10)
+                        panel.wait_for(state="hidden")
+                        page.close()
+                    browser.close()
+            finally:
+                server.should_exit = True
+                thread.join(timeout=5)
+
+    @unittest.skipUnless(RUN_BROWSER_TESTS, "set PY_LUCIDUM_RUN_BROWSER_TESTS=1 to run browser smoke tests")
+    @unittest.skipUnless(sync_playwright is not None, "playwright is not installed")
     def test_sidebar_divider_remains_single_pixel_across_responsive_widths(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             data_path = Path(tmp_dir) / "sample.csv"

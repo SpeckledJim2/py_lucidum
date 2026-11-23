@@ -859,7 +859,7 @@ environment must be reproducible.
   - Before every commit, unless the user explicitly instructs otherwise, increment the package version by at least one patch level with `python scripts/bump_version.py patch`, for example `0.1.1 -> 0.1.2`.
   - Run `python scripts/bump_version.py minor` for more substantial feature commits that should advance the minor version, for example `0.1.1 -> 0.2.0`.
   - Run `python scripts/bump_version.py major` for incompatible major releases, or `python scripts/bump_version.py set 0.2.0` to set an explicit release version.
-  - The sidebar version text must always reflect the same package version: `/api/schema` should publish `app_version` from `pyproject.toml`, and the frontend should display it as `lucidum v<version>` while expanded and `v<version>` while collapsed without maintaining separate hard-coded sidebar versions.
+  - The sidebar version text must always reflect the same package version: `/api/schema` should publish `app_version` from `pyproject.toml`, and the frontend should display it as `lucidum v<version>` while expanded and `v<version>` while collapsed without maintaining separate hard-coded sidebar versions. The expanded version button lists installed dependency versions from the server’s startup environment snapshot, exposed as `package_versions` in the schema.
   - Always report the final package version number back to the user when handing off commit-ready work.
   - Optional local aliases:
     - `git config alias.cpatch '!python scripts/bump_version.py patch && git add pyproject.toml && git commit'`

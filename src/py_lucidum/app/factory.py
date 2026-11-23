@@ -40,7 +40,7 @@ from .assets import NoStoreStaticFiles, no_store_file_response, no_store_html_re
 from .context import AppContext
 from .local_folders import local_folder_opening_available, model_folder_opening_available, open_local_folder
 from .servers import ServerStopError, list_lucidum_servers, stop_lucidum_server
-from .telemetry import TelemetryMiddleware, TelemetryStore
+from .telemetry import TelemetryMiddleware, TelemetryStore, runtime_environment
 
 
 PACKAGE_ROOT = Path(__file__).parents[1]
@@ -221,7 +221,9 @@ def create_app(
     app.state.dataset = dataset
     app.state.local_folder_opener = open_local_folder
     app.state.local_folder_opener_available = local_folder_opening_available
-    app.state.telemetry = TelemetryStore()
+    environment = runtime_environment()
+    app.state.telemetry = TelemetryStore(environment=environment)
+    package_versions = {name: version for name, version in environment["packages"].items() if name != "lucidum"}
     app.state.token = token
     app.state.lucidum_server_metadata = {
         "pid": os.getpid(),
@@ -270,6 +272,7 @@ def create_app(
         payload["tools"] = tool_payload(app.state.enabled_tools)
         payload["data_sources"] = app.state.dataset.data_sources()
         payload["app_version"] = __version__
+        payload["package_versions"] = package_versions
         payload["header_buttons"] = app.state.header_buttons
         payload["title_prefix"] = app.state.title_prefix
         capabilities = dict(payload.get("capabilities") or {})

@@ -184,7 +184,13 @@ lucidum --demo --features specs/feature_spec.csv
   access control is present or the app is strictly local.
 
 Run `lucidum --help` for the complete option list and `lucidum --version` for the
-installed version. The version is also shown in the app sidebar footer.
+installed version. In the expanded sidebar footer, hover over the Lucidum version
+to see versions of the core server packages, starting with DuckDB. Optional
+modelling packages such as glum and LightGBM appear when installed. Move into
+the list to select and copy a version, or click the version button to keep the
+list open. On iPad or mobile, tap the version to open it, then tap it again or
+tap outside to close it. With a keyboard, focus the version button, press Enter
+or Space to open the list, and press Escape to close it.
 
 [Back to contents ↑](#contents)
 

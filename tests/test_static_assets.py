@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import tomllib
 import unittest
+from importlib.metadata import version
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -1344,6 +1345,10 @@ if (listeners.has("click") || listeners.has("keydown") || listeners.has("focusou
 
         self.assertEqual(status, 200)
         self.assertEqual(schema["app_version"], __version__)
+        packages = schema["package_versions"]
+        self.assertEqual(next(iter(packages)), "duckdb")
+        self.assertEqual(packages["duckdb"], version("duckdb"))
+        self.assertEqual(packages["fastapi"], version("fastapi"))
         self.assertEqual(schema["header_buttons"], False)
         self.assertEqual(schema["title_prefix"], "")
 

@@ -107,7 +107,13 @@ TERMINAL_OPERATION_PHASES = {"failed", "succeeded"}
 PACKAGE_VERSIONS = {
     "lucidum": "py-lucidum",
     "duckdb": "duckdb",
+    "fastapi": "fastapi",
+    "uvicorn": "uvicorn",
+    "psutil": "psutil",
+    "glum": "glum",
     "lightgbm": "lightgbm",
+    "cffi": "cffi",
+    "openpyxl": "openpyxl",
     "numpy": "numpy",
     "pandas": "pandas",
     "polars": "polars",
