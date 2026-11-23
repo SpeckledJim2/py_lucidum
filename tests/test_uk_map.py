@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
 import json
 import unittest
 from pathlib import Path
@@ -10,7 +11,7 @@ from unittest.mock import patch
 
 import duckdb
 
-from py_lucidum import smooth_postcode_sectors
+from py_lucidum import demo_dataset_path, smooth_postcode_sectors
 from py_lucidum.app import create_app, normalise_tools
 from py_lucidum.core import Dataset, sql_literal
 from py_lucidum.tools.uk_map.export import SECTOR_SMOOTHING_OUTPUT_COLUMNS
@@ -29,7 +30,9 @@ from py_lucidum.tools.uk_map.smoothing import (
 )
 
 
-def asgi_post_json(app: Any, path: str, payload: dict[str, Any]) -> tuple[int, dict[str, str], bytes]:
+def asgi_post_json(
+    app: Any, path: str, payload: dict[str, Any], *, accept_encoding: str = "identity",
+) -> tuple[int, dict[str, str], bytes]:
     messages: list[dict[str, Any]] = []
     body = json.dumps(payload).encode("utf-8")
 
@@ -48,7 +51,7 @@ def asgi_post_json(app: Any, path: str, payload: dict[str, Any]) -> tuple[int, d
         "path": path,
         "raw_path": path.encode("ascii"),
         "query_string": b"",
-        "headers": [(b"content-type", b"application/json")],
+        "headers": [(b"content-type", b"application/json"), (b"accept-encoding", accept_encoding.encode("ascii"))],
         "client": ("127.0.0.1", 12345),
         "server": ("testserver", 80),
     }
@@ -501,6 +504,25 @@ class UkMapToolTests(unittest.TestCase):
         self.assertLessEqual(payload["timings"]["duckdb_ns"], payload["timings"]["server_ns"])
         self.assertNotIn("app_ns", payload["timings"])
         self.assertNotIn("app_ms", payload["timings"])
+
+    def test_compressed_sector_summary_preserves_kpi_values(self) -> None:
+        app = create_app(demo_dataset_path(), tools=["uk_map"], compression=True)
+        self.addCleanup(app.state.dataset.con.close)
+        path = "/api/uk-map/summary"
+        request = self.request(level="sector", numerator="PREMIUM")
+        status, headers, original = asgi_post_json(app, path, request)
+        self.assertEqual(status, 200)
+        self.assertNotIn("content-encoding", headers)
+        status, headers, compressed = asgi_post_json(app, path, request, accept_encoding="gzip")
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["content-encoding"], "gzip")
+        self.assertIn("accept-encoding", headers["vary"].lower())
+        self.assertLess(len(compressed), len(original))
+        expected = json.loads(original)
+        result = json.loads(gzip.decompress(compressed))
+        del expected["timings"]
+        del result["timings"]
+        self.assertEqual(result, expected)
 
     def test_sector_smoothing_endpoint_includes_duckdb_timing(self) -> None:
         app = create_app(self.data_path, token="", tools=["uk_map"], use_saved_filters=False, use_kpis=False)

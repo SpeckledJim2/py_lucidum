@@ -283,6 +283,7 @@ class CliRuntimeTests(unittest.TestCase):
                     line_bar_favourite="Loss curve",
                     line_bar_favourites_path=favourites_path,
                     title_prefix="Portfolio sample",
+                    compression=True,
                 )
 
         defaults = create_app_mock.call_args.kwargs["defaults"]
@@ -292,6 +293,7 @@ class CliRuntimeTests(unittest.TestCase):
         self.assertEqual(defaults["line_bar_favourite"], "Loss curve")
         self.assertEqual(create_app_mock.call_args.kwargs["line_bar_favourites_path"], favourites_path)
         self.assertEqual(create_app_mock.call_args.kwargs["title_prefix"], "Portfolio sample")
+        self.assertTrue(create_app_mock.call_args.kwargs["compression"])
         start_server_mock.assert_called_once()
 
     def test_serve_passes_kpi_options_and_reports_status(self) -> None:
@@ -786,7 +788,13 @@ class CliRuntimeTests(unittest.TestCase):
             (
                 "quick_start_demo",
                 ["lucidum", "--demo", "--port", "8000"],
-                {"path": demo_path, "port": 8000},
+                {"path": demo_path, "port": 8000, "compression": False},
+                True,
+            ),
+            (
+                "compression",
+                ["lucidum", "--demo", "--compression"],
+                {"path": demo_path, "compression": True},
                 True,
             ),
             (

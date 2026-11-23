@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
 import json
 import mimetypes
 import re
@@ -2832,6 +2833,32 @@ assert.equal(el("mapDotSizeDecrease").hidden, false);
         self.assertTrue(body)
         self.assertEqual(mimetypes.guess_type("module.mjs")[0], "text/javascript")
         self.assertTrue(headers.get("content-type", "").startswith("text/javascript"), headers)
+
+    def test_map_boundaries_negotiate_gzip_only_when_enabled(self) -> None:
+        app = create_app(self.data_path, tools=["uk_map"], compression=True)
+        self.addCleanup(app.state.dataset.con.close)
+        for filename in ("areas_MappaR.geojson", "sectors_MappaR.geojson"):
+            with self.subTest(filename=filename):
+                path = f"/tools/uk-map/static/geodata/{filename}"
+                status, headers, original = asgi_get(self.app, path, {"Accept-Encoding": "gzip"})
+                self.assertEqual(status, 200)
+                self.assertNotIn("content-encoding", headers)
+                status, headers, plain = asgi_get(app, path, {"Accept-Encoding": "identity"})
+                self.assertEqual(status, 200)
+                self.assertNotIn("content-encoding", headers)
+                self.assertEqual(plain, original)
+                status, headers, compressed = asgi_get(app, path, {"Accept-Encoding": "gzip"})
+                self.assertEqual(status, 200)
+                self.assertEqual(headers["content-encoding"], "gzip")
+                self.assertIn("accept-encoding", headers["vary"].lower())
+                self.assertEqual(headers["cache-control"], "no-store")
+                self.assertLess(len(compressed), len(original))
+                self.assertEqual(gzip.decompress(compressed), original)
+
+        status, headers, body = asgi_get(app, "/api/health", {"Accept-Encoding": "gzip"})
+        self.assertEqual(status, 200)
+        self.assertNotIn("content-encoding", headers)
+        self.assertEqual(json.loads(body), {"status": "ok"})
 
     def test_non_vendored_static_modules_are_served_no_store(self) -> None:
         static_root = Path(__file__).resolve().parents[1] / "src/py_lucidum/static"

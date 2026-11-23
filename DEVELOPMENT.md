@@ -24,6 +24,7 @@ The app is currently local-first: it starts FastAPI and DuckDB in the user proce
 
 - `py_lucidum.core` owns DuckDB connection management, file relation SQL, schema inference, row counts, band suggestions, filter validation, saved-filter loading, shared data-source metadata, and shared metric/weight SQL helpers.
 - `py_lucidum.app` owns the FastAPI factory, shared app context, token checks, static asset serving, favicon serving, schema/reload/health/shutdown endpoints, and tool registration.
+- `--compression` and the Python launchers' `compression=True` enable FastAPI's app-wide gzip middleware in `create_app()` with a 1,024-byte threshold and level 4. Compression defaults to off for every bind address. Telemetry wraps gzip so request timings include compression.
 - `py_lucidum.tools.registry` is the backend source of truth for tool IDs, labels, aliases, default enablement, and registration order.
 - `py_lucidum.tools.dataset_viewer` implements the filtered raw-row dataset viewer and routes.
 - `py_lucidum.cli` owns the `lucidum` command, free-port selection, token URL construction, background server handling for notebook-style runtimes, and browser opening.

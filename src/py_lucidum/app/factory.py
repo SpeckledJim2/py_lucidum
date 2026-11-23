@@ -11,6 +11,7 @@ from typing import Any
 
 import duckdb
 from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 
 from py_lucidum._version import __version__
@@ -199,6 +200,7 @@ def create_app(
     line_bar_favourites_path: str | Path | None = None,
     header_buttons: bool = False,
     title_prefix: str | None = None,
+    compression: bool = False,
 ) -> FastAPI:
     enabled_tools = normalise_tools(tools)
     resolved_dataset_path = Path(dataset_path).expanduser().resolve()
@@ -558,5 +560,7 @@ def create_app(
 
         register_model_ratio_source_provider(app, dataset)
 
+    if compression:
+        app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=4)
     app.add_middleware(TelemetryMiddleware, store=app.state.telemetry)
     return app

@@ -313,6 +313,7 @@ def serve(
     tools: str | Sequence[str] | None = None,
     buttons: bool = False,
     title_prefix: str | None = None,
+    compression: bool = False,
 ) -> str:
     selected_port = port or find_free_port()
     ensure_port_available(host, selected_port)
@@ -352,6 +353,7 @@ def serve(
         line_bar_favourites_path=line_bar_favourites_path,
         header_buttons=buttons,
         title_prefix=title_prefix,
+        compression=compression,
     )
     url = _display_url_for_app(app, host, selected_port)
     run_in_background = _has_running_event_loop()
@@ -395,6 +397,7 @@ def serve_line_bar(
     use_features: bool = True,
     buttons: bool = False,
     title_prefix: str | None = None,
+    compression: bool = False,
 ) -> str:
     return serve(
         path=path,
@@ -427,6 +430,7 @@ def serve_line_bar(
         tools=["line_bar"],
         buttons=buttons,
         title_prefix=title_prefix,
+        compression=compression,
     )
 
 
@@ -500,6 +504,7 @@ def main() -> int:
     parser.add_argument("--demo", action="store_true", help="Launch the bundled motor_premiums.parquet demo dataset")
     parser.add_argument("--host", default="127.0.0.1", help="Bind host, e.g. 127.0.0.1 or 0.0.0.0")
     parser.add_argument("--port", type=int, default=None, help="Bind port. Defaults to a free local port.")
+    parser.add_argument("--compression", action="store_true", help="Enable gzip for HTTP responses to reduce transfer sizes.")
     parser.add_argument("--no-token", action="store_true", help="Disable the token in the URL and API requests")
     parser.add_argument("--open", action="store_true", help="Open the app with Python's configured browser/viewer")
     parser.add_argument("--buttons", action="store_true", help="Show the Stop app and Open monitor buttons in the app header")
@@ -569,6 +574,7 @@ def main() -> int:
             path=path,
             host=args.host,
             port=args.port,
+            compression=args.compression,
             token="" if args.no_token else secrets.token_urlsafe(18),
             open_browser=args.open,
             x=args.x,

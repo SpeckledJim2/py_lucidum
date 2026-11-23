@@ -108,7 +108,8 @@ lucidum path/to/my_data.parquet --tools dataset-viewer,column-profile,line-bar
 By default, Lucidum runs on your own computer and protects the browser session with
 an access token. To view the same analysis from another device on your local network,
 launch with `--host 0.0.0.0`; keep the token enabled unless access is controlled in
-another way.
+another way. Add `--compression` to reduce transfer sizes for remote browsers,
+including the UK map boundaries.
 
 The application and UK map geometry are included in the Lucidum installation. Blank
 maps work offline, while the other map backgrounds fetch tiles from their named

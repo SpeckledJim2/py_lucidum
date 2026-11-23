@@ -156,6 +156,7 @@ zero.
 
 ```bash
 lucidum --demo --host 127.0.0.1 --port 8000 --open
+lucidum --demo --compression
 lucidum --demo --buttons
 lucidum --demo --title-prefix "Motor pricing data"
 lucidum --demo --x DRIVER_AGE --actual PREMIUM --denominator ANNUAL_MILEAGE
@@ -166,6 +167,9 @@ lucidum --demo --features specs/feature_spec.csv
 
 - `--host` and `--port` choose the listening address. If the port is omitted,
   Lucidum selects a free local port.
+- `--compression` enables HTTP gzip for browsers that accept it. Large responses
+  such as UK map boundaries, chart data, and JavaScript downloads use less
+  bandwidth. Compression uses server CPU and defaults to off on every host.
 - `--open` opens the generated URL.
 - `--buttons` adds **Stop app** and **Open monitor** to the app header.
 - `--title-prefix` adds text before the file or folder name in the header. Demo mode
@@ -1258,6 +1262,10 @@ py_lucidum.serve(py_lucidum.demo_dataset_path(), port=8000, open_browser=True)
 py_lucidum.serve("path/to/my_data.parquet", port=8000, open_browser=True)
 py_lucidum.serve("path/to/monthly_parquets/", port=8000, open_browser=True)
 ```
+
+To enable gzip in an existing Python launcher, add `compression=True` to
+`py_lucidum.serve(...)`. The same setting is available on `serve_line_bar()`
+and `create_app()`.
 
 Common launch settings are also keyword arguments:
 
